@@ -1,0 +1,11 @@
+{
+	"configurations": [
+		{
+			"type": "command",
+			"name": "Serve",
+			"program": "deno",
+			"args": ["task", "dev"],
+		},
+		
+	]
+}

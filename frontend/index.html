@@ -1,0 +1,16 @@
+<!DOCTYPE html>
+<html>
+	<head>
+		<title>Switchboard</title>
+		<script type="importmap">{"imports":{
+			"swbrd": "/swbrd/index.mjs",
+			"swbrd/": "/swbrd/"
+		}}</script>
+		<script type="module">
+			import { Addr } from 'swbrd';
+			
+			const t = new Addr('tls://seed.evan-brass.net');
+			console.log(await t.id());
+		</script>
+	</head>
+</html>

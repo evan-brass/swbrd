@@ -1,0 +1,13 @@
+{
+	"imports": {
+		"std/": "https://deno.land/std@0.204.0/",
+		"swbrd": "./src/index.mjs",
+		"swbrd/": "./src/"
+	},
+	"tasks": {
+		"dev": "deno run --allow-net --allow-read --unstable --watch backend/main.mjs"
+	},
+	"fmt": {
+		"useTabs": true
+	}
+}
