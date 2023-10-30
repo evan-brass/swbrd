@@ -1,112 +1,68 @@
+import { Id } from "./id.mjs";
+
 const encoder = new TextEncoder();
-const decoder = new TextDecoder('utf-8', {fatal: true});
+const decoder = new TextDecoder('utf-8');
+const doh_address = 'https://cloudflare-dns.com/dns-query';
 
-export class Dns {
-	#view;
-	constructor(inner = 512) {
-		if (inner instanceof ArrayBuffer) {
-			this.#view = new DataView(inner);
-		}
-		else if (inner instanceof DataView) {
-			this.#view = inner;
-		}
-		else if (ArrayBuffer.isView(inner)) {
-			this.#view = new DataView(inner.buffer, inner.byteOffset, inner.byteLength);
-		}
-		else if (typeof inner == 'number') {
-			this.#view = new DataView(inner);
-			// Random ID:
-			crypto.getRandomValues(new Uint8Array(this.#view.buffer, this.#view.byteOffset, 2));
-		}
-	}
-	get id() {
-		return this.#view.getUint16(0);
-	}
-	get flags() {
-		return this.#view.getUint16(2);
-	}
-	set flags(v) {
-		this.#view.setUint16(2, v);
-	}
-	get_flag(offset, bits) {
-		const mask = 2 ** bits - 1;
-		return (this.flags >>> offset) & mask;
-	}
-	set_flag(offset, bits, v) {
-		const mask = (2 ** bits - 1) << offset;
-		this.flags = (this.flags & !mask) | ((v << offset) & mask);
-	}
-	get rcode() { return this.get_flag(0, 4); }
-	set rcode(v) { this.set_flag(0, 4, v); }
-	get ra() { return Boolean(this.get_flag(7, 1)); }
-	get rd() { return Boolean(this.get_flag(8, 1)); }
-	set rd(v) { this.set_flag(8, 1, Number(Boolean(v))); }
-	get tc() { return Boolean(this.get_flag(9, 1)); }
-	get aa() { return Boolean(this.get_flag(10, 1)); }
-	get opcode() { return this.get_flag(11, 4); }
-	set opcode(v) { this.set_flag(11, 4, v); }
-	get qr() { return Boolean(this.get_flag(15, 1)); }
-	set qr(v) { this.set_flag(15, 1, Number(Boolean(v))); }
+/**
+ * Use DNS over HTTPS (DoH) to find the Id for an address that doesn't contain a username.  We query the TXT entries for hostname
+ * looking for any that start with "swbrd=".  We attempt to create an Id from these, returning the first Id that succeeds.
+ * @param {string} hostname - The domain name to query
+ * @param {number} query_bufflen - The size of buffer we'll allocate to encode the DNS Message
+ * @return {Promise<Id | undefined>}
+ */
+export async function query_id(hostname, query_bufflen = 512) {
+	const labels = hostname.split('.');
+	if (labels.indexOf('') !== -1) return; // Error: Internal Null label
+	labels.push('');
 
-	get body() {
-		let offset = 12;
-		const questions = [];
-		let count = this.#view.getUint16(4);
-		const take_u16 = () => {
-			const ret = this.#view.getUint16(offset);
-			offset += 2;
-			return ret;
-		};
-		const append_labels = (offset, labels = []) => {
-			const ret = [];
+	const buffer = new Uint8Array(query_bufflen);
+	const dns_header = `\0\0\x01\0\0\x01\0\0\0\0\0\0`;
+	encoder.encodeInto(dns_header, buffer);
+	let offset = 12;
+	for (const label of labels) {
+		const {read, written} = encoder.encodeInto(label, buffer.subarray(offset + 1));
+		if (read < label.length) return; // Error: Buffer too small for this question
+		if (written >= 64) return; // Error: Label too large
+		buffer[offset] = written;
+		offset += 1 + written;
+	}
+	const question_tail = `\0\x10\0\x01`;
+	const {read, written} = encoder.encodeInto(question_tail, buffer.subarray(offset));
+	if (read < question_tail) return; // Error: Buffer too small for this question
+	const dns_message = buffer.subarray(0, offset + written);
 
-			const a = this.#view.getUint8(offset);
-			let o = offset;
-			if (a >= 64) {
-				o = 0b00_111111_11111111 & this.#view.getUint16(offset);
-				offset += 2;
-			}
-			while (1) {
-				const len = this.#view.getUint8(o);
-				o += 1;
-				if (len == 0) break;
-				if (len >= 64) return;
-				const end = offset + len;
-				if (end > this.#view.byteLength) return;
-				labels.push(decoder.decode(new Uint8Array(this.#view.buffer, this.#view.byteOffset + offset, len)));
-				offset += len;
-			}
-			name = labels.join('.');
-	
-			return name;
-		};
-		for (let i = 0; i < count; ++i) {
-			const n = this.get_name(offset);
-			if (!n) return;
-			offset = n.offset;
-			questions[i] = {name: n.name, type: take_u16(), class: take_u16()};
+	const res = await fetch(doh_address, {
+		method: 'post',
+		headers: {
+			'Content-Type': 'application/dns-message',
+			'Accept': 'application/dns-message'
+		},
+		body: dns_message
+	});
+	const ans = new DataView(await res.arrayBuffer());
+	const ansb = new Uint8Array(ans.buffer, ans.byteOffset, ans.byteLength);
+
+	if (ans.byteLength < 12) return; // Error: Response too short
+	const res_flags = ans.getUint16(2);
+	if (res_flags & 0b0_0000_0_1_0_0_000_1111) return; // Error: Truncated or Error response code
+	if ((res_flags & 0b1_0000_0_0_0_0_000_0000) === 0) return; // Error: Not an answer
+	offset = dns_message.byteLength;
+	const AnC = ans.getUint16(6);
+	for (let i = 0; i < AnC; ++i) {
+		if (offset + 12 > ans.byteLength) return; // Error: Malformed Answer - Past the end of the response
+		if (ans.getUint16(offset) !== (0b11_000000_00000000 + 12)) return; // Error: Answer doesn't respond to our question
+		const len = ans.getUint16(offset + 10);
+		let txt_off = offset + 12;
+		offset = offset + 12 + len;
+		if (offset > ansb.byteLength) return; // Error: Malformed TXT - Past the end of the response
+
+		for (let txt_len = ansb[txt_off]; txt_off < offset; txt_off += 1 + txt_len, txt_len = ansb[txt_off]) {
+			const txt = decoder.decode(ansb.subarray(txt_off + 1, txt_off + 1 + txt_len));
+			if (!txt.startsWith('swbrd=')) continue; // Not one of our TXT entries
+
+			const id = Id.parse(txt.slice(6));
+			if (id) return id;
 		}
-		
-		const answers = [];
-		count = this.#view.getUint16(6);
-		for (let i = 0; i < count; ++i) {
-			const n = this.get_name(offset);
-			if (!n) return;
-			offset = n.offset;
-			return {
-				name: n.name,
-				type: take_u16(),
-				class: take_u16(),
-
-			}
-		}
-		
-		count = this.#view.getUint16(8);
-		const name_servers = [];
-		
-		count = this.#view.getUint16(10);
-		const others = [];
-
-		return {questions, answers, name_servers, others};
 	}
 }

@@ -7,9 +7,13 @@
 			"swbrd/": "/swbrd/"
 		}}</script>
 		<script type="module">
-			import { Addr } from 'swbrd';
+			import { Addr, Id, make_id } from 'swbrd';
+			import { buftobinstr, btoa_url } from 'swbrd/b64url.mjs'
 			
-			const t = new Addr('tls://seed.evan-brass.net');
+			const cert = await RTCPeerConnection.generateCertificate({name:'ECDSA', namedCurve:'P-256'});
+			console.log(await make_id(cert));
+
+			const t = Addr.parse(`tls://seed.evan-brass.net`);
 			console.log(await t.id());
 		</script>
 	</head>
