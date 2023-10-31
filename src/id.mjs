@@ -34,6 +34,19 @@ export class Id {
 		}
 		return ret;
 	}
+	sdp() {
+		return fingerprints.map(alg => `a=fingerprint:${alg} ${
+			binstrtobuf(this[alg]).reduce((a, v, i) => a + (i > 0 ? ':' : '') + v.toString(16).padStart(2, '0'), '')
+		}`);
+	}
+	add_fingerprint(alg, value) {
+		if (alg in this) return;
+
+		if (typeof value == 'string') {
+			value = value.split(':').map(s => parseInt(s, 16));
+		}
+		this[alg] = buftobinstr(value);
+	}
 	[Symbol.toPrimitive](hint) {
 		if (hint == 'number') {
 			const bytes = binstrtobuf(this[fingerprints[0]]);
@@ -106,7 +119,7 @@ export async function make_id(cert) {
 						'SHA-512'
 					]) {
 						const v = await crypto.subtle.digest(alg, bytes);
-						ret[alg.toLowerCase()] = buftobinstr(new Uint8Array(v));
+						ret.add_fingerprint(alg.toLowerCase(), new Uint8Array(v));
 					}
 
 					if (are_we_done()) return ret;

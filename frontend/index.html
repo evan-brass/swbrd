@@ -7,14 +7,21 @@
 			"swbrd/": "/swbrd/"
 		}}</script>
 		<script type="module">
-			import { Addr, Id, make_id } from 'swbrd';
-			import { buftobinstr, btoa_url } from 'swbrd/b64url.mjs'
+			import { Addr, Id, make_id, Conn } from 'swbrd';
+			// import { buftobinstr, btoa_url } from 'swbrd/b64url.mjs'
 			
-			const cert = await RTCPeerConnection.generateCertificate({name:'ECDSA', namedCurve:'P-256'});
-			console.log(await make_id(cert));
+			// const cert = await RTCPeerConnection.generateCertificate({name:'ECDSA', namedCurve:'P-256'});
+			// console.log(await make_id(cert));
 
-			const t = Addr.parse(`tls://seed.evan-brass.net`);
-			console.log(await t.id());
+			// const t = Addr.parse(`tls://seed.evan-brass.net`);
+			// console.log(await t.id());
+
+			const a = new Conn();
+			const b = new Conn();
+			console.log(a);
+			console.log(b);
+			b.remote = await a.local;
+			a.remote = await b.local;
 		</script>
 	</head>
 </html>
