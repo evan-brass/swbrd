@@ -35,9 +35,8 @@ export class Id {
 		return ret;
 	}
 	sdp() {
-		return fingerprints.map(alg => `a=fingerprint:${alg} ${
-			binstrtobuf(this[alg]).reduce((a, v, i) => a + (i > 0 ? ':' : '') + v.toString(16).padStart(2, '0'), '')
-		}`);
+		return Object.entries(this)
+			.map(([alg, v]) => binstrtobuf(v).reduce((a, v, i) => a + (i > 0 ? ':' : '') + v.toString(16).padStart(2, '0'), `a=fingerprint:${alg} `));
 	}
 	add_fingerprint(alg, value) {
 		if (alg in this) return;
