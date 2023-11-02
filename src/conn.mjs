@@ -1,4 +1,5 @@
 import { Id } from "./id.mjs";
+import { reg_all } from "./util.mjs";
 
 export class Sig {
 	// Required fields:
@@ -35,13 +36,6 @@ export const default_config = {
 	]
 };
 
-function reg_all(reg, s) {
-	const ret = [];
-	let t;
-	while ((t = reg.exec(s))) ret.push(t);
-	return ret;
-}
-
 export class Conn extends RTCPeerConnection {
 	// The zero datachannel (used for connection renegotiation)
 	#dc;
@@ -64,9 +58,10 @@ export class Conn extends RTCPeerConnection {
 		this.#local.id = config.id;
 
 		this.#dc = this.createDataChannel('', {negotiated: true, id: 0});
-		this.#signal_task();
+		if (config.delay_signaling) { return; }
+		this._signal_task();
 	}
-	async #signal_task() {
+	async _signal_task() {
 		// 1. Set the local description
 		await super.setLocalDescription();
 
