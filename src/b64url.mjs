@@ -1,14 +1,21 @@
+const swap = new Map([
+	['+', '-'],
+	['/', '_'],
+	['=', '']
+].map(a => [a, a.toReversed()]).flat());
+export function to_url(b64) {
+	return b64.replace(/[+/=]/g, s => swap.get(s));
+}
+export function from_url(urlb64, do_pad = true) {
+	let ret = urlb64.replace(/[-_]/g, s => swap.get(s));
+	while (do_pad && ret.length % 4 != 0) ret += '=';
+	return ret;
+}
 export function btoa_url(b) {
-	return btoa(b)
-		.replaceAll('+', '-')
-		.replaceAll('/', '_')
-		.replaceAll('=', '');
+	return to_url(btoa(b));
 }
 export function atob_url(s) {
-	s = s.replaceAll('-', '+')
-		.replaceAll('_', '/');
-	while (s.length % 4) s += '=';
-	return atob(s);
+	return atob(from_url(s));
 }
 
 export function buftobinstr(buffer) {

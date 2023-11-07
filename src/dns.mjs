@@ -1,8 +1,11 @@
-import { Id } from "./id.mjs";
-
 const encoder = new TextEncoder();
 const decoder = new TextDecoder('utf-8');
-const doh_address = 'https://cloudflare-dns.com/dns-query';
+
+export const advanced_usage = {
+	doh_address: 'https://cloudflare-dns.com/dns-query',
+	// Alternative DoH address:
+	// doh_address: 'https://corsproxy.io/?' + encodeURIComponent('https://dns.google/dns-query')
+};
 
 /**
  * Use DNS over HTTPS (DoH) to find the Id for an address that doesn't contain a username.  We query the TXT entries for hostname
@@ -32,7 +35,7 @@ export async function query_id(hostname, query_bufflen = 512) {
 	if (read < question_tail) return; // Error: Buffer too small for this question
 	const dns_message = buffer.subarray(0, offset + written);
 
-	const res = await fetch(doh_address, {
+	const res = await fetch(advanced_usage.doh_address, {
 		method: 'post',
 		headers: {
 			'Content-Type': 'application/dns-message',
@@ -61,8 +64,7 @@ export async function query_id(hostname, query_bufflen = 512) {
 			const txt = decoder.decode(ansb.subarray(txt_off + 1, txt_off + 1 + txt_len));
 			if (!txt.startsWith('swbrd=')) continue; // Not one of our TXT entries
 
-			const id = Id.parse(txt.slice(6));
-			if (id) return id;
+			return txt.slice(6);
 		}
 	}
 }

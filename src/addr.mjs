@@ -1,55 +1,23 @@
 import { Sig, Conn, default_config } from "./conn.mjs";
 import { Id } from "./id.mjs";
 import { query_id } from "./dns.mjs";
-import { btoa_url, buftobinstr } from "swbrd/b64url.mjs";
-import { reg_all } from "swbrd/util.mjs";
+import { btoa_url, buftobinstr, from_url } from "./b64url.mjs";
+import { reg_all } from "./util.mjs";
 
-const default_ports = {
-	// I don't really know what these should be.  Is it more common to use the ports in the spec, or the ports with most compatibility?
-	udp: 80,
-	tcp: 3478,
-	tls: 443
-};
+// Default port is 80, even for udp because Firewalls tend to be permissive to port 80.
 
-export class Addr {
-	#http;
-	#https;
+export class Addr extends URL {
 	protocol;
-	static parse(addr) {
-		if (!URL.canParse(addr)) return;
-		const ret = new this();
-		ret.#http = new URL(addr);
-		ret.protocol = ret.#http.protocol.replace(':', '');
-		ret.#http.protocol = 'http';
-		ret.#https = new URL(addr);
-		ret.#https.protocol = 'https';
-		return ret;
+	id;
+	constructor(init) {
+		super(init);
+		this.protocol = super.protocol.replaceAll(':', '');
+		super.protocol = 'http';
+		if (this.username) this.id = new Id(this.username);
+		else this.id = query_id(this.hostname).then(s => this.id = new Id(s));
 	}
-	get hostname() {
-		return this.#http.hostname;
-	}
-	get host() {
-		return this.#http.port ? this.#http.host : this.#https.host;
-	}
-	get port() {
-		return parseInt(this.#http.port || this.#https.port || default_ports[this.protocol] || 4666);
-	}
-	/**
-	 * Get the Id for this Addr
-	 * @returns {Id | undefined | Promise<Id | undefined>}
-	 */
-	id() {
-		if (this.#http.username) {
-			return Id.parse(this.#http.username);
-		} else {
-			return query_id(this.#http.hostname);
-		}
-	}
-	/**
-	 * Immediately returns a Conn that may or may not succeed in connecting to the address.
-	 * @param {*} config 
-	 * @returns {Conn | undefined}
-	 */
+	get port() { return parseInt(super.port || 80); }
+	set port(v) { super.port = v; }
 	connect(config = default_config) {
 		const ret = new Conn(this.protocol !== 'swbrd' ? config : Object.assign(Object.create(config), {
 			iceTransportPolicy: 'relay',
@@ -62,8 +30,8 @@ export class Addr {
 			remote.id = await this.id();
 
 			if (this.protocol == 'udp') {
-				remote.ice_ufrag = String(remote.id);
-				remote.ice_pwd = this.#http.password || 'the/ice/password/constant';
+				remote.ice_ufrag = from_url(String(remote.id), false);
+				remote.ice_pwd = this.password || 'the/ice/password/constant';
 				remote.setup = 'passive';
 				remote.ice_lite = true;
 				remote.candidates.push({

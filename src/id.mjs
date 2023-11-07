@@ -1,55 +1,47 @@
 import { binstrtobuf, buftobinstr, atob_url, btoa_url } from "./b64url.mjs";
+import { reg_all } from "./util.mjs";
 
+export const advanced_usage = {
+	// This hash algorithm will be used when converting an Id into a bigint.
+	id_alg: 'sha-256'
+};
+
+// Currently, all the hash algorithms are distinguishable via their length.  Later we might need a tagging mechanism to disambiguate fingerprint algorithms
 const untagged = new Map([
 	['sha-1',   20],
 	['sha-256', 32],
 	['sha-384', 48],
 	['sha-512', 64]
 ].map(a => [a, a.slice().reverse()]).flat());
-const tagged = new Map([
-	// Currently, there are no untagged hash functions.
-].map(a => [a, a.slice().reverse()]).flat());
-
-// Only Id's with these fingerprints will be accepted, and only these fingerprints will be output when stringifying Id's.  fingerprints[0] will be used when converting an Id into a bigint.
-export const fingerprints = ['sha-256'];
 
 export class Id {
-	constructor() { Object.assign(this, ...arguments); }
-	static parse(s) {
-		const ret = new this();
-		for (const f of s.split(',')) {
-			try {
-				let bytes = binstrtobuf(atob_url(f));
-				let h = untagged.get(bytes.byteLength);
-				if (!h) {
-					h = tagged.get(bytes.at(0));
-					bytes = bytes.subarray(1);
-					if (!h) continue;
-				}
-				ret[h] = buftobinstr(bytes);
-			} catch {/**/}
+	constructor(init) {
+		if (typeof init == 'string') {
+			for (const v of init.split(',')) {
+				try {
+					const binstr = atob_url(v);
+					const alg = untagged.get(binstr.length);
+					if (alg) this[alg] = binstr;
+				} catch {/* */}
+			}
+		} else {
+			Object.assign(this, ...arguments);
 		}
-		for (const required of fingerprints) {
-			if (!(required in ret)) return;
-		}
-		return ret;
 	}
 	sdp() {
 		return Object.entries(this)
 			.map(([alg, v]) => binstrtobuf(v).reduce((a, v, i) => a + (i > 0 ? ':' : '') + v.toString(16).padStart(2, '0'), `a=fingerprint:${alg} `));
 	}
-	add_fingerprint(alg, value) {
-		if (alg in this) return;
-
-		if (typeof value == 'string') {
-			value = value.split(':').map(s => parseInt(s, 16));
+	add_sdp(sdp) {
+		for (const {1: alg, 2: value} of reg_all(/a=fingerprint:([^ ]+) (.+)/g, sdp)) {
+			if (alg in this) continue;
+			this[alg] = buftobinstr(value.split(':').map(s => parseInt(s, 16)));
 		}
-		this[alg] = buftobinstr(value);
 	}
 	[Symbol.toPrimitive](hint) {
 		if (hint == 'number') {
-			const bytes = binstrtobuf(this[fingerprints[0]]);
-			return BigInt(bytes.reduce((a, v) => a + v.toString(16).padStart(2, '0'), '0x'));
+			const binstr = this[advanced_usage.id_alg] ?? '\0';
+			return BigInt(binstrtobuf(binstr).reduce((a, v) => a + v.toString(16).padStart(2, '0'), '0x'));
 		} else {
 			return fingerprints.map(h => {
 				const tag = untagged.has(h) ? '' : String.fromCharCode(tagged.get(h));
