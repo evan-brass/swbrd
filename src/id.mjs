@@ -12,7 +12,7 @@ const untagged = new Map([
 	['sha-256', 32],
 	['sha-384', 48],
 	['sha-512', 64]
-].map(a => [a, a.slice().reverse()]).flat());
+].map(a => [a, a.toReversed()]).flat());
 
 export class Id {
 	constructor(init) {
@@ -34,8 +34,9 @@ export class Id {
 	}
 	add_sdp(sdp) {
 		for (const {1: alg, 2: value} of reg_all(/a=fingerprint:([^ ]+) (.+)/g, sdp)) {
-			if (alg in this) continue;
-			this[alg] = buftobinstr(value.split(':').map(s => parseInt(s, 16)));
+			const key = alg.toLowerCase();
+			if (key in this) continue;
+			this[key] = buftobinstr(value.split(':').map(s => parseInt(s, 16)));
 		}
 	}
 	[Symbol.toPrimitive](hint) {
@@ -43,29 +44,20 @@ export class Id {
 			const binstr = this[advanced_usage.id_alg] ?? '\0';
 			return BigInt(binstrtobuf(binstr).reduce((a, v) => a + v.toString(16).padStart(2, '0'), '0x'));
 		} else {
-			return fingerprints.map(h => {
-				const tag = untagged.has(h) ? '' : String.fromCharCode(tagged.get(h));
-				return btoa_url(tag + this[h]);
-			}).join(',');
+			Object.values(this).map(binstr => btoa_url(binstr)).join(',');
 		}
 	}
 }
 
-/**
- * Create an Id from an RTCCertificate.  This uses a few different methods (depending on what is supported by this browser) to gather certificate fingerprints.  In general sha-256 fingerprints are always available.  Other algorithms are currently only available in Chrome.  In Firefox, a temporary RTCPeerConnection is used to gather fingerprints, where as in Chrome / Safari no temporary connection is needed (for sha-256 at least).
- * @param {RTCCertificate} cert 
- * @returns {Promise<Id | undefined>}
- */
-export async function make_id(cert) {
+export async function make_id(cert, fingerprints = [advanced_usage.id_alg]) {
 	const ret = new Id();
 	const are_we_done = () => fingerprints.every(algorithm => algorithm in ret);
 
 	// Try getFingerprints
 	if ('getFingerprints' in cert) {
 		for (const {algorithm, value} of cert.getFingerprints()) {
-			ret[algorithm] = buftobinstr(value.split(':').map(s => Number.parseInt(s, 16)));
+			ret[algorithm] = buftobinstr(value.split(':').map(s => parseInt(s, 16)));
 		}
-		if (are_we_done()) return ret;
 	}
 
 	// Use temporary connection:
@@ -79,12 +71,7 @@ export async function make_id(cert) {
 			console.log(a.localDescription.sdp);
 
 			// Collect fingerprints via the SDP:
-			const reg = /a=fingerprint:([^ ]+) ([a-fA-F0-9]{2}(?:\:[a-fA-F0-9]{2})*)/g;
-			let t;
-			while ((t = reg.exec(a.localDescription.sdp))) {
-				const {1: alg, 2: value} = t;
-				ret[alg.toLowerCase()] = buftobinstr(value.split(':').map(s => Number.parseInt(s, 16)));
-			}
+			ret.add_sdp(a.localDescription.sdp);
 			if (are_we_done()) return ret;
 
 			if ('getRemoteCertificates' in a.sctp?.transport) {
@@ -109,8 +96,7 @@ export async function make_id(cert) {
 						'SHA-384',
 						'SHA-512'
 					]) {
-						const v = await crypto.subtle.digest(alg, bytes);
-						ret.add_fingerprint(alg.toLowerCase(), new Uint8Array(v));
+						ret[alg.toLowerCase()] = buftobinstr(await crypto.subtle.digest(alg, bytes));
 					}
 
 					if (are_we_done()) return ret;
