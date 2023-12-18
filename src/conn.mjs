@@ -3,29 +3,33 @@ import { reg_all } from "./util.mjs";
 
 export class Sig {
 	// Required fields:
-	id;
-	ice_ufrag;
-	ice_pwd;
+	id = new Id();
 	candidates = [];
-	// Optional Fields:
-	setup;
-	ice_lite = false;
+	// Optional Fields: [setup, ice_lite, ice_pwd]
 	constructor() { Object.assign(this, ...arguments); }
-	is_filled() {
-		return (this.id instanceof Id) &&
-			typeof this.ice_ufrag == 'string' &&
-			typeof this.ice_pwd == 'string' &&
-			this.candidates.length > 0;
+	*sdp(other_id) {
+		yield* this.id.sdp();
+		if (this.ice_lite) {
+			yield 'a=ice-lite';
+		}
+		yield `a=ice-ufrag:${this.id}`;
+		yield `a=ice-pwd:${this.ice_pwd ?? 'the/ice/password/constant'}`;
+		for (let i = 0; i < this.candidates.length; ++i) {
+			const c = this.candidates[i];
+			yield `a=candidate:foundation 1 ${c.transport ?? 'udp'} ${c.priority ?? i + 1} ${c.address} ${c.port} typ ${c.typ ?? 'host'}${c.transport == 'tcp' ? ' tcptype passive' : ''}`;
+		}
+		yield `a=setup:${this.setup ?? (this.id < other_id) ? 'passive' : 'active'}`;
 	}
-	sdp(other_id) {
-		return [
-			...this.id.sdp(),
-			...(this.ice_lite ? ['a=ice-lite'] : []),
-			`a=ice-ufrag:${this.ice_ufrag}`,
-			`a=ice-pwd:${this.ice_pwd}`,
-			...this.candidates.map((c, i) => `a=candidate:foundation 1 udp ${i + 1} ${c.address} ${c.port} typ ${c.typ}`),
-			`a=setup:${this.setup ?? (this.id < other_id) ? 'passive' : 'active'}`,
-		];
+	add_sdp(sdp) {
+		this.id.add_sdp(sdp);
+		for (const {1: candidate} of reg_all(/a=candidate:(.+)/g, sdp)) {
+			// console.log(candidate);
+			const res = /[^ ]+ [0-9]+ (udp|UDP) ([0-9]+) ([^ ]+) ([0-9]+) typ (host|srflx|relay)/.exec(candidate);
+			if (!res) continue;
+			const [_, _transport, priority, address, port, typ] = res;
+			this.candidates.push({transport: 'udp', priority: parseInt(priority), address, port: parseInt(port), typ});
+		}
+		this.candidates.sort((a, b) => a.priority - b.priority);
 	}
 }
 
@@ -38,60 +42,55 @@ export const default_config = {
 
 export class Conn extends RTCPeerConnection {
 	// The zero datachannel (used for connection renegotiation)
-	#dc;
+	#dc = this.createDataChannel('', {negotiated: true, id: 0});
+	connected = new Promise((res, rej) => {
+		this.#dc.addEventListener('open', () => res(this), {once: true});
+		this.#dc.addEventListener('error', ({error}) => rej(error), {once: true});
+	});
 
-	// Local signaling message
-	#local_res;
-	#local_prom = new Promise(res => this.#local_res = res);
-	#local = new Sig(); // In-Progress local signaling message
-	get local() { return this.#local_prom; } // Retrieve complete / ready-to-send signaling message
-	_local() { return this.#local; } // Retrieve incomplete / not-yet-ready-to-send signaling message (used by address connections)
+	// Local
+	#local_id_res;
+	local_id = new Promise(res => this.#local_id_res = res);
+	local = (async () => {
+		// Wait for ICE gathering to complete:
+		while (this.iceGatheringState != 'complete') await new Promise(res => this.addEventListener('icegatheringstatechange', res, {once: true}));
 
-	// Remote signaling message
+		const ret = new Sig();
+		ret.add_sdp(this.localDescription.sdp);
+		return ret;
+	})();
+
+	// Remote
 	#remote_res;
 	#remote = new Promise(res => this.#remote_res = res);
-	set remote(sig) { this.#remote_res(sig); }
 	get remote() { return this.#remote; }
+	set remote(sig) { this.#remote = sig; this.#remote_res(this.#remote); }
 
 	constructor(config = default_config) {
 		super(config);
-		this.#local.id = config.id;
-
-		this.#dc = this.createDataChannel('', {negotiated: true, id: 0});
-		if (config.delay_signaling) { return; }
-		this._signal_task();
+		this.#signal_task();
 	}
-	async _signal_task() {
-		// 1. Set the local description
-		await super.setLocalDescription();
+	async #signal_task() {
+		// Create our local offer:
+		const offer = await super.createOffer();
 
-		// 2. Get most of the parameters for the local Sig:
-		this.#local.ice_ufrag = /a=ice-ufrag:(.+)/.exec(this.localDescription.sdp)[1];
-		this.#local.ice_pwd = /a=ice-pwd:(.+)/.exec(this.localDescription.sdp)[1];
-		this.#local.id ??= new Id();
-		for (const {1: alg, 2: value} of reg_all(/a=fingerprint:([^ ]+) (.+)/g, this.localDescription.sdp)) {
-			this.#local.id.add_fingerprint(alg, value);
-		}
+		// Gather our local id from the offer
+		this.local_id = new Id();
+		this.local_id.add_sdp(offer.sdp);
+		this.#local_id_res(this.local_id);
 
-		// 3. Handle making the local Sig (signaling message) once we've aquired our local candidates.
-		const try_make_local = () => {
-			if (this.iceGatheringState != 'complete') {
-				this.addEventListener('icegatheringstatechange', try_make_local, {once: true});
-				return;
-			}
-			this.#local.candidates = reg_all(/a=candidate:[^ ]+ [0-9]+ udp ([0-9]+) ([^ ]+) ([0-9]+) typ (host|srflx)/g, this.localDescription.sdp)
-				.map(({1: priority, 2: address, 3: port, 4: typ}) => {
-				return {priority: Number.parseInt(priority), address, port: Number.parseInt(port), typ};
-			}).sort((a, b) => a.priority - b.priority).filter(c => c.transport == 'udp');
+		// Mung our ICE credentials to match our local_id
+		offer.sdp = offer.sdp
+			.replace(/a=ice-ufrag:.+/, `a=ice-ufrag:${this.local_id}`)
+			.replace(/a=ice-pwd:.+/, 'a=ice-pwd:the/ice/password/constant');
+			
+		// Apply the offer
+		await super.setLocalDescription(offer);
 
-			this.#local_res(this.#local);
-		};
-		try_make_local();
-
-		// 4. Wait for the remote signaling message
+		// Wait for the remote signaling message:
 		const remote = await this.remote;
 
-		// 5. Set the remote description:
+		// Set the remote description:
 		const sdp = [
 			'v=0',
 			'o=- 20 0 IN IP4 0.0.0.0',
@@ -99,14 +98,15 @@ export class Conn extends RTCPeerConnection {
 			't=0 0',
 			'm=application 9 UDP/DTLS/SCTP webrtc-datachannel',
 			'c=IN IP4 0.0.0.0',
-			...remote.sdp(this.#local.id),
+			...remote.sdp(this.local_id),
 			'a=sctp-port:5000',
 			''
 		].join('\n');
 		await super.setRemoteDescription({ type: 'answer', sdp });
-
-		// 6. TODO: Wait for the connection to complete, and then take over with the perfect negotiation pattern.
 	}
+	// Conn does automatic renegotiation over #dc so we disable manual signaling
 	setLocalDescription() { throw new Error("Manual signaling is disabled."); }
 	setRemoteDescription() { throw new Error("Manual signaling is disabled."); }
+	createOffer() { throw new Error("Manual signaling is disabled."); }
+	createAnswer() { throw new Error("Manual signaling is disabled."); }
 }

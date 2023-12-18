@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+	<title>Switchboard</title>
+	<script type="importmap">{"imports":{
+			"swbrd": "./src/index.mjs",
+			"swbrd/": "./src/"
+		}}</script>
+	<script type="module">
+		import { Addr, Id, make_id, Conn } from 'swbrd';
+		// import { buftobinstr, btoa_url } from 'swbrd/b64url.mjs'
+
+		// const cert = await RTCPeerConnection.generateCertificate({name:'ECDSA', namedCurve:'P-256'});
+		// console.log(await make_id(cert));
+		// console.log(new Addr('udp:local.evan-brass.net:4666'));
+
+
+		// const addr = new Addr(`swbd://local.evan-brass.net`);
+		// const c = await addr.connect();
+		// console.log(c);
+		// c.addEventListener('connectionstatechange', () => console.log(c.connectionState));
+
+		const a = new Conn();
+		const b = new Conn();
+		[
+			'connectionstatechange',
+			'datachannel',
+			'icecandidate',
+			'icecandidateerror',
+			'iceconnectionstatechange',
+			'icegatheringstatechange',
+			'negotiationneeded',
+			'signalingstatechange',
+			'track'
+		].forEach(ev => a.addEventListener(ev, e => console.log('a', e), b.addEventListener(ev, e => console.log('b', e))));
+		console.log(a);
+		console.log(b);
+		const [a_loc, b_loc] = await Promise.all([a.local, b.local]);
+		console.log('a', a_loc);
+		console.log('b', b_loc);
+		b.remote = a_loc;
+		a.remote = b_loc;
+		await a.connected;
+		console.log('a connected');
+
+	</script>
+</head>
+
+</html>

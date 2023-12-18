@@ -28,9 +28,11 @@ export class Id {
 			Object.assign(this, ...arguments);
 		}
 	}
-	sdp() {
-		return Object.entries(this)
-			.map(([alg, v]) => binstrtobuf(v).reduce((a, v, i) => a + (i > 0 ? ':' : '') + v.toString(16).padStart(2, '0'), `a=fingerprint:${alg} `));
+	*sdp() {
+		for (const [alg, value] of Object.entries(this)) {
+			const buff = [...binstrtobuf(value)];
+			yield `a=fingerprint:${alg} ${buff.map(b => b.toString(16).padStart(2, '0')).join(':')}`;
+		}
 	}
 	add_sdp(sdp) {
 		for (const {1: alg, 2: value} of reg_all(/a=fingerprint:([^ ]+) (.+)/g, sdp)) {
@@ -44,7 +46,7 @@ export class Id {
 			const binstr = this[advanced_usage.id_alg] ?? '\0';
 			return BigInt(binstrtobuf(binstr).reduce((a, v) => a + v.toString(16).padStart(2, '0'), '0x'));
 		} else {
-			Object.values(this).map(binstr => btoa_url(binstr)).join(',');
+			return Object.values(this).map(binstr => btoa_url(binstr)).join(',');
 		}
 	}
 }
