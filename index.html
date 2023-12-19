@@ -21,8 +21,8 @@
 		// console.log(c);
 		// c.addEventListener('connectionstatechange', () => console.log(c.connectionState));
 
-		const a = new Conn();
-		const b = new Conn();
+		const a = new Addr(`swbrd://local.evan-brass.net`).connect();
+		const b = new EventTarget();
 		[
 			'connectionstatechange',
 			'datachannel',
@@ -35,14 +35,14 @@
 			'track'
 		].forEach(ev => a.addEventListener(ev, e => console.log('a', e), b.addEventListener(ev, e => console.log('b', e))));
 		console.log(a);
-		console.log(b);
-		const [a_loc, b_loc] = await Promise.all([a.local, b.local]);
-		console.log('a', a_loc);
-		console.log('b', b_loc);
-		b.remote = a_loc;
-		a.remote = b_loc;
-		await a.connected;
-		console.log('a connected');
+		// console.log(b);
+		// const [a_loc, b_loc] = await Promise.all([a.local, b.local]);
+		// console.log('a', a_loc);
+		// console.log('b', b_loc);
+		// b.remote = a_loc;
+		// a.remote = b_loc;
+		// await a.connected;
+		// console.log('a connected');
 
 	</script>
 </head>

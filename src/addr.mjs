@@ -1,7 +1,6 @@
 import { Sig, Conn, default_config } from "./conn.mjs";
 import { Id } from "./id.mjs";
 import { query_id } from "./dns.mjs";
-import { btoa_url, buftobinstr, from_url } from "./b64url.mjs";
 
 // Default port is 80, even for udp because Firewalls tend to be permissive to port 80.
 
@@ -30,27 +29,34 @@ export class Addr extends URL {
 
 		// Spawn a task to signal this connection:
 		(async () => {
-			const candidates = [
-				(this.protocol == 'swbrd') ? {
-					address: crypto.getRandomValues(new Uint8Array(3)).reduce((a, v) => a + '.' + v, '30'),
-					port: crypto.getRandomValues(new Uint16Array(1))[0] || 420,
-				} : {
-					transport: this.protocol,
-					address: this.hostname,
-					port: this.port
-				}
-			];
-			const remote = new Sig({
-				id: await this.id,
-				candidates
-			});
+			const id = await this.id;
+			let init;
 			if (this.protocol == 'udp' || this.protocol == 'tcp') {
-				remote.ice_lite = true;
-				remote.setup = 'passive';
+				init = {
+					id,
+					ice_pwd: this.password,
+					ice_lite: true,
+					setup: 'passive',
+					candidates: [{
+						transport: this.protocol,
+						address: this.hostname,
+						port: this.port
+					}]
+				};
 			}
-			
-			// Apply the remote signaling message
-			ret.remote = remote;
+			else if (this.protocol == 'swbrd') {
+				init = {
+					id,
+					ice_pwd: this.password,
+					candidates: [{
+						address: crypto.getRandomValues(new Uint8Array(3)).reduce((a, v) => a + '.' + v, '30'),
+						port: crypto.getRandomValues(new Uint16Array(1))[0] || 420,
+					}]
+				};
+			}
+			else { throw new Error("Unknown Protocol"); }
+
+			ret.remote = new Sig(init);
 
 			await ret.connected;
 

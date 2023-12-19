@@ -13,12 +13,14 @@ export class Sig {
 			yield 'a=ice-lite';
 		}
 		yield `a=ice-ufrag:${this.id}`;
-		yield `a=ice-pwd:${this.ice_pwd ?? 'the/ice/password/constant'}`;
+		yield `a=ice-pwd:${this.ice_pwd || 'the/ice/password/constant'}`;
 		for (let i = 0; i < this.candidates.length; ++i) {
 			const c = this.candidates[i];
-			yield `a=candidate:foundation 1 ${c.transport ?? 'udp'} ${c.priority ?? i + 1} ${c.address} ${c.port} typ ${c.typ ?? 'host'}${c.transport == 'tcp' ? ' tcptype passive' : ''}`;
+			yield `a=candidate:foundation 1 ${c.transport || 'udp'} ${c.priority ?? i + 1} ${c.address} ${c.port} typ ${c.typ || 'host'}${
+				c.transport == 'tcp' ? ' tcptype passive' : ''
+			}`;
 		}
-		yield `a=setup:${this.setup ?? (this.id < other_id) ? 'passive' : 'active'}`;
+		yield `a=setup:${this.setup || (this.id < other_id) ? 'passive' : 'active'}`;
 	}
 	add_sdp(sdp) {
 		this.id.add_sdp(sdp);
