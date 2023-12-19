@@ -5,7 +5,7 @@
 		"swbrd/": "./src/"
 	},
 	"tasks": {
-		"dev": "deno run --allow-net --allow-read --unstable --watch backend/main.mjs"
+		"dev": "deno run --allow-net --allow-read --unstable --watch switchboard/main.mjs"
 	},
 	"fmt": {
 		"useTabs": true
