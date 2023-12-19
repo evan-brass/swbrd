@@ -28,11 +28,46 @@ export class Turn {
 	type;
 	attrs = new Map();
 	txid;
+	constructor() { Object.assign(this, ...arguments); }
+
+	encode(maxByteLength = 4096) {
+		const header_size = (this.type < 0x4000) ? 20 : 4;
+		const buffer = new ArrayBuffer(header_size, {maxByteLength});
+		const view = new DataView(buffer);
+
+		const set_length = new_length => {
+			buffer.resize(header_size + new_length);
+			view.setUint16(2, new_length);
+		};
+
+		// Set the type and zero the length
+		view.setUint16(0, this.type);
+		set_length(0);
+
+		// Write the header:
+		if (this.type < 0x4000) {
+			view.setUint32(4, MAGIC);
+			new Uint8Array(buffer, 8, 12).set(this.txid);
+			let i = 20;
+			for (const [attr_type, value] of this.attrs.entries()) {
+				view.setUint16()
+			}
+		}
+		else if (this.type < 0x7FFE) {
+			const data = this.attrs.get()
+		}
+		else { throw new Error('Bad type') }
+
+
+
+		// TODO: encode channel data messages
+		if (this.type >= 0x4000) throw new Error('Not Implemented');
+		
+	}
+
 	// key_data;
-	static async decode(buff, cm = default_cm) {
-		if (buff.byteLength < 4) return;
-		const view = new DataView(buff.buffer, buff.byteOffset, buff.byteLength);
-		const typ = view.getUint16(0);
+	static decode(view) {
+		if (view.byteLength < 4) return;
 		const ret = new Turn();
 		ret.type = view.getUint16(0);
 		const length = view.getUint16(2);
@@ -40,10 +75,10 @@ export class Turn {
 		// TURN-STUN
 		if (ret.type < 0x4000) {
 			if (length % 4 != 0) return;
-			if (buff.byteLength < 20 + length) return;
+			if (view.byteLength < 20 + length) return;
 			const magic = view.getUint32(4);
 			if (magic != MAGIC) return;
-			ret.txid = buff.slice(8, 20);
+			ret.txid = new Uint8Array(view.buffer, view.byteOffset + 8, 12);
 
 			// Read the attributes:
 			let len = 0;
@@ -52,7 +87,7 @@ export class Turn {
 				const attr_len = view.getUint16(20 + len + 2);
 				len += 4;
 				if (attr_len > (length - len)) return;
-				const value = new DataView(buff.buffer, buff.byteOffset + 20 + len, attr_len);
+				const value = new DataView(view.buffer, view.byteOffset + 20 + len, attr_len);
 				len += attr_len;
 
 				view.setUint16(2, len);
@@ -66,8 +101,8 @@ export class Turn {
 		}
 		// TURN-ChannelData
 		else if (ret.type < 0x7FFE) {
-			if (buff.byteLength < 4 + length) return;
-			ret.attrs.set('data', buff.slice(4, 4 + length));
+			if (view.byteLength < 4 + length) return;
+			ret.attrs.set('data', new Uint8Array(view.buffer, view.byteOffset + 4, length));
 		}
 		// Invalid Type:
 		else {
@@ -75,45 +110,46 @@ export class Turn {
 		}
 		return ret;
 	}
-	static async *decode_stream(conn, cm = default_cm) {
-		// Deframe the TURN messages
-		const read_buff = new Uint8Array(4096);
-		let available = 0;
-		while (available < read_buff.byteLength) {
-			const writable = new Uint8Array(read_buff.buffer, read_buff.byteOffset + available, read_buff.byteLength - available);
-			const res = await conn.read(writable);
-			if (typeof res != 'number') break;
-			available += res;
-			if (available < 4) continue;
-			const view = new DataView(read_buff.buffer, read_buff.byteOffset, available);
-			const type = view.getUint16(0);
-			const length = view.getUint16(2);
-			let needed;
-			// Is the message TURN-STUN?
-			if (type < 0x4000) {
-				needed = 20 + length;
+	static async *decode_readable(readable, buff_len = 4096) {
+		const reader = readable.getReader({mode: 'byob'});
+
+		let buffer = new Uint8Array(buff_len);
+		while (1) {
+			const {done, value} = await reader.read(buffer);
+			if (value) {
+				let available = value.byteOffset + value.byteLength;
+				if (available >= 4) {
+					const view = new DataView(value.buffer, 0, available);
+					const type = view.getUint16(0);
+					const length = view.getUint16(2);
+					let needed;
+					// Is the message TURN-STUN?
+					if (type < 0x4000) {
+						needed = 20 + length;
+					}
+					// Or is it TURN-ChannelData?
+					else if (type < 0x7FFE) {
+						needed = 4 + length;
+					}
+					// Otherwise it isn't a TURN message at all:
+					else { break; /* Not a TURN message */ }
+
+					// Pad out the TURN message:
+					while (needed % 4 != 0) needed += 1;
+					// Check if the message can fit inside the read buffer:
+					if (needed > buff_len) break;
+					// If we have the full message
+					if (available >= needed) {
+						const turn = Turn.decode(view);
+						if (turn) yield turn;
+	
+						available -= needed;
+						new Uint8Array(value.buffer).set(new Uint8Array(value.buffer, needed, available))
+					}
+				}
+				buffer = new Uint8Array(value.buffer, available);
 			}
-			// Or is it TURN-ChannelData?
-			else if (type < 0x7FFE) {
-				needed = 4 + length;
-			}
-			// Otherwise it isn't a TURN message at all:
-			else { break; /* Not a TURN message */ }
-
-			// Pad out the TURN message:
-			while (needed % 4 != 0) needed += 1;
-			// Check if the message can fit inside the read buffer:
-			if (needed > read_buff.byteLength) break;
-			// Continue reading if we don't have enough data available:
-			if (available < needed) continue;
-
-			const turn = await Turn.decode(new Uint8Array(read_buff.buffer, read_buff.byteOffset, needed), cm);
-			if (turn) yield turn;
-
-			// Copy unused available data:
-			new Uint8Array(read_buff.buffer, read_buff.byteOffset, available - needed)
-				.set(new Uint8Array(read_buff.buffer, read_buff.byteOffset + needed, available - needed));
-			available -= needed;
+			if (done) break;
 		}
 	}
 }
