@@ -24,11 +24,11 @@ export class Sig {
 	}
 	add_sdp(sdp) {
 		this.id.add_sdp(sdp);
-		for (const {1: candidate} of reg_all(/a=candidate:(.+)/g, sdp)) {
+		for (const {1: candidate} of reg_all(/a=candidate:(.+)/ig, sdp)) {
 			// console.log(candidate);
-			const res = /[^ ]+ [0-9]+ (udp|UDP) ([0-9]+) ([^ ]+) ([0-9]+) typ (host|srflx|relay)/.exec(candidate);
+			const res = /[^ ]+ [0-9]+ udp ([0-9]+) ([^ ]+) ([0-9]+) typ (host|srflx|relay)/i.exec(candidate);
 			if (!res) continue;
-			const [_, _transport, priority, address, port, typ] = res;
+			const [_, priority, address, port, typ] = res;
 			this.candidates.push({transport: 'udp', priority: parseInt(priority), address, port: parseInt(port), typ});
 		}
 		this.candidates.sort((a, b) => a.priority - b.priority);
