@@ -222,19 +222,6 @@ export class Turn extends DataView {
 		view.setUint16(2, port);
 		new Uint8Array(view.buffer, view.byteOffset + 4).set(ip_bytes);
 	}
-
-	// STUN Auth
-	async check_auth(cmOrKey) {
-		const key = (cmOrKey instanceof CryptoKey) ? cmOrKey : await cmOrKey.credential(this.username, this.realm);
-		if (!key) return false;
-
-		const mac = this.integrity;
-		if (!mac) return false;
-
-	}
-	async add_auth(cmOrKey) {
-
-	}
 	
 	// STUN Attribute getters/setters
 	// Attributes: (TODO: DRY)
