@@ -49,9 +49,9 @@ export class Addr extends URL {
 					id,
 					ice_pwd: this.password,
 					candidates: [{
-						// A random IP + port
-						address: crypto.getRandomValues(new Uint8Array(4)).map(v => v.toString()).join('.'),
-						port: crypto.getRandomValues(new Uint16Array(1))[0] || 420,
+						// IP Broadcast
+						address: "255.255.255.255",
+						port: 3478,
 					}]
 				};
 			}
