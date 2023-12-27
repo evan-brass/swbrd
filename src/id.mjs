@@ -15,6 +15,7 @@ const untagged = new Map([
 ].map(a => [a, a.toReversed()]).flat());
 
 export class Id {
+	// If you're wondering why the hashes are stored on this object as binary strings, it's because strings are more indexeddb friendly than array buffers and we want Ids to be easily persisted.
 	constructor(init) {
 		if (typeof init == 'string') {
 			for (const v of init.split(',')) {
@@ -61,6 +62,7 @@ export async function make_id(cert, fingerprints = [advanced_usage.id_alg]) {
 			ret[algorithm] = buftobinstr(value.split(':').map(s => parseInt(s, 16)));
 		}
 	}
+	if (are_we_done()) return ret;
 
 	// Use temporary connection:
 	{
