@@ -64,6 +64,7 @@ export class Addr extends URL {
 			// Once we're connected, set the configuration back:
 			if (this.protocol == 'swbrd') {
 				ret.setConfiguration(config);
+				ret.restartIce();
 			}
 		})();
 

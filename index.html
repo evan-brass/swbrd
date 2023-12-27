@@ -8,7 +8,7 @@
 			"swbrd/": "./src/"
 		}}</script>
 	<script type="module">
-		import { Addr, Id, make_id, Conn } from 'swbrd';
+		import { Addr, Id, make_id, Conn, Sig } from 'swbrd';
 		// import { buftobinstr, btoa_url } from 'swbrd/b64url.mjs'
 
 		const all_events = [
@@ -23,11 +23,34 @@
 			'track'
 		];
 
-		const addr = new Addr('swbrd://local.evan-brass.net');
-		const c = addr.connect();
-		all_events.forEach(ev => c.addEventListener(ev, console.log));
-		await c.connected;
-		console.log('c connected');
+		// const a = new Conn();
+		// all_events.forEach(ev => a.addEventListener(ev, console.log));
+		// console.log(await a.local);
+		// a.remote = new Sig({
+		// 	id: new Id('GjSxeQsUF1m1ftpcw-Ug82EhHitF_sKMeL39FESeEa0'),
+		// 	candidates: [{address: '255.255.255.255', port: 3478}]
+		// });
+		// console.log(a.remote);
+
+		const certa = await RTCPeerConnection.generateCertificate({name: 'ECDSA', namedCurve: 'P-256', hash: 'SHA-256'});
+		const certb = await RTCPeerConnection.generateCertificate({name: 'ECDSA', namedCurve: 'P-256', hash: 'SHA-256'});
+		const addra = new Addr(`swbrd://${await make_id(certa)}@local.evan-brass.net`);
+		const addrb = new Addr(`swbrd://${await make_id(certb)}@local.evan-brass.net`);
+		console.log(addra, addrb);
+		const conna = addrb.connect({ certificates: [certa] });
+		const connb = addra.connect({ certificates: [certb] });
+		all_events.forEach(ev => {
+			conna.addEventListener(ev, console.log.bind(console, 'a'))
+			connb.addEventListener(ev, console.log.bind(console, 'b'))
+		});
+		await Promise.race([conna.connected, connb.connected]);
+		console.log('connected!');
+
+		// const addr = new Addr('swbrd://local.evan-brass.net');
+		// const c = addr.connect();
+		// all_events.forEach(ev => c.addEventListener(ev, console.log));
+		// await c.connected;
+		// console.log('c connected');
 
 		// const cert = await RTCPeerConnection.generateCertificate({name:'ECDSA', namedCurve:'P-256'});
 		// console.log(await make_id(cert));
