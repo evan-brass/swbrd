@@ -72,6 +72,65 @@ export class Conn extends RTCPeerConnection {
 		super(config);
 		this.#signal_task();
 	}
+	#perfect(polite) {
+		let making_offer = false;
+
+		const send_signaling = async obj => {
+			while (this.#dc.readyState !== 'open') {
+				if (this.#dc.readyState !== 'connecting') this.#dc = this.createDataChannel('', {negotiated: true, id: 0});
+				await new Promise((res, rej) => {
+					this.#dc.addEventListener('open', res, {once: true});
+					this.#dc.addEventListener('close', rej, {once: true});
+					this.#dc.addEventListener('error', rej, {once: true});
+				});
+			}
+			this.#dc.send(JSON.stringify(obj));
+		};
+
+		this.addEventListener('negotiationneeded', async () => {
+			try {
+				making_offer = true;
+				await super.setLocalDescription();
+
+				await send_signaling({ description: this.localDescription });
+			}
+			catch (e) { console.error(e); }
+			finally {
+				making_offer = false;
+			}
+		});
+
+		this.addEventListener('icecandidate', async ({ candidate }) => {
+			if (this.#dc.readyState == 'open') await send_signaling({ candidate });
+		});
+
+		let ignore_offer = false;
+		this.#dc.addEventListener('message', async ({ data }) => {
+			try {
+				const { description, candidate } = JSON.parse(data);
+
+				if (description) {
+					const offer_collision = description.type === 'offer' &&
+						(making_offer || super.signalingState !== 'stable');
+
+					ignore_offer = !polite && offer_collision;
+					if (ignore_offer) return;
+
+					await super.setRemoteDescription(description);
+					if (description.type === 'offer') {
+						await super.setLocalDescription();
+						await send_signaling({ description: this.localDescription });
+					}
+				}
+
+				if (candidate) {
+					try { await this.addIceCandidate(candidate); }
+					catch (e) { if (!ignore_offer) throw e; }
+				}
+			}
+			catch (e) { console.error(e); }
+		});
+	}
 	async #signal_task() {
 		// Create our local offer:
 		const offer = await super.createOffer();
@@ -91,6 +150,10 @@ export class Conn extends RTCPeerConnection {
 
 		// Wait for the remote signaling message:
 		const remote = await this.remote;
+
+		// Start the perfect negotiation pattern
+		const polite = remote.id < this.local_id;
+		this.#perfect(polite);
 
 		// Set the remote description:
 		const sdp = [
