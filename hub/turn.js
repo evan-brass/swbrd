@@ -2,19 +2,6 @@ import { parse_ipaddr } from "./ipaddr.mjs";
 
 const MAGIC = 0x2112A442;
 
-export class CredentialManager {
-	// TODO: Should we cache the keys?
-	async credential(username, realm, password = realm ? 'the/turn/credential/constant' : 'the/ice/password/constant') {
-		const key_data = realm ? 
-			md5(`${username}:${realm}:${password}`) :
-			encoder.encode(password);
-		return await crypto.subtle.importKey('raw', key_data, {
-			name: 'HMAC',
-			hash: 'SHA-1'
-		}, false, ['sign', 'verify']);
-	}
-}
-
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 
@@ -309,6 +296,8 @@ export class Turn extends DataView {
 		let available = 0;
 		let ended = false;
 		while (1) {
+			if (buffer.detached) break;
+
 			const turn = new this(buffer, 0, available);
 			const framed = turn.framed_packet_length;
 			if (available >= framed) {
@@ -327,13 +316,16 @@ export class Turn extends DataView {
 				else break;
 			}
 			
-			if (ended) break;
-			const {value, done} = await reader.read(new Uint8Array(buffer, available));
-			if (value) {
-				buffer = value.buffer;
-				available += value.byteLength;
-			}
-			ended = done;
+			if (ended) return;
+			try {
+				const {value, done} = await reader.read(new Uint8Array(buffer, available));
+				if (value) {
+					buffer = value.buffer;
+					available += value.byteLength;
+				}
+				ended = done;
+			} catch (_e) { ended = true }
 		}
+		await reader.cancel("ended");
 	}
 }

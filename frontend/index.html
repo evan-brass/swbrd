@@ -4,8 +4,8 @@
 <head>
 	<title>Switchboard</title>
 	<script type="importmap">{"imports":{
-			"swbrd": "./src/index.mjs",
-			"swbrd/": "./src/"
+			"swbrd": "./swbrd/index.mjs",
+			"swbrd/": "./swbrd/"
 		}}</script>
 	<script type="module">
 		import { Addr, Id, make_id, Conn, Sig } from 'swbrd';
@@ -34,8 +34,20 @@
 
 		const certa = await RTCPeerConnection.generateCertificate({name: 'ECDSA', namedCurve: 'P-256', hash: 'SHA-256'});
 		const certb = await RTCPeerConnection.generateCertificate({name: 'ECDSA', namedCurve: 'P-256', hash: 'SHA-256'});
-		const addra = new Addr(`swbrd://${await make_id(certa)}@local.evan-brass.net`);
-		const addrb = new Addr(`swbrd://${await make_id(certb)}@local.evan-brass.net`);
+		const addra = new Addr(`swbrd://${await make_id(certa)}@local.evan-brass.net:443`);
+		const addrb = new Addr(`swbrd://${await make_id(certb)}@local.evan-brass.net:443`);
+
+		// Example: Bind an address at a TURN Hub (a Switchboard or swbrd:)
+		// const listener = new Addr(`swbrd://local.evan-brass.net`).bind(
+		// 	{ certificates: [certa] }, // RTCPeerConnection Configuration
+		// 	() => true // Filtering function for which connections to accept and which to ignore.
+		// );
+		// console.log('my addr:', listener.addr);
+		// for await (const conn of listener) {
+		// 	// TODO: Do something with the connections.
+		// 	console.log(conn)
+		// }
+
 		console.log(addra, addrb);
 		const conna = addrb.connect({ certificates: [certa] });
 		const connb = addra.connect({ certificates: [certb] });

@@ -3,10 +3,14 @@ import { reg_all } from "./util.mjs";
 
 export class Sig {
 	// Required fields:
-	id = new Id();
-	candidates = [];
+	id;
+	candidates;
 	// Optional Fields: [setup, ice_lite, ice_pwd]
-	constructor() { Object.assign(this, ...arguments); }
+	constructor() {
+		Object.assign(this, ...arguments);
+		if (!(this.id instanceof Id)) this.id = new Id(this.id);
+		if (!Array.isArray(this.candidates)) this.candidates = [];
+	}
 	*sdp(other_id) {
 		yield* this.id.sdp();
 		if (this.ice_lite) {
