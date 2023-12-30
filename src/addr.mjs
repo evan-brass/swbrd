@@ -92,8 +92,8 @@ export class Addr extends URL {
 		if (!this.protocol.startsWith('swbrd')) return;
 
 		conn.connected.then(() => {
-			ret.setConfiguration(config);
-			ret.restartIce();
+			conn.setConfiguration(config);
+			conn.restartIce();
 		});
 	}
 	connect(config = default_config) {
