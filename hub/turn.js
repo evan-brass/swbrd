@@ -317,15 +317,13 @@ export class Turn extends DataView {
 			}
 			
 			if (ended) return;
-			try {
-				const {value, done} = await reader.read(new Uint8Array(buffer, available));
-				if (value) {
-					buffer = value.buffer;
-					available += value.byteLength;
-				}
-				ended = done;
-			} catch (_e) { ended = true }
+
+			const {value, done} = await reader.read(new Uint8Array(buffer, available)).catch(() => ({done: true}));
+			if (value) {
+				buffer = value.buffer;
+				available += value.byteLength;
+			}
+			ended = done;
 		}
-		await reader.cancel("ended");
 	}
 }
