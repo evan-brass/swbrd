@@ -11,6 +11,15 @@
 		import { Addr, Id, make_id, Conn, Sig } from 'swbrd';
 		// import { buftobinstr, btoa_url } from 'swbrd/b64url.mjs'
 
+		// const test = new WebSocket('wss://local.evan-brass.net/broadcast');
+		// test.addEventListener('message', ({ data }) => console.log(JSON.parse(data)));
+		// [
+		// 	'open',
+		// 	// 'message',
+		// 	'error',
+		// 	'close'
+		// ].forEach(ev => test.addEventListener(ev, console.log));
+
 		const all_events = [
 			'connectionstatechange',
 			'datachannel',
@@ -34,8 +43,8 @@
 
 		const certa = await RTCPeerConnection.generateCertificate({name: 'ECDSA', namedCurve: 'P-256', hash: 'SHA-256'});
 		const certb = await RTCPeerConnection.generateCertificate({name: 'ECDSA', namedCurve: 'P-256', hash: 'SHA-256'});
-		const addra = new Addr(`swbrd://${await make_id(certa)}@local.evan-brass.net:443`);
-		const addrb = new Addr(`swbrd://${await make_id(certb)}@local.evan-brass.net:443`);
+		const addra = new Addr(`swbrd://${await make_id(certa)}@local.evan-brass.net:3478?protocol=turn`);
+		const addrb = new Addr(`swbrd://${await make_id(certb)}@local.evan-brass.net:3478?protocol=turn`);
 
 		// Example: Bind an address at a TURN Hub (a Switchboard or swbrd:)
 		// const listener = new Addr(`swbrd://local.evan-brass.net`).bind(

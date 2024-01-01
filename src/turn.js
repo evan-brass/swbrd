@@ -1,4 +1,4 @@
-import { parse_ipaddr } from "./ipaddr.mjs";
+// import { parse_ipaddr } from "./ipaddr.mjs";
 
 const MAGIC = 0x2112A442;
 
