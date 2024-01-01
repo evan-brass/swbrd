@@ -30,7 +30,7 @@ export class Turn extends DataView {
 		this.setUint16(0, new_type);
 	}
 	get is_stun() { return this.type < 0x4000; }
-	get is_channeldata() { return 0x4000 <= this.type && this.type < 0x7ffe; }
+	get is_channeldata() { return 0x4000 <= this.type && this.type <= 0x7ffe; }
 	get length() {
 		return this.getUint16(2);
 	}
