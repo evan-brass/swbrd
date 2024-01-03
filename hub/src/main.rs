@@ -17,7 +17,6 @@ use tokio::{
 mod turn;
 use turn::{TurnReq, TurnRes};
 
-// TODO: Switch from reading / writing to the TcpStream directly to using a buffered reader / writer
 async fn handle(
 	stream: TcpStream,
 	addr: SocketAddr,

@@ -1,1 +1,16 @@
-FROM alpine:latest
+# Builder
+FROM rust:alpine3.18
+RUN apk add --no-cache musl-dev
+
+WORKDIR /usr/src/hub
+COPY . .
+RUN cargo install --path .
+
+# Runner
+FROM scratch
+
+COPY --from=0 /usr/local/cargo/bin/hub /bin/
+
+EXPOSE 3478
+
+ENTRYPOINT ["/bin/hub"]

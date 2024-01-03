@@ -1,0 +1,33 @@
+services:
+  hub:
+    build: ./hub
+    networks:
+      - back
+    labels:
+      - "traefik.http.routers.hub.rule=Alpn('stun.turn')"
+  bind:
+    build: ./bind
+    networks:
+      - back
+    depends_on:
+      - hub
+  frontend:
+    image: traefik
+    command: --api.insecure=true --providers.docker
+    networks:
+      - back
+      - front
+    ports:
+      - 8080:8080
+      - 80:80
+      - 443:443
+      - 443:443/udp
+    volumes:
+      - type: bind
+        source: /var/run/docker.sock
+        target: /var/run/docker.sock
+
+networks:
+  front: {}
+  back:
+    internal: true

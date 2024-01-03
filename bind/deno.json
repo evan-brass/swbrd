@@ -1,0 +1,10 @@
+{
+	"imports": {},
+	"tasks": {
+		"dev": "deno run --allow-net --watch main.js",
+		"run": "deno run --allow-net main.js"
+	},
+	"fmt": {
+		"useTabs": true
+	}
+}
