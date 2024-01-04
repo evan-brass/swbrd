@@ -3,9 +3,7 @@ import { Turn } from "./turn.js";
 
 const websockets = new Set();
 Deno.serve(req => {
-	console.log(req);
 	const {socket, response} = Deno.upgradeWebSocket(req);
-	console.log(response);
 	websockets.add(socket);
 	socket.addEventListener('close', () => websockets.delete(socket));
 
