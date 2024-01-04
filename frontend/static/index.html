@@ -11,6 +11,9 @@
 		import { Addr, Id, make_id, Conn, Sig } from 'swbrd';
 		// import { buftobinstr, btoa_url } from 'swbrd/b64url.mjs'
 
+		const t = new WebSocket('ws://local.evan-brass.net:8000');
+		['open', 'message', 'error', 'close'].forEach(ev => t.addEventListener(ev, console.log));
+
 		// const test = new WebSocket('wss://local.evan-brass.net/broadcast');
 		// test.addEventListener('message', ({ data }) => console.log(JSON.parse(data)));
 		// [
