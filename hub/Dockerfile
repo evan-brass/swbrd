@@ -3,7 +3,7 @@ FROM rust:alpine3.18
 RUN apk add --no-cache musl-dev
 
 WORKDIR /usr/src/hub
-COPY . .
+COPY --link . .
 RUN cargo install --path .
 
 # Runner

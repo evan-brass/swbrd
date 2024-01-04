@@ -3,7 +3,7 @@ FROM alpine:3.19
 RUN apk add --no-cache deno
 
 WORKDIR /app
-COPY . .
+COPY --link . .
 
 EXPOSE 8000
 

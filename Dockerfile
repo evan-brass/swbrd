@@ -1,5 +1,5 @@
 FROM docker
 
-COPY . .
+COPY --link . .
 
 CMD ["docker", "compose", "up"]
