@@ -1,5 +1,5 @@
-import { binstrtobuf, buftobinstr, atob_url, btoa_url } from "./b64url.mjs";
-import { reg_all } from "./util.mjs";
+import { binstrtobuf, buftobinstr, atob_url, btoa_url } from "./b64url.js";
+import { reg_all } from "./util.js";
 
 export const advanced_usage = {
 	// This hash algorithm will be used when converting an Id into a bigint.

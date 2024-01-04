@@ -1,5 +1,5 @@
-import { Id } from "./id.mjs";
-import { reg_all } from "./util.mjs";
+import { Id } from "./id.js";
+import { reg_all } from "./util.js";
 
 export class Sig {
 	// Required fields:

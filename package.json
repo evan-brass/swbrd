@@ -1,5 +1,5 @@
 {
 	"name": "swbrd",
 	"version": "0.0.0",
-	"main": "src/index.mjs"
+	"main": "src/index.js"
 }

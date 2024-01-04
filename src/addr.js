@@ -1,6 +1,6 @@
-import { Sig, Conn, default_config } from "./conn.mjs";
-import { Id } from "./id.mjs";
-import { query_id } from "./dns.mjs";
+import { Sig, Conn, default_config } from "./conn.js";
+import { Id } from "./id.js";
+import { query_id } from "./dns.js";
 
 
 export class Listener {
