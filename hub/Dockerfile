@@ -16,4 +16,8 @@ EXPOSE 3478
 # Use SIGINT because of Tokio::signal::ctrl_c
 STOPSIGNAL SIGINT
 
+LABEL org.opencontainers.image.source="https://gihub.com/evan-brass/swbrd"
+LABEL org.opencontainers.image.description="A pseudo-TURN server for use with switchboard WebRTC addresses."
+LABEL org.opencontainers.image.license="MIT-0"
+
 ENTRYPOINT ["/bin/hub"]
