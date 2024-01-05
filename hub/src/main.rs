@@ -5,6 +5,7 @@ use std::{
 	ops::DerefMut,
 	sync::Arc,
 };
+use tokio_util::{sync::CancellationToken, task::TaskTracker};
 
 use tokio::{
 	io::AsyncWriteExt,
@@ -18,6 +19,7 @@ mod turn;
 use turn::{TurnReq, TurnRes};
 
 async fn handle(
+	token: CancellationToken,
 	stream: TcpStream,
 	addr: SocketAddr,
 	writers: Arc<RwLock<HashMap<SocketAddr, Mutex<BufWriter<OwnedWriteHalf>>>>>,
@@ -42,14 +44,13 @@ async fn handle(
 	}
 
 	loop {
-		let req = match TurnReq::read(&mut reader).await {
-			Err(e) => {
-				eprintln!("{e}");
-				break;
-			}
-			Ok(v) => v,
+		let req = tokio::select! {
+			Ok(req) = TurnReq::read(&mut reader) => req,
+			() = token.cancelled() => break,
+			else => break,
 		};
 
+		// Map TURN requests to Turn Responses.  Most response are sent back to addr, but data indications are sent elsewhere.
 		let (res, dst) = match req {
 			TurnReq::Allocate { txid } => (
 				TurnRes::Allocate {
@@ -86,6 +87,7 @@ async fn handle(
 		let writers = writers.read().await;
 
 		// Send the response to dst (dst might be a broadcast address, in which case we send it to all the writable sockets)
+		// TODO: Handle write errors instead of ignoring them?
 		if dst.ip() == IpAddr::from([255, 255, 255, 255]) {
 			for writable in writers.values() {
 				let mut writable = writable.lock().await;
@@ -109,10 +111,23 @@ async fn main() -> Result<()> {
 	let listener = TcpListener::bind("[::]:3478").await?;
 	let writers = Arc::new(RwLock::new(HashMap::new()));
 
+	let token = CancellationToken::new();
+	let tracker = TaskTracker::new();
+
 	loop {
-		let Ok((stream, addr)) = listener.accept().await else {
-			continue;
-		};
-		tokio::spawn(handle(stream, addr, writers.clone()));
+		tokio::select! {
+			Ok(()) = tokio::signal::ctrl_c() => break,
+			Ok((stream, addr)) = listener.accept() => {
+				tracker.spawn(handle(token.clone(), stream, addr, writers.clone()));
+			}
+			else => break
+		}
 	}
+	tracker.close();
+	token.cancel();
+	tracker.wait().await;
+
+	println!("Finished closing.");
+
+	Ok(())
 }

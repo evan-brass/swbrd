@@ -13,4 +13,7 @@ COPY --from=0 /usr/local/cargo/bin/hub /bin/
 
 EXPOSE 3478
 
+# Use SIGINT because of Tokio::signal::ctrl_c
+STOPSIGNAL SIGINT
+
 ENTRYPOINT ["/bin/hub"]
