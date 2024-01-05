@@ -8,10 +8,10 @@ use std::{
 
 use tokio::{
 	io::AsyncWriteExt,
+	io::BufReader,
+	io::BufWriter,
 	net::{tcp::OwnedWriteHalf, TcpListener, TcpStream},
 	sync::{Mutex, RwLock},
-	io::BufWriter,
-	io::BufReader
 };
 
 mod turn;
@@ -62,14 +62,22 @@ async fn handle(
 			TurnReq::Permission { txid, .. } => (TurnRes::Permission { txid }, addr),
 			TurnReq::Refresh { txid } => (TurnRes::Refresh { txid, lifetime }, addr),
 			TurnReq::BindChannel { .. } => continue,
-			TurnReq::Send { txid, peer, data } => (
-				TurnRes::Data {
-					txid,
-					peer: addr,
-					data,
-				},
-				peer,
-			),
+			TurnReq::Send { txid, peer, data } => {
+				// Permit only some WebRTC packets (STUN or DTLS, but no RTP)
+				match data.first() {
+					Some(0..=3) => { /* STUN */ }
+					Some(20..=63) => { /* DTLS */ }
+					_ => continue, // Other WebRTC or Empty data
+				}
+				(
+					TurnRes::Data {
+						txid,
+						peer: addr,
+						data,
+					},
+					peer,
+				)
+			}
 			TurnReq::ChannelData { .. } => break,
 		};
 		// Canonicalize dst (we canonicalize both addr and dst so that our hashmap works properly with socketaddr keys)

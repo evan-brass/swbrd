@@ -135,6 +135,7 @@ impl TurnReq {
 						peer = Some(SocketAddr::new(ip, port));
 					},
 					0x0013 /* Data */ if data.is_none() => {
+						if attr_length > 4096 { return Err(Error::other("Data attribute > 4kb")) }
 						let mut ret = vec![0; attr_length as usize];
 						io.read_exact(&mut ret).await?;
 						i += ret.len() as u16;
