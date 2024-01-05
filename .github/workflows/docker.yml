@@ -15,7 +15,7 @@ jobs:
       run: docker build ./hub --tag ghcr.io/evan-brass/swbrd-hub:latest
 
     - name: login
-      run: docker login -u evan-brass --password {{ secrets.GITHUB_TOKEN }}
+      run: docker login ghcr.io -u evan-brass --password {{ secrets.GITHUB_TOKEN }}
 
     - name: Publish
       run: docker push ghcr.io/evan-brass/swbrd-hub:latest
