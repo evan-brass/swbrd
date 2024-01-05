@@ -1,0 +1,21 @@
+name: Docker Image CI
+
+on:
+  push:
+    branches: [ "dev" ]
+
+jobs:
+
+  docker:
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v3
+    - name: Build the Docker image
+      run: docker build ./hub --tag ghcr.io/evan-brass/swbrd-hub:latest
+
+    - name: login
+      run: docker login -u evan-brass --password {{ secrets.GITHUB_TOKEN }}
+
+    - name: Publish
+      run: docker push ghcr.io/evan-brass/swbrd-hub:latest
