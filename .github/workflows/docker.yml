@@ -9,13 +9,19 @@ jobs:
   docker:
     runs-on: ubuntu-latest
 
+    permissions:
+      contents: read
+      packages: write
+
     steps:
-    - uses: actions/checkout@v3
-    - name: Build the Docker image
-      run: docker build ./hub --tag ghcr.io/evan-brass/swbrd-hub:latest
-
-    - name: login
-      run: echo {{ secrets.GITHUB_TOKEN }} | docker login -u evan-brass --password-stdin ghcr.io
-
-    - name: Publish
-      run: docker push ghcr.io/evan-brass/swbrd-hub:latest
+    - uses: actions/checkout@v4
+    - uses: docker/login-action
+      with:
+        registry: ghcr.io
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    - uses: docker/build-push-action
+      with:
+        push: true
+        context: ./hub
+        tags: ghcr.io/evan-brass/swbrd-hub:latest
