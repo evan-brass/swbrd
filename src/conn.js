@@ -1,5 +1,4 @@
 import { Id } from "./id.js";
-import { reg_all } from "./util.js";
 
 export class Sig {
 	// Required fields:
@@ -28,7 +27,7 @@ export class Sig {
 	}
 	add_sdp(sdp) {
 		this.id.add_sdp(sdp);
-		for (const {1: candidate} of reg_all(/a=candidate:(.+)/ig, sdp)) {
+		for (const {1: candidate} of sdp.matchAll(/a=candidate:(.+)/ig)) {
 			// console.log(candidate);
 			const res = /[^ ]+ [0-9]+ udp ([0-9]+) ([^ ]+) ([0-9]+) typ (host|srflx|relay)/i.exec(candidate);
 			if (!res) continue;

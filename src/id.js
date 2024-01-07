@@ -1,5 +1,4 @@
 import { binstrtobuf, buftobinstr, atob_url, btoa_url } from "./b64url.js";
-import { reg_all } from "./util.js";
 
 export const advanced_usage = {
 	// This hash algorithm will be used when converting an Id into a bigint.
@@ -36,7 +35,7 @@ export class Id {
 		}
 	}
 	add_sdp(sdp) {
-		for (const {1: alg, 2: value} of reg_all(/a=fingerprint:([^ ]+) (.+)/g, sdp)) {
+		for (const {1: alg, 2: value} of sdp.matchAll(/a=fingerprint:([^ ]+) (.+)/g)) {
 			const key = alg.toLowerCase();
 			if (key in this) continue;
 			this[key] = buftobinstr(value.split(':').map(s => parseInt(s, 16)));
