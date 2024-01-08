@@ -26,7 +26,7 @@ export function buftobinstr(buffer) {
 		buffer = new Uint8Array(buffer.buffer, buffer.byteOffset, buffer.byteLength);
 	}
 
-	return buffer.reduce((a, v) => a + String.fromCharCode(v), '');
+	return String.fromCharCode(...buffer);
 }
 export function binstrtobuf(binstr) {
 	const ret = new Uint8Array(binstr.length);
