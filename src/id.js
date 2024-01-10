@@ -24,6 +24,9 @@ export class Id {
 					if (alg) this[alg] = binstr;
 				} catch {/* */}
 			}
+			if (!(advanced_usage.id_alg in this)) {
+				return null; // Id parsing failed to produce an Id with the required fingerprint algorithm
+			}
 		} else {
 			Object.assign(this, ...arguments);
 		}
