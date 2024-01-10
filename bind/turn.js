@@ -292,38 +292,42 @@ export class Turn extends DataView {
 	static async *parse(readable_stream, {maxByteLength = 4096} = {}) {
 		const reader = readable_stream.getReader({mode: 'byob'});
 
-		let buffer = new ArrayBuffer(100, {maxByteLength});
-		let available = 0;
-		let ended = false;
-		while (1) {
-			if (buffer.detached) break;
-
-			const turn = new this(buffer, 0, available);
-			const framed = turn.framed_packet_length;
-			if (available >= framed) {
-				// Yield the turn message:
-				yield turn;
-
-				// Shift any unused data to the front of the buffer
-				new Uint8Array(buffer).copyWithin(0, framed, available);
-				available -= framed;
-
-				// Continue yielding TURN messages until we've used up everything available
-				continue;
+		try {
+			let buffer = new ArrayBuffer(100, {maxByteLength});
+			let available = 0;
+			let ended = false;
+			while (1) {
+				if (buffer.detached) break;
+	
+				const turn = new this(buffer, 0, available);
+				const framed = turn.framed_packet_length;
+				if (available >= framed) {
+					// Yield the turn message:
+					yield turn;
+	
+					// Shift any unused data to the front of the buffer
+					new Uint8Array(buffer).copyWithin(0, framed, available);
+					available -= framed;
+	
+					// Continue yielding TURN messages until we've used up everything available
+					continue;
+				}
+				else if (framed > buffer.byteLength) {
+					if (buffer.resizable && buffer.maxByteLength >= framed) buffer.resize(framed);
+					else break;
+				}
+				
+				if (ended) return;
+	
+				const {value, done} = await reader.read(new Uint8Array(buffer, available)).catch(() => ({done: true}));
+				if (value) {
+					buffer = value.buffer;
+					available += value.byteLength;
+				}
+				ended = done;
 			}
-			else if (framed > buffer.byteLength) {
-				if (buffer.resizable && buffer.maxByteLength >= framed) buffer.resize(framed);
-				else break;
-			}
-			
-			if (ended) return;
-
-			const {value, done} = await reader.read(new Uint8Array(buffer, available)).catch(() => ({done: true}));
-			if (value) {
-				buffer = value.buffer;
-				available += value.byteLength;
-			}
-			ended = done;
+		} finally {
+			reader.releaseLock();
 		}
 	}
 }

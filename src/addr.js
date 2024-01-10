@@ -2,7 +2,11 @@ import { Sig, Conn, default_config } from "./conn.js";
 import { Id } from "./id.js";
 import { query_id } from "./dns.js";
 
+const advanced_usage = {
+	bindv1_service: 'ws:localhost:8000?host='
+};
 
+// This is how I actually want to do listeners: with a WebRTC bind server, but I'm still too frustrated with server-side WebRTC
 export class Listener {
 	#conn;
 	#base;
@@ -55,81 +59,118 @@ export class Listener {
 	}
 }
 
-// Default port is 80, even for udp because Firewalls tend to be permissive to port 80.
 export class Addr extends URL {
-	protocol;
-	id;
-	constructor(init) {
-		super(init);
-		this.protocol = super.protocol.replaceAll(':', '');
-		super.protocol = 'http';
-		if (this.username) this.id = new Id(this.username);
-		else this.id = query_id(this.hostname).then(s => this.id = new Id(s));
+	get id() {
+		const http = new URL(this); http.protocol = 'http:';
+		const username = http.username;
+		if (username) return new Id(http.username);
+		else return query_id(http.hostname).then(s => s && new Id(s));
 	}
-	get port() { return parseInt(super.port || 80); }
-	set port(v) { super.port = v; }
-	adjust_config(config) {
-		if (!this.protocol.startsWith('swbrd')) return config;
-
-		// Calculate the TURN url
-		let urls; {
-			const protocol = this.searchParams.get('protocol') || 'turns';
-			let transport = this.searchParams.get('transport') ?? 'tcp';
-			if (transport.length) transport = '?transport=' + transport;
-			urls = `${protocol}:${this.host}${transport}`;
+	get #port() {
+		// new URL('http://host.local:80').port == '' and new URL('https://host.local:443').port == '' so we parse the URL twice to get the actual port
+		const http = new URL(this); http.protocol = 'http:';
+		const https = new URL(this); https.protocol = 'https:';
+		return parseInt(http.port || https.port || 0);
+	}
+	get candidate() {
+		if (/^udp:|tcp:/i.test(this.protocol)) {
+			return { transport: this.protocol.replace(':', ''), address: http.hostname, port: this.#port || 3478, type: 'host' };
 		}
+		else if (/^turns?:/i.test(this.protocol)) {
+			// For turn addresses we add the broadcast candidate
+			return { transport: 'udp', address: '255.255.255.255', port: 3478, typ: 'host' };
+		}
+		else {
+			// Unknown address type
+			return;
+		}
+	}
+	get setup() {
+		if (/^udp:|tcp:/i.test(this.protocol)) return 'passive';
+	}
+	get ice_lite() {
+		if (/^udp:|tcp:/i.test(this.protocol)) return true;
+	}
+	get ice_pwd() {
+		const http = new URL(this); http.protocol = 'http:';
+		return http.password || undefined;
+	}
+	get turn_url() {
+		if (!/turns?:/i.test(this.protocol)) throw new Error("Not a turn address.");
+
+		const http = new URL(this); http.protocol = 'http:';
+		// Notice: this is backwards: 'turns:<id>@hostname' => '?transport=tcp' and 'turns:<id>@hostname?transport=udp' => '' because I want the default to be turns + tcp
+		const query = this.searchParams.get('transport') == 'udp' ? '' : '?transport=tcp';
+		// Notice: I've changed the default ports to: 'turns:' => 443, 'turn:' => 3478
+		const port = this.#port || (this.protocol == 'turns:' ? 443 : 3478);
+
+		return `${this.protocol}${http.hostname}:${port}${query}`;
+	}
+	adjust_config(config) {
+		if (!/^turns?:/i.test(this.protocol)) return config;
 
 		return {
 			...config,
 			iceTransportPolicy: 'relay',
-			iceServers: [
-				{urls, username: 'the/turn/username/constant', credential: 'the/turn/credential/constant'}
-			]
+			iceServers: [{ urls: this.turn_url, username: 'the/turn/username/constant', credential: 'the/turn/credential/constant' }]
 		};
 	}
-	// Apply a fixup step after the connection succeeds
 	fixup(conn, config) {
-		if (!this.protocol.startsWith('swbrd')) return;
+		if (!/^turns?:/i.test(this.protocol)) return;
 
-		conn.connected.then(() => {
-			conn.setConfiguration(config);
-			conn.restartIce();
-		});
+		// For turn addresses, we change the configuration back and trigger an iceRestart
+		conn.setConfiguration(config);
+		conn.restartIce();
 	}
-	connect(config = default_config) {
-		const ret = new Conn(this.adjust_config(config));
+	connect(config = default_config, {overide_id} = {}) {
+		const init = this.adjust_config(config);
+		const ret = new Conn(init);
 
-		this.fixup(ret, config);
-
-		// Spawn a task to signal this connection:
+		// Spawn a task to signal the connection
 		(async () => {
-			const id = await this.id;
+			const id = overide_id ?? await this.id;
+			if (!id) ret.close();
 
-			ret.remote = new Sig({
-				id,
-				ice_pwd: this.password,
-				...(this.protocol.startsWith('swbrd') ? {
-					candidates: [{
-						// IP Broadcast
-						address: "255.255.255.255",
-						port: 3478,
-					}]
-				} : {
-					ice_lite: true,
-					setup: 'passive',
-					candidates: [{
-						transport: this.protocol,
-						address: this.hostname,
-						port: this.port
-					}]
-				})
-			});
+			ret.remote = new Sig({ id, candidates: [this.candidate], setup: this.setup, ice_lite: this.ice_lite, ice_pwd: this.ice_pwd });
+
+			// Call fixup after the local sig has been generated. (But renegotiation won't progress until the datachannel is open)
+			const _ = await ret.local;
+			this.fixup(ret, config);
 		})();
 
 		return ret;
 	}
-	bind(config = default_config, options = {}) {
-		const conn = this.connect(config);
-		return new Listener(conn, { base: this, ...options});
+	async *bindv1(config = default_config, { filter = () => true } = {}) {
+		if (!/^turns?:/i.test(this.protocol)) throw new Error('bindv1 only works with turn(s) addresses.');
+
+		const local_ids = String(await this.id).split(',');
+
+		const sock = new WebSocket(advanced_usage.bindv1_service + encodeURIComponent(this.turn_url));
+		const next_msg = () => new Promise((res, rej) => {
+			sock.addEventListener('message', res, {once: true});
+			sock.addEventListener('close', () => rej, {once: true});
+			sock.addEventListener('error', () => rej, {once: true});
+		});
+
+		const answered = new Set();
+
+		while(1) {
+			const {data} = await next_msg();
+			const {dest, src, address} = JSON.parse(data);
+			if (!local_ids.includes(dest)) continue; // Connection test was not destined for us
+			
+			const overide_id = new Id(src);
+			if (!overide_id || answered.has(src) || !filter(overide_id, address)) continue; // Connection test filtered out
+
+			const conn = this.connect(config, {overide_id});
+
+			// Deduplicate incoming connections:
+			answered.add(src);
+			conn.addEventListener('connectionstatechange', () => {
+				if (['closed', 'failed'].includes(conn.connectionState)) answered.delete(src);
+			});
+
+			yield conn;
+		}
 	}
 }
