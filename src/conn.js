@@ -10,7 +10,7 @@ export class Sig {
 		if (!(this.id instanceof Id)) this.id = new Id(this.id);
 		if (!Array.isArray(this.candidates)) this.candidates = [];
 	}
-	*sdp(other_id) {
+	*sdp(polite) {
 		yield* this.id.sdp();
 		if (this.ice_lite) {
 			yield 'a=ice-lite';
@@ -19,11 +19,11 @@ export class Sig {
 		yield `a=ice-pwd:${this.ice_pwd || 'the/ice/password/constant'}`;
 		for (let i = 0; i < this.candidates.length; ++i) {
 			const c = this.candidates[i];
-			yield `a=candidate:foundation 1 ${c.transport || 'udp'} ${c.priority ?? i + 1} ${c.address} ${c.port} typ ${c.typ || 'host'}${
+			yield `a=candidate:foundation 1 ${c.transport || 'udp'} ${c.priority ?? i + 1} ${c.address} ${c.port || '3478'} typ ${c.typ || 'host'}${
 				c.transport == 'tcp' ? ' tcptype passive' : ''
 			}`;
 		}
-		yield `a=setup:${this.setup || (this.id < other_id) ? 'passive' : 'active'}`;
+		yield `a=setup:${this.setup || polite ? 'passive' : 'active'}`;
 	}
 	add_sdp(sdp) {
 		this.id.add_sdp(sdp);
@@ -51,6 +51,7 @@ export class Conn extends RTCPeerConnection {
 	connected = new Promise((res, rej) => {
 		this.#dc.addEventListener('open', () => res(this), {once: true});
 		this.#dc.addEventListener('error', ({error}) => rej(error), {once: true});
+		this.#dc.addEventListener('close', () => rej(new Error("closed")), {once: true});
 	});
 
 	// Local
@@ -80,7 +81,7 @@ export class Conn extends RTCPeerConnection {
 
 		const send_signaling = async obj => {
 			while (this.#dc.readyState !== 'open') {
-				if (this.#dc.readyState !== 'connecting') this.#dc = this.createDataChannel('', {negotiated: true, id: 0});
+				if (this.#dc.readyState !== 'connecting') throw new Error('Renegotiation channel is either closing or already closed.');
 				await new Promise((res, rej) => {
 					this.#dc.addEventListener('open', res, {once: true});
 					this.#dc.addEventListener('close', rej, {once: true});
@@ -156,6 +157,7 @@ export class Conn extends RTCPeerConnection {
 
 		// Start the perfect negotiation pattern
 		const polite = remote.id < this.local_id;
+		// TODO: Merge the perfect negotiation pattern into this signaling task
 		this.#perfect(polite);
 
 		// Set the remote description:
@@ -166,7 +168,7 @@ export class Conn extends RTCPeerConnection {
 			't=0 0',
 			'm=application 9 UDP/DTLS/SCTP webrtc-datachannel',
 			'c=IN IP4 0.0.0.0',
-			...remote.sdp(this.local_id),
+			...remote.sdp(polite),
 			'a=sctp-port:5000',
 			''
 		].join('\n');
