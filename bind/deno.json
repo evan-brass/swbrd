@@ -6,5 +6,10 @@
 	},
 	"fmt": {
 		"useTabs": true
+	},
+	"deploy": {
+		"project": "swbrd-bindv1",
+		"exclude": ["Dockerfile"],
+		"entrypoint": "main.js"
 	}
 }

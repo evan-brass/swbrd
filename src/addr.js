@@ -3,7 +3,7 @@ import { Id } from "./id.js";
 import { query_id } from "./dns.js";
 
 const advanced_usage = {
-	bindv1_service: 'ws:localhost:8000?host='
+	bindv1_service: 'wss://swbrd-bindv1.deno.dev?host='
 };
 
 // This is how I actually want to do listeners: with a WebRTC bind server, but I'm still too frustrated with server-side WebRTC
