@@ -1,0 +1,28 @@
+From a682a5922ef7f72e6effb92d3e7c7bf2c1ebe28b Mon Sep 17 00:00:00 2001
+From: Evan Brass <brassevan@gmail.com>
+Date: Fri, 12 Jan 2024 18:22:01 -0800
+Subject: [PATCH] SO_BROADCAST
+
+---
+ src/apps/relay/ns_ioalib_engine_impl.c | 7 +++++++
+ 1 file changed, 7 insertions(+)
+
+diff --git a/src/apps/relay/ns_ioalib_engine_impl.c b/src/apps/relay/ns_ioalib_engine_impl.c
+index c62d92e..a3cdaff 100644
+--- a/src/apps/relay/ns_ioalib_engine_impl.c
++++ b/src/apps/relay/ns_ioalib_engine_impl.c
+@@ -870,6 +870,13 @@ ioa_socket_handle create_unbound_relay_ioa_socket(ioa_engine_handle e, int famil
+       return NULL;
+     }
+     set_sock_buf_size(fd, UR_CLIENT_SOCK_BUF_SIZE);
++
++    int so_broadcast = 1;
++    if (setsockopt(fd, SOL_SOCKET, SO_BROADCAST, (void*)&so_broadcast, sizeof(so_broadcast)) < 0) {
++        perror("UDP socket (SO_BROADCAST)");
++        return NULL; // TODO: release the fd
++    }
++
+     break;
+   case TCP_SOCKET:
+     fd = socket(family, RELAY_STREAM_SOCKET_TYPE, RELAY_STREAM_SOCKET_PROTOCOL);
+--
