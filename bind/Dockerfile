@@ -1,10 +1,21 @@
-# Runner
-FROM alpine:3.19
-RUN apk add --no-cache deno
+# Builder
+FROM rust:alpine3.18
+RUN apk add --no-cache musl-dev
 
-WORKDIR /app
+WORKDIR /usr/src/bind
 COPY --link . .
+RUN cargo install --path .
 
-EXPOSE 8000
+# Runner
+FROM scratch
 
-CMD ["deno", "task", "run"]
+COPY --from=0 /usr/local/cargo/bin/bind /bin/
+# TODO: Copy licenses for tokio and webrtc-rs
+
+# TODO: Expose the udp mux port?
+# EXPOSE 3478
+
+# Use SIGINT because of Tokio::signal::ctrl_c
+STOPSIGNAL SIGINT
+
+ENTRYPOINT ["/bin/bind"]

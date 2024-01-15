@@ -1,27 +1,13 @@
+name: switchboard
 services:
-  hub:
-    build: ./hub
-    networks:
-      - back
+  coturn:
+    build: ./coturn
+    ports:
+      - 3478:3478/tcp
+      - 3478:3478/udp
   bind:
     build: ./bind
-    networks:
-      - back
-    depends_on:
-      - hub
-  frontend:
-    build:
-      context: ./
-      dockerfile: ./frontend/Dockerfile
-    networks:
-      - back
-      - front
     ports:
-      - 80:80
-      - 443:443
-      - 443:443/udp
-
-networks:
-  front: {}
-  back:
-    internal: true
+      - 80:80/udp
+  tcptump:
+    build: ./tcpdump
