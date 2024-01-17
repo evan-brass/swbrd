@@ -7,7 +7,9 @@ use std::{
 	sync::RwLock,
 	time::{Duration, SystemTime},
 };
+use tokio::sync::Mutex;
 use webrtc::peer_connection::configuration::RTCConfiguration;
+use webrtc::peer_connection::peer_connection_state::RTCPeerConnectionState;
 use webrtc::peer_connection::sdp::session_description::RTCSessionDescription;
 
 use eyre::Result;
@@ -54,7 +56,7 @@ async fn main() -> Result<()> {
 	// 	UDPMuxDefault::new(UDPMuxParams::new(UdpSocket::bind("0.0.0.0:80").await?)),
 	// ));
 	settings.set_ice_credentials(
-		own_ids.get(0).unwrap().into(),
+		own_ids.first().unwrap().into(),
 		"the/ice/password/constant".into(),
 	);
 	settings.set_answering_dtls_role(DTLSRole::Server)?;
@@ -65,7 +67,7 @@ async fn main() -> Result<()> {
 		.build();
 
 	// Store a map of id strings -> RTCPeerConnections
-	let mut conns = HashMap::new();
+	let conns_m = Arc::new(Mutex::new(HashMap::new()));
 	let dcs = Arc::new(RwLock::new(HashMap::new()));
 
 	// Parse broadcasted connection tests
@@ -103,8 +105,12 @@ async fn main() -> Result<()> {
 			continue;
 		}
 
+		// Stuff
+		let mut conns = conns_m.lock().await;
+		let src = src.to_string();
+
 		// Check if this is a connection test for us (and we don't already have a PeerConnection for this peer)
-		if own_ids.iter().any(|id| id == dst) && conns.get(src).is_none() {
+		if own_ids.iter().any(|id| id == dst) && conns.get(&src).is_none() {
 			let Ok(fingerprint) = base64::Engine::decode(&BASE64_URL_SAFE_NO_PAD, &src) else {
 				continue;
 			};
@@ -147,29 +153,44 @@ async fn main() -> Result<()> {
 					})
 				})
 			});
+			// TODO: Add the renegotiation datachannel ({negotiated: true, id: 0})?
+			// Delete the connection from conns when it closes
+			conn.on_peer_connection_state_change({
+				let src = src.clone();
+				let conns = conns_m.clone();
+				Box::new(move |state| {
+					let src = src.clone();
+					let conns = conns.clone(); // yucky .clone hell
+					Box::pin(async move {
+						if state == RTCPeerConnectionState::Closed {
+							conns.lock().await.remove(&src);
+						}
+					})
+				})
+			});
 
 			// Something's fucked, so time to log every error we can find
-			conn.on_peer_connection_state_change(Box::new(|state| {
-				println!("pc state: {state}");
-				Box::pin(std::future::ready(()))
-			}));
-			conn.sctp().on_error(Box::new(|e| {
-				eprintln!("sctp err: {e}");
-				Box::pin(std::future::ready(()))
-			}));
-			println!("dtls local: {:?}", conn.sctp().transport().get_local_parameters());
-			conn.sctp().transport().on_state_change(Box::new(|state| {
-				println!("dtls state: {state}");
-				Box::pin(std::future::ready(()))
-			}));
-			conn.sctp().transport().ice_transport().on_selected_candidate_pair_change(Box::new(|selected| {
-				println!("selected pair: {selected}");
-				Box::pin(std::future::ready(()))
-			}));
-			conn.sctp().transport().ice_transport().on_connection_state_change(Box::new(|state| {
-				println!("ice state: {state}");
-				Box::pin(std::future::ready(()))
-			}));
+			// conn.on_peer_connection_state_change(Box::new(|state| {
+			// 	println!("pc state: {state}");
+			// 	Box::pin(std::future::ready(()))
+			// }));
+			// conn.sctp().on_error(Box::new(|e| {
+			// 	eprintln!("sctp err: {e}");
+			// 	Box::pin(std::future::ready(()))
+			// }));
+			// println!("dtls local: {:?}", conn.sctp().transport().get_local_parameters());
+			// conn.sctp().transport().on_state_change(Box::new(|state| {
+			// 	println!("dtls state: {state}");
+			// 	Box::pin(std::future::ready(()))
+			// }));
+			// conn.sctp().transport().ice_transport().on_selected_candidate_pair_change(Box::new(|selected| {
+			// 	println!("selected pair: {selected}");
+			// 	Box::pin(std::future::ready(()))
+			// }));
+			// conn.sctp().transport().ice_transport().on_connection_state_change(Box::new(|state| {
+			// 	println!("ice state: {state}");
+			// 	Box::pin(std::future::ready(()))
+			// }));
 
 			// Signal the connection
 			let offer_sdp = [
@@ -193,15 +214,17 @@ async fn main() -> Result<()> {
 			.join("\n");
 			println!("{offer_sdp:#?}");
 			conn.set_remote_description(RTCSessionDescription::offer(offer_sdp)?)
-			.await?;
+				.await?;
 			let answer = conn.create_answer(None).await?;
 			conn.set_local_description(answer).await?;
 
 			conns.insert(src.to_string(), conn);
 			println!("Conn inserted.");
+			continue; // I really wish I could use else if instead of this continue, but sadge sync lock releasing noises
 		}
 		// Check if this is a connection test for a peer with whom we have a bind datachannel
-		else if let Some(dc) = dcs.read().unwrap().get(dst).cloned() {
+		let dc = dcs.read().unwrap().get(dst).cloned();
+		if let Some(dc) = dc {
 			let json = format!(
 				r#"{{ "src": {{ "ufrag": "{src}", "ip": "{}", "port": {} }}, "dst": "{dst}" }}"#,
 				sender.ip(),
@@ -209,6 +232,7 @@ async fn main() -> Result<()> {
 			);
 			println!("{json}");
 			// Tell the peer that someone is trying to connect to them
+			// TODO: Also remove the dc from dcs when it's closed.
 			let _ = dc.send_text(json).await;
 		}
 	}
