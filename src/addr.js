@@ -39,7 +39,7 @@ export class Listener {
 				if (typeof data != 'string') continue;
 
 				const { src, dst } = JSON.parse(data);
-				
+
 				
 				if (!this.#filter(src)) continue;
 
@@ -92,10 +92,10 @@ export class Addr extends URL {
 		
 		const id = new Id(authority.username ? authority.username : await query_id(authority.hostname));
 		
-		let candidates = [];
+		const candidates = [];
+		const ice_pwd = authority.password || 'the/ice/password/constant';
 		let setup = this.searchParams.get('setup');
 		let ice_lite = this.searchParams.get('ice_lite') == 'true';
-		let ice_pwd = authority.password || 'the/ice/password/constant';
 		// TODO: Add ice_ufrag param?
 
 		if (/^udp:|tcp:/i.test(this.protocol)) {
