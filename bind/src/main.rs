@@ -1,4 +1,5 @@
 use base64::prelude::*;
+use std::fmt::Write;
 use std::sync::Arc;
 use std::{
 	collections::HashMap,
@@ -6,23 +7,16 @@ use std::{
 	sync::RwLock,
 	time::{Duration, SystemTime},
 };
+use webrtc::peer_connection::configuration::RTCConfiguration;
+use webrtc::peer_connection::sdp::session_description::RTCSessionDescription;
 
 use eyre::Result;
 use tokio::net::UdpSocket;
 use webrtc::{
 	api::setting_engine::SettingEngine,
-	dtls_transport::{
-		dtls_fingerprint::RTCDtlsFingerprint, dtls_parameters::DTLSParameters, dtls_role::DTLSRole,
-	},
-	ice::udp_mux::{UDPMuxDefault, UDPMuxParams},
-	ice_transport::{
-		ice_candidate::RTCIceCandidate, ice_gatherer::RTCIceGatherOptions,
-		ice_parameters::RTCIceParameters, ice_role::RTCIceRole,
-	},
-	peer_connection::{
-		certificate::RTCCertificate, policy::ice_transport_policy::RTCIceTransportPolicy,
-	},
-	sctp_transport::sctp_transport_capabilities::SCTPTransportCapabilities,
+	dtls_transport::dtls_role::DTLSRole,
+	// ice::udp_mux::{UDPMuxDefault, UDPMuxParams},
+	peer_connection::certificate::RTCCertificate,
 	stun::{
 		attributes::ATTR_USERNAME,
 		message::{Message, MessageType, CLASS_REQUEST, METHOD_BINDING},
@@ -56,20 +50,19 @@ async fn main() -> Result<()> {
 
 	// Configure a WebRTC api
 	let mut settings = SettingEngine::default();
-	settings.set_udp_network(webrtc::ice::udp_network::UDPNetwork::Muxed(
-		UDPMuxDefault::new(UDPMuxParams::new(UdpSocket::bind("0.0.0.0:80").await?)),
-	));
-	settings.set_lite(true);
-	settings.set_ice_credentials(own_ids.get(0).unwrap().into(), "the/ice/password/constant".into());
+	// settings.set_udp_network(webrtc::ice::udp_network::UDPNetwork::Muxed(
+	// 	UDPMuxDefault::new(UDPMuxParams::new(UdpSocket::bind("0.0.0.0:80").await?)),
+	// ));
+	settings.set_ice_credentials(
+		own_ids.get(0).unwrap().into(),
+		"the/ice/password/constant".into(),
+	);
+	settings.set_answering_dtls_role(DTLSRole::Server)?;
 
 	// Create an API that we can use to answer connections
 	let api = webrtc::api::APIBuilder::new()
 		.with_setting_engine(settings)
 		.build();
-	let gatherer = Arc::new(api.new_ice_gatherer(RTCIceGatherOptions {
-		ice_servers: vec![],
-		ice_gather_policy: RTCIceTransportPolicy::All,
-	})?);
 
 	// Store a map of id strings -> RTCPeerConnections
 	let mut conns = HashMap::new();
@@ -86,7 +79,7 @@ async fn main() -> Result<()> {
 					Err(e) => { eprint!("{e}"); continue }
 				}
 			},
-			_ = tokio::signal::ctrl_c() => return Ok(()),
+			_ = tokio::signal::ctrl_c() => return Ok(()), // TODO: close all open RTCPeerConnections?
 			else => continue
 		};
 		if (msg.typ
@@ -105,7 +98,8 @@ async fn main() -> Result<()> {
 
 		println!("{sender}:{src}->{dst}");
 
-		if src.contains('"') || dst.contains('"') { // TODO: Make sure that the src and dst are JSON string safe
+		if src.contains('"') || dst.contains('"') {
+			// TODO: Make sure that the src and dst are JSON string safe
 			continue;
 		}
 
@@ -117,81 +111,94 @@ async fn main() -> Result<()> {
 			if fingerprint.len() != 32 {
 				continue;
 			}
-			let fingerprint = {
-				use std::fmt::Write;
-				let mut value = String::new();
-				for (i, b) in fingerprint.iter().enumerate() {
-					if i != 0 { value.push(':'); }
-					write!(&mut value, "{b:X}")?;
+			let mut fingerprint_sdp = "a=fingerprint:sha-256 ".to_string();
+			for (i, b) in fingerprint.iter().enumerate() {
+				if i != 0 {
+					fingerprint_sdp.push(':');
 				}
-				println!("{value}");
-				RTCDtlsFingerprint {
-					algorithm: "sha-256".into(),
-					value,
-				}
-			};
+				fingerprint_sdp.write_fmt(format_args!("{b:02X}"))?;
+			}
 
 			println!("Answering this connection");
 
-			// ORTC because SDP sucks
-			let ice_transport = Arc::new(api.new_ice_transport(gatherer.clone()));
-			let dtls_transport =
-				Arc::new(api.new_dtls_transport(ice_transport.clone(), vec![rtc_cert.clone()])?);
-			let sctp_transport = Arc::new(api.new_sctp_transport(dtls_transport.clone())?);
-			conns.insert(src.to_string(), sctp_transport.clone());
-			// TODO: Remove from conns when the connection closes
+			// Create a connection and answer the connection
+			let conn = api
+				.new_peer_connection(RTCConfiguration {
+					certificates: vec![rtc_cert.clone()],
+					..Default::default()
+				})
+				.await?;
 
-			let src = src.to_string();
-			let dcs = dcs.clone();
-			tokio::spawn(async move {
-				let res: Result<()> = async {
-					let ice_params = RTCIceParameters {
-						username_fragment: src.clone(),
-						password: String::from("the/ice/password/constant"),
-						ice_lite: false,
-					};
-	
-					// Handle Datachannels on this connection
-					sctp_transport.on_data_channel(Box::new(move |dc| {
-						let dcs = dcs.clone();
-						let src = src.clone();
-						Box::pin(async move {
-							println!("incoming datachannel: {}", dc.label());
-							if dc.label() != "bind" {
-								let _ = dc.close().await;
-							} else {
-								let mut l = dcs.write().unwrap();
-								l.insert(src, dc);
-							}
-						})
-					}));
-	
-					tokio::try_join!(
-						ice_transport.start(
-							&ice_params,
-							Some(RTCIceRole::Controlled),
-						),
-						ice_transport.add_remote_candidate(Some(RTCIceCandidate {
-							address: sender.ip().to_string(),
-							port: sender.port(),
-							typ: webrtc::ice_transport::ice_candidate_type::RTCIceCandidateType::Relay,
-							protocol: webrtc::ice_transport::ice_protocol::RTCIceProtocol::Udp,
-							foundation: "foundation".into(),
-							component: 1,
-							..Default::default()
-						})),
-						dtls_transport.start(DTLSParameters {
-							role: DTLSRole::Server,
-							fingerprints: vec![fingerprint],
-						}),
-						sctp_transport.start(SCTPTransportCapabilities {
-							max_message_size: 65535,
-						})
-					)?;
-					Ok(())
-				}.await;
-				println!("{res:?}");
+			// Add a handler to receive incoming datachannels
+			conn.on_data_channel({
+				let dcs = dcs.clone();
+				let src = src.to_string();
+				Box::new(move |dc| {
+					let dcs = dcs.clone();
+					let src = src.clone();
+					Box::pin(async move {
+						println!("incoming datachannel: {}", dc.label());
+						if dc.label() != "bind" {
+							let _ = dc.close().await;
+						} else {
+							let mut l = dcs.write().unwrap();
+							l.insert(src, dc);
+						}
+					})
+				})
 			});
+
+			// Something's fucked, so time to log every error we can find
+			conn.on_peer_connection_state_change(Box::new(|state| {
+				println!("pc state: {state}");
+				Box::pin(std::future::ready(()))
+			}));
+			conn.sctp().on_error(Box::new(|e| {
+				eprintln!("sctp err: {e}");
+				Box::pin(std::future::ready(()))
+			}));
+			println!("dtls local: {:?}", conn.sctp().transport().get_local_parameters());
+			conn.sctp().transport().on_state_change(Box::new(|state| {
+				println!("dtls state: {state}");
+				Box::pin(std::future::ready(()))
+			}));
+			conn.sctp().transport().ice_transport().on_selected_candidate_pair_change(Box::new(|selected| {
+				println!("selected pair: {selected}");
+				Box::pin(std::future::ready(()))
+			}));
+			conn.sctp().transport().ice_transport().on_connection_state_change(Box::new(|state| {
+				println!("ice state: {state}");
+				Box::pin(std::future::ready(()))
+			}));
+
+			// Signal the connection
+			let offer_sdp = [
+				"v=0",
+				"o=- 20 0 IN IP4 0.0.0.0",
+				"s=-",
+				"t=0 0",
+				"m=application 9 UDP/DTLS/SCTP webrtc-datachannel",
+				&fingerprint_sdp,
+				"c=IN IP4 0.0.0.0",
+				&format!("a=ice-ufrag:{src}"),
+				"a=ice-pwd:the/ice/password/constant",
+				&format!(
+					"a=candidate:foundation 1 udp 1 {} {} typ host",
+					sender.ip(),
+					sender.port()
+				),
+				"a=sctp-port:5000",
+				"",
+			]
+			.join("\n");
+			println!("{offer_sdp:#?}");
+			conn.set_remote_description(RTCSessionDescription::offer(offer_sdp)?)
+			.await?;
+			let answer = conn.create_answer(None).await?;
+			conn.set_local_description(answer).await?;
+
+			conns.insert(src.to_string(), conn);
+			println!("Conn inserted.");
 		}
 		// Check if this is a connection test for a peer with whom we have a bind datachannel
 		else if let Some(dc) = dcs.read().unwrap().get(dst).cloned() {
@@ -202,9 +209,7 @@ async fn main() -> Result<()> {
 			);
 			println!("{json}");
 			// Tell the peer that someone is trying to connect to them
-			let _ = dc
-				.send_text(json)
-				.await;
+			let _ = dc.send_text(json).await;
 		}
 	}
 }
