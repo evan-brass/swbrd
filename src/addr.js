@@ -1,4 +1,4 @@
-import { Sig, Conn, default_config } from "./conn.js";
+import { Sig, Conn } from "./conn.js";
 import { Id } from "./id.js";
 import { query_id } from "./dns.js";
 
@@ -38,9 +38,10 @@ export class Listener {
 				});
 				if (typeof data != 'string') continue;
 
-				const sig = new Sig(JSON.parse(data));
+				const { src, dst } = JSON.parse(data);
 				
-				if (!this.#filter(sig)) continue;
+				
+				if (!this.#filter(src)) continue;
 
 				const config = this.#conn.getConfiguration();
 				const ret = new Conn(this.#base ? this.#base.adjust_config(config) : config);
@@ -60,117 +61,76 @@ export class Listener {
 }
 
 export class Addr extends URL {
-	get id() {
-		const http = new URL(this); http.protocol = 'http:';
-		const username = http.username;
-		if (username) return new Id(http.username);
-		else return query_id(http.hostname).then(s => s && new Id(s));
-	}
-	get #port() {
+	get #authority() {
+		// For some reason, the browser doesn't give us access to URI authority information unless the scheme is http: or https:
 		// new URL('http://host.local:80').port == '' and new URL('https://host.local:443').port == '' so we parse the URL twice to get the actual port
 		const http = new URL(this); http.protocol = 'http:';
 		const https = new URL(this); https.protocol = 'https:';
-		return parseInt(http.port || https.port || 0);
+		const host = (http.host.length < https.host.length) ? https.host : http.host;
+		const port = parseInt(http.port || https.port || 0);
+		return { username: http.username, password: http.password, host, hostname: http.hostname, port };
 	}
-	get candidate() {
+	config() {
+		if (/^udp:|tcp:/i.test(this.protocol)) return null;
+
+		if (/^turns?:/i.test(this.protocol)) {
+			const {host} = this.#authority;
+			const username = this.searchParams.get('turn_username') || 'the/turn/username/constant';
+			const credential = this.searchParams.get('turn_credential') || 'the/turn/credential/constant';
+			const turn_transport = this.searchParams.get('turn_transport') || 'tcp';
+			const search = (turn_transport == 'udp') ? '' : ('?transport=' + turn_transport)
+			
+			const urls = `${this.protocol}${host}${search}`;
+			return {
+				iceTransportPolicy: 'relay',
+				iceServers: [{urls, username, credential}]
+			};
+		}
+	}
+	async sig() {
+		const authority = this.#authority;
+		
+		const id = new Id(authority.username ? authority.username : await query_id(authority.hostname));
+		
+		let candidates = [];
+		let setup = this.searchParams.get('setup');
+		let ice_lite = this.searchParams.get('ice_lite') == 'true';
+		let ice_pwd = authority.password || 'the/ice/password/constant';
+		// TODO: Add ice_ufrag param?
+
 		if (/^udp:|tcp:/i.test(this.protocol)) {
-			return { transport: this.protocol.replace(':', ''), address: http.hostname, port: this.#port || 3478, type: 'host' };
+			const port = authority.port || 3478;
+			candidates.push({ transport: this.protocol.replace(':', ''), address: authority.hostname, port, type: 'host' });
+			setup ??= 'passive';
+			ice_lite ??= true;
 		}
 		else if (/^turns?:/i.test(this.protocol)) {
 			// For turn addresses we add the broadcast candidate
-			return { transport: 'udp', address: '255.255.255.255', port: 3478, typ: 'host' };
+			candidates.push({ transport: 'udp', address: '255.255.255.255', port: 3478, typ: 'host' });
 		}
-		else {
-			// Unknown address type
-			return;
-		}
-	}
-	get setup() {
-		if (/^udp:|tcp:/i.test(this.protocol)) return 'passive';
-	}
-	get ice_lite() {
-		if (/^udp:|tcp:/i.test(this.protocol)) return true;
-	}
-	get ice_pwd() {
-		const http = new URL(this); http.protocol = 'http:';
-		return http.password || undefined;
-	}
-	get turn_url() {
-		if (!/turns?:/i.test(this.protocol)) throw new Error("Not a turn address.");
 
-		const http = new URL(this); http.protocol = 'http:';
-		// Notice: this is backwards: 'turns:<id>@hostname' => '?transport=tcp' and 'turns:<id>@hostname?transport=udp' => '' because I want the default to be turns + tcp
-		const query = this.searchParams.get('transport') == 'udp' ? '' : '?transport=tcp';
-		// Notice: I've changed the default ports to: 'turns:' => 443, 'turn:' => 3478
-		const port = this.#port || (this.protocol == 'turns:' ? 443 : 3478);
-
-		return `${this.protocol}${http.hostname}:${port}${query}`;
+		return new Sig({ id, candidates, setup, ice_lite, ice_pwd });
 	}
-	adjust_config(config) {
-		if (!/^turns?:/i.test(this.protocol)) return config;
+	connect(config = null) {
+		const adjustment = this.config();
 
-		return {
-			...config,
-			iceTransportPolicy: 'relay',
-			iceServers: [{ urls: this.turn_url, username: 'the/turn/username/constant', credential: 'the/turn/credential/constant' }]
-		};
-	}
-	fixup(conn, config) {
-		if (!/^turns?:/i.test(this.protocol)) return;
-
-		// For turn addresses, we change the configuration back and trigger an iceRestart
-		conn.setConfiguration(config);
-		conn.restartIce();
-	}
-	connect(config = default_config, {overide_id} = {}) {
-		const init = this.adjust_config(config);
-		const ret = new Conn(init);
+		const ret = new Conn({ ...config, ...adjustment });
 
 		// Spawn a task to signal the connection
 		(async () => {
-			const id = overide_id ?? await this.id;
-			if (!id) ret.close();
+			const remote = await this.sig();
+			if (!remote?.id) { ret.close(); return }
 
-			ret.remote = new Sig({ id, candidates: [this.candidate], setup: this.setup, ice_lite: this.ice_lite, ice_pwd: this.ice_pwd });
+			ret.remote = remote;
 
-			// Call fixup after the local sig has been generated. (But renegotiation won't progress until the datachannel is open)
-			const _ = await ret.local;
-			this.fixup(ret, config);
+			// If we adjusted the config, then fixup the config
+			if (adjustment) {
+				const _ = await ret.local;
+				ret.setConfiguration(config);
+				ret.restartIce();
+			}
 		})();
 
 		return ret;
-	}
-	async *bindv1(config = default_config, { filter = () => true } = {}) {
-		if (!/^turns?:/i.test(this.protocol)) throw new Error('bindv1 only works with turn(s) addresses.');
-
-		const local_ids = String(await this.id).split(',');
-
-		const sock = new WebSocket(advanced_usage.bindv1_service + encodeURIComponent(this.turn_url));
-		const next_msg = () => new Promise((res, rej) => {
-			sock.addEventListener('message', res, {once: true});
-			sock.addEventListener('close', () => rej, {once: true});
-			sock.addEventListener('error', () => rej, {once: true});
-		});
-
-		const answered = new Set();
-
-		while(1) {
-			const {data} = await next_msg();
-			const {dest, src, address} = JSON.parse(data);
-			if (!local_ids.includes(dest)) continue; // Connection test was not destined for us
-			
-			const overide_id = new Id(src);
-			if (!overide_id || answered.has(src) || !filter(overide_id, address)) continue; // Connection test filtered out
-
-			const conn = this.connect(config, {overide_id});
-
-			// Deduplicate incoming connections:
-			answered.add(src);
-			conn.addEventListener('connectionstatechange', () => {
-				if (['closed', 'failed'].includes(conn.connectionState)) answered.delete(src);
-			});
-
-			yield conn;
-		}
 	}
 }

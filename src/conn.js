@@ -72,9 +72,12 @@ export class Conn extends RTCPeerConnection {
 	get remote() { return this.#remote; }
 	set remote(sig) { this.#remote = sig; this.#remote_res(this.#remote); }
 
-	constructor(config = default_config) {
-		super(config);
+	constructor(config = null) {
+		super({ ...default_config, ...config});
 		this.#signal_task();
+	}
+	setConfiguration(config = null) {
+		super.setConfiguration({ ...default_config, ...config });
 	}
 	#perfect(polite) {
 		let making_offer = false;
