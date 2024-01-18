@@ -15,6 +15,7 @@ export const advanced_usage = {
  * @return {Promise<Id | undefined>}
  */
 export async function query_id(hostname, query_bufflen = 512) {
+	if (!advanced_usage.doh_address) return;
 	const labels = hostname.split('.');
 	if (labels.indexOf('') !== -1) return; // Error: Internal Null label
 	labels.push('');
