@@ -12,6 +12,7 @@ FROM scratch
 COPY --from=0 /usr/local/cargo/bin/bind /bin/
 # TODO: Copy licenses for tokio and webrtc-rs
 
+ENV RTC_CERT=generate
 # TODO: Expose the udp mux port?
 # EXPOSE 3478
 

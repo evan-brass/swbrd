@@ -3,9 +3,7 @@ use std::fmt::Write;
 use std::sync::Arc;
 use std::{
 	collections::HashMap,
-	ops::Add,
 	sync::RwLock,
-	time::{Duration, SystemTime},
 };
 use tokio::sync::Mutex;
 use webrtc::peer_connection::configuration::RTCConfiguration;
@@ -25,17 +23,26 @@ use webrtc::{
 		textattrs::TextAttribute,
 	},
 };
-use webrtc_dtls::crypto::Certificate;
 
 #[tokio::main]
 async fn main() -> Result<()> {
 	// Listen for broadcasts on :3478/udp
 	let sock = UdpSocket::bind("0.0.0.0:3478").await?;
 
+	let rtc_cert = std::env::var("RTC_CERT")
+		.map_err(eyre::Report::from)
+		.and_then(|pem| RTCCertificate::from_pem(&pem).map_err(eyre::Report::from))
+		.or_else(|e| {
+			println!("Generating new RTCCertificate because: {e}");
+			let ret = RTCCertificate::from_params(Default::default());
+			if let Ok(cert) = &ret {
+				println!("Generated cert's PEM:\n{}", cert.serialize_pem());
+			}
+
+			ret
+		})?;
+
 	// Get our own certificate and its prints
-	let cert = Certificate::generate_self_signed(vec!["Switchboard Bind Server".into()])?;
-	let rtc_cert =
-		RTCCertificate::from_existing(cert, SystemTime::now().add(Duration::from_secs(9000)));
 	let own_ids: Vec<String> = rtc_cert
 		.get_fingerprints()
 		.iter()
@@ -48,7 +55,7 @@ async fn main() -> Result<()> {
 		})
 		.map(|bytes| base64::prelude::Engine::encode(&BASE64_URL_SAFE_NO_PAD, bytes))
 		.collect();
-	println!("{own_ids:?}");
+	println!("Our Ids: {own_ids:?}");
 
 	// Configure a WebRTC api
 	let mut settings = SettingEngine::default();

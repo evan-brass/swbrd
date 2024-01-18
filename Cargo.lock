@@ -198,7 +198,6 @@ dependencies = [
  "eyre",
  "tokio",
  "webrtc",
- "webrtc-dtls",
 ]
 
 [[package]]
@@ -1824,6 +1823,7 @@ dependencies = [
  "interceptor",
  "lazy_static",
  "log",
+ "pem",
  "rand",
  "rcgen",
  "regex",

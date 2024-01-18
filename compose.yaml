@@ -7,9 +7,4 @@ services:
       - 3478:3478/udp
   bind:
     build: ./bind
-    ports:
-      - 80:80/udp
-  tcptump:
-    build: ./tcpdump
-    cap_add:
-      - NET_ADMIN
+    env_file: bind.pem.env

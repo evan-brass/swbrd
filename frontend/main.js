@@ -24,6 +24,7 @@ const all_events = [
 	'signalingstatechange',
 	'track'
 ];
+const all_events_dc = ['bufferedamountlow', 'close', 'closing', 'error', 'message', 'open'];
 
 // const a = new Conn();
 // all_events.forEach(ev => a.addEventListener(ev, console.log));
@@ -33,6 +34,37 @@ const all_events = [
 // 	candidates: [{address: '255.255.255.255', port: 3478}]
 // });
 // console.log(a.remote);
+
+
+// -- SIMULTANEOUS USING SIG MSGS --
+// const a = new Conn();
+// const b = new Conn();
+// all_events.map(e => [[a, e], [b, e]]).flat(1)
+// 	.forEach(([c, e]) => c.addEventListener(e, console.log));
+
+// const [sa, sb] = await Promise.all([a.local, b.local]);
+// [sa, sb].forEach(console.log);
+// a.remote = sb;
+// b.remote = sa;
+
+
+// -- SIMULTANEOUS USING BROADCAST IP (Doesn't work - haven't yet figured out why)--
+// const config = {
+// 	iceTransportPolicy: 'relay',
+// 	iceServers: [
+// 		{urls: 'turn:localhost?transport=tcp', username: 'the/turn/username/constant', credential: 'the/turn/credential/constant' }
+// 	]
+// };
+// const a = new Conn(config);
+// const b = new Conn(config);
+// all_events.map(e => [[a, e], [b, e]]).flat(1)
+// 	.forEach(([c, e]) => c.addEventListener(e, console.log));
+// const [siga, sigb] = await Promise.all([a.local, b.local]);
+// // Replace the actual IP addresses of every candidate with the IPv4 broadcast address
+// [...siga.candidates, ...sigb.candidates].forEach(c => c.address = '255.255.255.255');
+
+// a.remote = sigb;
+// b.remote = siga;
 
 
 // -- ADDRESS BIND V1 --
@@ -50,17 +82,29 @@ const all_events = [
 // all_events.forEach(ev => connb.addEventListener(ev, e => console.log('connect', e)));
 
 
+// -- BIND (Connection to Bind service and open bind dc) --
+// const certa = await RTCPeerConnection.generateCertificate({name: 'ECDSA', namedCurve: 'P-256', hash: 'SHA-256'});
+// const a = new Addr('udp:S7DI-ku29DAG2utqz27mn--xmJvZU591-28zCP0tCSE@127.0.0.1:3478').connect({ certificates: [certa] });
+// all_events.forEach(e => a.addEventListener(e, console.log));
+// const dc = a.createDataChannel('bind');
+// all_events_dc.forEach(e => dc.addEventListener(e, console.log));
+
+
 // -- BIND --
-const a = new Conn({
-	iceTransportPolicy: 'relay',
-	iceServers: [
-		{urls: 'turn:localhost?transport=tcp', username: 'the/turn/username/constant', credential: 'the/turn/credential/constant' }
-	]
-});
-a.remote = new Sig({
-	id: new Id('k0K5wdlYE1QyPX7Y0fBEvx5k85H2BY5_3eXTWJGEc8c'),
-	candidates: [{ address: '255.255.255.255', port: 3478 }]
-});
+const certa = await RTCPeerConnection.generateCertificate({name: 'ECDSA', namedCurve: 'P-256', hash: 'SHA-256'});
+const listener = new Addr('turn:local.evan-brass.net').bind({certificates: [certa]});
+
+(async () => {
+	for await (const conn of listener) {
+		console.log('incoming conn', conn);
+		all_events.forEach(e => conn.addEventListener(e, console.log));
+	}
+})();
+console.log(listener);
+
+// Try connecting to our listener:
+const b = new Addr(`turn:${await listener.local_id}@local.evan-brass.net`).connect();
+all_events.forEach(e => b.addEventListener(e, console.log));
 
 
 // -- SIMULTANEOUS CONNECTIONS --

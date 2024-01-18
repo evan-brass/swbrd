@@ -6,57 +6,61 @@ const advanced_usage = {
 	bindv1_service: 'wss://swbrd-bindv1.deno.dev?host='
 };
 
-// This is how I actually want to do listeners: with a WebRTC bind server, but I'm still too frustrated with server-side WebRTC
-export class Listener {
-	#conn;
-	#base;
+// A Listener is just a subclassed Conn with a #bind
+export class Listener extends Conn {
+	#bind = this.createDataChannel('bind');
+	#answer_addr;
 	#filter;
-	#bind;
-	#addr;
-	get addr() { return this.#addr; }
-	constructor(conn, { base, filter = () => true } = {}) {
-		this.#conn = conn;
-		this.#base = base;
+	#answered = new Set();
+	constructor(config, {filter = () => true, base_addr} = {}) {
+		super(config);
+		this.#answer_addr = class ListenAddr extends base_addr.constructor {
+			#id;
+			#candidates;
+			async sig() {
+				const ret = await super.sig();
+				if (!ret) return ret;
+				ret.candidates = this.#candidates;
+				ret.id = this.#id;
+
+				return ret;
+			}
+			constructor(id, candidates) {
+				super(base_addr);
+				this.#id = id;
+				this.#candidates = candidates;
+			}
+			connect() { return super.connect(config); }
+		};
 		this.#filter = filter;
-		this.#bind = conn.createDataChannel('bind');
-		if (this.#base) {
-			// When a base address is supplied, then we make our own address using it
-			this.#addr = (async () => {
-				const id = await conn.local_id;
-				this.#addr = new Addr(this.#base);
-				this.#addr.username = id;
-			})();
-		}
 	}
 	async *[Symbol.asyncIterator]() {
-		while(1) {
-			try {
-				const data = await new Promise((res, rej) => {
+		try {
+			while (this.#bind.readyState != 'closed') {
+				const msg = await new Promise(res => {
 					this.#bind.addEventListener('message', res, {once: true});
-					this.#bind.addEventListener('close', rej, {once: true});
-					this.#bind.addEventListener('error', rej, {once: true});
+					this.#bind.addEventListener('close', () => res(), {once: true});
 				});
-				if (typeof data != 'string') continue;
+				if (!msg) break;
+				const {data} = msg;
+				const {src: { ufrag, ip: address, port }, dst} = JSON.parse(String(data));
 
-				const { src, dst } = JSON.parse(data);
-
-				
+				// Checks
+				if (dst != String(this.local_id)) continue;
+				if (this.#answered.has(ufrag)) continue;
+				const src = new Id(ufrag);
+				if (!src) continue;
 				if (!this.#filter(src)) continue;
 
-				const config = this.#conn.getConfiguration();
-				const ret = new Conn(this.#base ? this.#base.adjust_config(config) : config);
+				const conn = (new this.#answer_addr(src, [{ address, port }])).connect();
 
-				if (this.#base) {
-					this.#base.fixup(ret, config);
-					sig.ice_pwd = this.#base.password;
-				}
-
-				ret.remote = sig;
-
-				yield ret;
+				// Update the answered set
+				this.#answered.add(ufrag);
+				conn.addEventListener('close', () => this.#answered.delete(ufrag));
+				
+				yield conn;
 			}
-			catch { break; }
-		}
+		} catch (e) { console.warn(e); }
 	}
 }
 
@@ -115,6 +119,31 @@ export class Addr extends URL {
 		const adjustment = this.config();
 
 		const ret = new Conn({ ...config, ...adjustment });
+
+		// Spawn a task to signal the connection
+		(async () => {
+			const remote = await this.sig();
+			if (!remote?.id) { ret.close(); return }
+
+			ret.remote = remote;
+
+			// If we adjusted the config, then fixup the config
+			if (adjustment) {
+				const _ = await ret.local;
+				ret.setConfiguration(config);
+				ret.restartIce();
+			}
+		})();
+
+		return ret;
+	}
+	bind(config = null, listen_opts = null) {
+		// TODO: Factor out the common between this and connect
+		if (config?.certificates?.length != 1) throw new Error("You must provide a single certificate that will be reused to answer incoming connections.");
+
+		const adjustment = this.config();
+
+		const ret = new Listener({ ...config, ...adjustment }, {base_addr: this, ...listen_opts});
 
 		// Spawn a task to signal the connection
 		(async () => {
