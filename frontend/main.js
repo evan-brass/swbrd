@@ -92,7 +92,8 @@ const all_events_dc = ['bufferedamountlow', 'close', 'closing', 'error', 'messag
 
 // -- BIND --
 const certa = await RTCPeerConnection.generateCertificate({name: 'ECDSA', namedCurve: 'P-256', hash: 'SHA-256'});
-const listener = new Addr('turn:local.evan-brass.net').bind({certificates: [certa]});
+const bind_server = new Addr('turn:local.evan-brass.net');
+const listener = await bind_server.bind({certificates: [certa]});
 
 (async () => {
 	for await (const conn of listener) {
@@ -103,7 +104,7 @@ const listener = new Addr('turn:local.evan-brass.net').bind({certificates: [cert
 console.log(listener);
 
 // Try connecting to our listener:
-const b = new Addr(`turn:${await listener.local_id}@local.evan-brass.net`).connect();
+const b = listener.addr.connect();
 all_events.forEach(e => b.addEventListener(e, console.log));
 
 
