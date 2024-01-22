@@ -1,0 +1,31 @@
+diff --git a/src/apps/common/apputils.c b/src/apps/common/apputils.c
+index 4c39ddb..2bb8218 100644
+--- a/src/apps/common/apputils.c
++++ b/src/apps/common/apputils.c
+@@ -292,7 +292,10 @@ int addr_bind(evutil_socket_t fd, const ioa_addr *addr, int reusable, int debug,
+ 
+     if (addr->ss.sa_family == AF_INET) {
+       do {
+-        ret = bind(fd, (const struct sockaddr *)addr, sizeof(struct sockaddr_in));
++        ioa_addr any_pls;
++        addr_cpy(&any_pls, addr);
++        any_pls.s4.sin_addr.s_addr = INADDR_ANY;
++        ret = bind(fd, (const struct sockaddr *)&any_pls, sizeof(struct sockaddr_in));
+       } while (ret < 0 && socket_eintr());
+     } else if (addr->ss.sa_family == AF_INET6) {
+       const int off = 0;
+diff --git a/src/apps/relay/ns_ioalib_engine_impl.c b/src/apps/relay/ns_ioalib_engine_impl.c
+index c62d92e..1fca2d1 100644
+--- a/src/apps/relay/ns_ioalib_engine_impl.c
++++ b/src/apps/relay/ns_ioalib_engine_impl.c
+@@ -869,6 +869,10 @@ ioa_socket_handle create_unbound_relay_ioa_socket(ioa_engine_handle e, int famil
+       perror("UDP socket");
+       return NULL;
+     }
++
++    int enable = 1;
++    setsockopt(fd, SOL_SOCKET, SO_BROADCAST, (void*)&enable, sizeof(enable));
++
+     set_sock_buf_size(fd, UR_CLIENT_SOCK_BUF_SIZE);
+     break;
+   case TCP_SOCKET:

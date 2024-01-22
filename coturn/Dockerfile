@@ -11,13 +11,13 @@ RUN apk update \
 	openssl-dev
 
 WORKDIR /build/
-COPY --link so_broadcast.patch .
+COPY --link broadcast.patch .
 
 RUN git init \
 	&& git fetch --depth 1 https://github.com/coturn/coturn.git ${git_ref} \
 	&& git checkout FETCH_HEAD \
 	# Apply our SO_BROADCAST patch
-	&& git apply so_broadcast.patch \
+	&& git apply broadcast.patch \
 	&& ./configure --prefix=/usr \
 		--turndbdir=/var/lib/coturn \
 		--disable-rpath \
