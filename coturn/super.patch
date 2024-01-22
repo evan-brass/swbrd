@@ -58,7 +58,7 @@ index cab2dbf..dcad96b 100644
  
  int ur_map_lock(const ur_map *map);
 diff --git a/src/server/ns_turn_server.c b/src/server/ns_turn_server.c
-index f92f421..c66af8a 100644
+index f92f421..bf3c333 100644
 --- a/src/server/ns_turn_server.c
 +++ b/src/server/ns_turn_server.c
 @@ -344,6 +344,7 @@ static int good_peer_addr(turn_turnserver *server, const char *realm, ioa_addr *
@@ -93,7 +93,7 @@ index f92f421..c66af8a 100644
    relay_endpoint_session *elem = get_relay_session_ss(ss, get_ioa_socket_address_family(s));
    if (elem->s == NULL) {
      return;
-@@ -4790,6 +4794,43 @@ static void client_input_handler(ioa_socket_handle s, int event_type, ioa_net_da
+@@ -4790,6 +4794,46 @@ static void client_input_handler(ioa_socket_handle s, int event_type, ioa_net_da
  
  ///////////////////////////////////////////////////////////
  
@@ -112,8 +112,11 @@ index f92f421..c66af8a 100644
 +  return 0;
 +}
 +void super_broadcast_callback(ioa_socket_handle s, int event_type, ioa_net_data *data, void *arg, int can_resume) {
++  ur_map* sessions = (ur_map*)arg;
 +  super_args args = { s, event_type, data, can_resume };
-+  ur_map_foreach_arg((ur_map*)arg, super_broadcast_foreach, (void*) &args);
++  ur_map_lock(sessions);
++  ur_map_foreach_arg(sessions, super_broadcast_foreach, (void*) &args);
++  ur_map_unlock(sessions);
 +}
 +
 +void setup_super_broadcast(turn_turnserver *server) {
