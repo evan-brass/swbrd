@@ -1,0 +1,159 @@
+diff --git a/src/apps/relay/netengine.c b/src/apps/relay/netengine.c
+index 5df4cfc..9667f2e 100644
+--- a/src/apps/relay/netengine.c
++++ b/src/apps/relay/netengine.c
+@@ -1643,6 +1643,8 @@ static void setup_relay_server(struct relay_server *rs, ioa_engine_handle e, int
+   if (turn_params.net_engine_version == NEV_UDP_SOCKET_PER_THREAD) {
+     setup_tcp_listener_servers(rs->ioa_eng, rs);
+   }
++
++  setup_super_broadcast(&(rs->server));
+ }
+ 
+ static void *run_general_relay_thread(void *arg) {
+diff --git a/src/apps/relay/ns_ioalib_engine_impl.c b/src/apps/relay/ns_ioalib_engine_impl.c
+index 1fca2d1..74ff2d3 100644
+--- a/src/apps/relay/ns_ioalib_engine_impl.c
++++ b/src/apps/relay/ns_ioalib_engine_impl.c
+@@ -903,7 +903,7 @@ ioa_socket_handle create_unbound_relay_ioa_socket(ioa_engine_handle e, int famil
+   return ret;
+ }
+ 
+-static int bind_ioa_socket(ioa_socket_handle s, const ioa_addr *local_addr, int reusable) {
++int bind_ioa_socket(ioa_socket_handle s, const ioa_addr *local_addr, int reusable) {
+   if (!s || (s->parent_s))
+     return 0;
+ 
+diff --git a/src/server/ns_turn_ioalib.h b/src/server/ns_turn_ioalib.h
+index aba0db5..be0ae62 100644
+--- a/src/server/ns_turn_ioalib.h
++++ b/src/server/ns_turn_ioalib.h
+@@ -257,6 +257,7 @@ void inc_ioa_socket_ref_counter(ioa_socket_handle s);
+  * event_port == 0: reserve rtcp;
+  * even_port == +1: reserve and bind rtcp.
+  */
++// BOOKMARK: We'll need to bind a socket for super broadcast and I think the best way to do this is to use work within the existing ioa_socket_handle stuff.
+ int create_relay_ioa_sockets(ioa_engine_handle e, ioa_socket_handle client_s, int address_family, uint8_t transport,
+                              int even_port, ioa_socket_handle *rtp_s, ioa_socket_handle *rtcp_s,
+                              uint64_t *out_reservation_token, int *err_code, const uint8_t **reason, accept_cb acb,
+@@ -265,6 +266,8 @@ int create_relay_ioa_sockets(ioa_engine_handle e, ioa_socket_handle client_s, in
+ ioa_socket_handle ioa_create_connecting_tcp_relay_socket(ioa_socket_handle s, ioa_addr *peer_addr, connect_cb cb,
+                                                          void *arg);
+ 
++int bind_ioa_socket(ioa_socket_handle s, const ioa_addr *local_addr, int reusable);
++
+ int get_ioa_socket_from_reservation(ioa_engine_handle e, uint64_t in_reservation_token, ioa_socket_handle *s);
+ 
+ int get_ioa_socket_address_family(ioa_socket_handle s);
+diff --git a/src/server/ns_turn_maps.h b/src/server/ns_turn_maps.h
+index cab2dbf..dcad96b 100644
+--- a/src/server/ns_turn_maps.h
++++ b/src/server/ns_turn_maps.h
+@@ -92,6 +92,7 @@ size_t ur_map_size(const ur_map *map);
+ 
+ int ur_map_foreach(ur_map *map, foreachcb_type func);
+ 
++// BOOKMARK: This is how we'll iterate over all the sessions of the TURN server
+ int ur_map_foreach_arg(const ur_map *map, foreachcb_arg_type func, void *arg);
+ 
+ int ur_map_lock(const ur_map *map);
+diff --git a/src/server/ns_turn_server.c b/src/server/ns_turn_server.c
+index f92f421..c66af8a 100644
+--- a/src/server/ns_turn_server.c
++++ b/src/server/ns_turn_server.c
+@@ -344,6 +344,7 @@ static int good_peer_addr(turn_turnserver *server, const char *realm, ioa_addr *
+ 
+ /////////////////// Allocation //////////////////////////////////
+ 
++// BOOKMARK: Is the allocation important?
+ allocation *get_allocation_ss(ts_ur_super_session *ss) { return &(ss->alloc); }
+ 
+ static inline relay_endpoint_session *get_relay_session_ss(ts_ur_super_session *ss, int family) {
+@@ -4642,6 +4643,7 @@ int open_client_connection_session(turn_turnserver *server, struct socket_messag
+ 
+ /////////////// io handlers ///////////////////
+ 
++// BOOKMARK: Super broadcast will probably call this directly.
+ static void peer_input_handler(ioa_socket_handle s, int event_type, ioa_net_data *in_buffer, void *arg,
+                                int can_resume) {
+ 
+@@ -4656,6 +4658,7 @@ static void peer_input_handler(ioa_socket_handle s, int event_type, ioa_net_data
+   if (!s || ioa_socket_tobeclosed(s))
+     return;
+ 
++// BOOKMARK: The arg is a session!  We can foreach the sessions using the server's sessions map.  ioa_net_data will need to be reusable.
+   ts_ur_super_session *ss = (ts_ur_super_session *)arg;
+ 
+   if (!ss)
+@@ -4672,6 +4675,7 @@ static void peer_input_handler(ioa_socket_handle s, int event_type, ioa_net_data
+   if (!server)
+     return;
+ 
++// BOOKMARK: For super broadcast, will need to retain/pass along the correct sender's address
+   relay_endpoint_session *elem = get_relay_session_ss(ss, get_ioa_socket_address_family(s));
+   if (elem->s == NULL) {
+     return;
+@@ -4790,6 +4794,43 @@ static void client_input_handler(ioa_socket_handle s, int event_type, ioa_net_da
+ 
+ ///////////////////////////////////////////////////////////
+ 
++typedef struct _super_args {
++  ioa_socket_handle s;
++  int event_type;
++  ioa_net_data* data;
++  int can_resume;
++} super_args;
++int super_broadcast_foreach(ur_map_key_type key, ur_map_value_type value, void* arg) {
++  super_args* args = (super_args*) arg;
++  UNUSED_ARG(key);
++
++  peer_input_handler(args->s, args->event_type, args->data, (void*) value, args->can_resume);
++
++  return 0;
++}
++void super_broadcast_callback(ioa_socket_handle s, int event_type, ioa_net_data *data, void *arg, int can_resume) {
++  super_args args = { s, event_type, data, can_resume };
++  ur_map_foreach_arg((ur_map*)arg, super_broadcast_foreach, (void*) &args);
++}
++
++void setup_super_broadcast(turn_turnserver *server) {
++  ioa_socket_handle sock;
++  ioa_addr addr;
++  make_ioa_addr("255.255.255.255", 4666, &addr);
++  sock = create_unbound_relay_ioa_socket(server->e, AF_INET, UDP_SOCKET, RELAY_SOCKET);
++  if (!sock) {
++    printf("Dang."); exit(1);
++  }
++  int ret = bind_ioa_socket(sock, &addr, 1);
++  if (ret < 0) {
++    printf("Dang2: %i\n", ret); exit(1);
++  }
++  ret = register_callback_on_ioa_socket(server->e, sock, IOA_EV_READ, super_broadcast_callback, server->sessions_map, 0);
++  if (ret < 0) {
++    printf("Dang3: %i", ret); exit(1);
++  }
++}
++
+ void init_turn_server(turn_turnserver *server, turnserver_id id, int verbose, ioa_engine_handle e,
+                       turn_credential_type ct, int stun_port, int fingerprint, dont_fragment_option_t dont_fragment,
+                       get_user_key_cb userkeycb, check_new_allocation_quota_cb chquotacb,
+diff --git a/src/server/ns_turn_server.h b/src/server/ns_turn_server.h
+index 526ab15..e101214 100644
+--- a/src/server/ns_turn_server.h
++++ b/src/server/ns_turn_server.h
+@@ -114,6 +114,7 @@ struct _turn_turnserver {
+   turnserver_id id;
+ 
+   turnsession_id session_id_counter;
++// BOOKMARK: For super broadcast we'll iterate over all of the sessions in this map
+   ur_map *sessions_map;
+ 
+   turn_time_t ctime;
+@@ -204,6 +205,7 @@ const char *get_version(turn_turnserver *server);
+ 
+ ///////////////////////////////////////////
+ 
++void setup_super_broadcast(turn_turnserver* server);
+ void init_turn_server(
+     turn_turnserver *server, turnserver_id id, int verbose, ioa_engine_handle e, turn_credential_type ct, int stun_port,
+     int fingerprint, dont_fragment_option_t dont_fragment, get_user_key_cb userkeycb,

@@ -49,22 +49,25 @@ const all_events_dc = ['bufferedamountlow', 'close', 'closing', 'error', 'messag
 
 
 // -- SIMULTANEOUS USING BROADCAST IP (Doesn't work - haven't yet figured out why)--
-// const config = {
-// 	iceTransportPolicy: 'relay',
-// 	iceServers: [
-// 		{urls: 'turn:localhost?transport=tcp', username: 'the/turn/username/constant', credential: 'the/turn/credential/constant' }
-// 	]
-// };
-// const a = new Conn(config);
-// const b = new Conn(config);
-// all_events.map(e => [[a, e], [b, e]]).flat(1)
-// 	.forEach(([c, e]) => c.addEventListener(e, console.log));
-// const [siga, sigb] = await Promise.all([a.local, b.local]);
-// // Replace the actual IP addresses of every candidate with the IPv4 broadcast address
+const config = {
+	iceTransportPolicy: 'relay',
+	iceServers: [
+		{urls: 'turn:127.0.0.1', username: 'the/turn/username/constant', credential: 'the/turn/credential/constant' }
+	]
+};
+const a = new Conn(config);
+const b = new Conn(config);
+all_events.map(e => [[a, e], [b, e]]).flat(1)
+	.forEach(([c, e]) => c.addEventListener(e, console.log));
+const [siga, sigb] = await Promise.all([a.local, b.local]);
+// Replace the actual IP addresses of every candidate with the IPv4 broadcast address
 // [...siga.candidates, ...sigb.candidates].forEach(c => c.address = '255.255.255.255');
+siga.candidates = sigb.candidates = [
+	{address: '255.255.255.255', port: 4666}
+];
 
-// a.remote = sigb;
-// b.remote = siga;
+a.remote = sigb;
+b.remote = siga;
 
 
 // -- ADDRESS BIND V1 --
@@ -91,21 +94,21 @@ const all_events_dc = ['bufferedamountlow', 'close', 'closing', 'error', 'messag
 
 
 // -- BIND --
-const certa = await RTCPeerConnection.generateCertificate({name: 'ECDSA', namedCurve: 'P-256', hash: 'SHA-256'});
-const bind_server = new Addr('turn:local.evan-brass.net');
-const listener = await bind_server.bind({certificates: [certa]});
+// const certa = await RTCPeerConnection.generateCertificate({name: 'ECDSA', namedCurve: 'P-256', hash: 'SHA-256'});
+// const bind_server = new Addr('turn:local.evan-brass.net');
+// const listener = await bind_server.bind({certificates: [certa]});
 
-(async () => {
-	for await (const conn of listener) {
-		console.log('incoming conn', conn);
-		all_events.forEach(e => conn.addEventListener(e, console.log));
-	}
-})();
-console.log(listener);
+// (async () => {
+// 	for await (const conn of listener) {
+// 		console.log('incoming conn', conn);
+// 		all_events.forEach(e => conn.addEventListener(e, console.log));
+// 	}
+// })();
+// console.log(listener);
 
-// Try connecting to our listener:
-const b = listener.addr.connect();
-all_events.forEach(e => b.addEventListener(e, console.log));
+// // Try connecting to our listener:
+// const b = listener.addr.connect();
+// all_events.forEach(e => b.addEventListener(e, console.log));
 
 
 // -- SIMULTANEOUS CONNECTIONS --

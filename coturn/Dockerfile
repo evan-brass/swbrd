@@ -12,12 +12,14 @@ RUN apk update \
 
 WORKDIR /build/
 COPY --link broadcast.patch .
+COPY --link super.patch .
 
 RUN git init \
 	&& git fetch --depth 1 https://github.com/coturn/coturn.git ${git_ref} \
 	&& git checkout FETCH_HEAD \
 	# Apply our SO_BROADCAST patch
 	&& git apply broadcast.patch \
+	&& git apply super.patch \
 	&& ./configure --prefix=/usr \
 		--turndbdir=/var/lib/coturn \
 		--disable-rpath \
