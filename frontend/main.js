@@ -1,4 +1,4 @@
-import { Addr, Id, make_id, Conn, Sig } from 'swbrd';
+import { Addr, Id, Conn, Sig } from 'swbrd';
 // import { buftobinstr, btoa_url } from 'swbrd/b64url.js'
 
 // const t = new WebSocket(`ws${location.protocol == 'https:' ? 's' : ''}://${location.host}/bind`);
