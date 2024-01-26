@@ -5,3 +5,10 @@ services:
     ports:
       - 3478:3478/tcp
       - 3478:3478/udp
+    networks: 
+      - default
+      - back
+
+networks:
+  back:
+    internal: true

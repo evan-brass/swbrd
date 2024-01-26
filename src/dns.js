@@ -1,21 +1,19 @@
 const encoder = new TextEncoder();
 const decoder = new TextDecoder('utf-8');
 
-export const advanced_usage = {
-	doh_address: 'https://cloudflare-dns.com/dns-query',
-	// Alternative DoH address:
-	// doh_address: 'https://corsproxy.io/?' + encodeURIComponent('https://dns.google/dns-query')
-};
-
 /**
  * Use DNS over HTTPS (DoH) to find the Id for an address that doesn't contain a username.  We query the TXT entries for hostname
  * looking for any that start with "swbrd=".  We attempt to create an Id from these, returning the first Id that succeeds.
  * @param {string} hostname - The domain name to query
  * @param {number} query_bufflen - The size of buffer we'll allocate to encode the DNS Message
- * @return {Promise<Id | undefined>}
  */
-export async function query_id(hostname, query_bufflen = 512) {
-	if (!advanced_usage.doh_address) return;
+export async function* query_txt(hostname, {
+	query_bufflen = 512,
+	prefix = '',
+	doh_address = 'https://cloudflare-dns.com/dns-query',
+	// Alternative DoH address:
+	// doh_address = 'https://corsproxy.io/?' + encodeURIComponent('https://dns.google/dns-query')
+} = {}) {
 	const labels = hostname.split('.');
 	if (labels.indexOf('') !== -1) return; // Error: Internal Null label
 	labels.push('');
@@ -36,7 +34,7 @@ export async function query_id(hostname, query_bufflen = 512) {
 	if (read < question_tail) return; // Error: Buffer too small for this question
 	const dns_message = buffer.subarray(0, offset + written);
 
-	const res = await fetch(advanced_usage.doh_address, {
+	const res = await fetch(doh_address, {
 		method: 'post',
 		headers: {
 			'Content-Type': 'application/dns-message',
@@ -63,9 +61,9 @@ export async function query_id(hostname, query_bufflen = 512) {
 
 		for (let txt_len = ansb[txt_off]; txt_off < offset; txt_off += 1 + txt_len, txt_len = ansb[txt_off]) {
 			const txt = decoder.decode(ansb.subarray(txt_off + 1, txt_off + 1 + txt_len));
-			if (!txt.startsWith('swbrd=')) continue; // Not one of our TXT entries
-
-			return txt.slice(6);
+			if (!txt.startsWith(prefix)) continue; // Not one of our TXT entries
+			const value = txt.slice(prefix.length);
+			yield value;
 		}
 	}
 }

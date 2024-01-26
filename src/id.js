@@ -1,40 +1,37 @@
-import { binstrtobuf, buftobinstr, atob_url, btoa_url } from "./b64url.js";
-
-export const advanced_usage = {
-	// This hash algorithm will be used when converting an Id into a bigint.
-	id_alg: 'sha-256'
-};
+import { buftobinstr, atob_url, btoa_url } from "./b64url.js";
 
 // Currently, all the hash algorithms are distinguishable via their length.  Later we might need a tagging mechanism to disambiguate fingerprint algorithms
 const untagged = new Map([
-	['sha-1',   20],
-	['sha-256', 32],
+	['sha-512', 64],
 	['sha-384', 48],
-	['sha-512', 64]
+	['sha-256', 32],
+	['sha-1',   20],
 ].map(a => [a, a.toReversed()]).flat());
 
 export class Id {
 	// If you're wondering why the hashes are stored on this object as binary strings, it's because strings are more indexeddb friendly than array buffers and we want Ids to be easily persisted.
 	constructor(init) {
 		if (typeof init == 'string') {
-			for (const v of init.split(',')) {
-				try {
-					const binstr = atob_url(v);
-					const alg = untagged.get(binstr.length);
-					if (alg) this[alg] = binstr;
-				} catch {/* */}
-			}
-			if (!(advanced_usage.id_alg in this)) {
-				return null; // Id parsing failed to produce an Id with the required fingerprint algorithm
-			}
+			const binstr = atob_url(init);
+			const alg = untagged.get(binstr.length);
+			if (alg) this[alg] = binstr;
 		} else {
 			Object.assign(this, ...arguments);
 		}
+		if (!this.#first_alg()) return null;
+	}
+	#first_alg() {
+		for (const alg of untagged.keys()) {
+			if (alg in this) return alg;
+		}
+	}
+	#hex(key = this.#first_alg()) {
+		if (!key) return [];
+		return Array.from(this[key], s => s.charCodeAt(0).toString(16).padStart(2, '0'));
 	}
 	*sdp() {
-		for (const [alg, value] of Object.entries(this)) {
-			const buff = [...binstrtobuf(value)];
-			yield `a=fingerprint:${alg} ${buff.map(b => b.toString(16).padStart(2, '0')).join(':')}`;
+		for (const key in this) {
+			yield `a=fingerprint:${key} ${this.#hex(key).join(':')}`;
 		}
 	}
 	add_sdp(sdp) {
@@ -46,15 +43,14 @@ export class Id {
 	}
 	[Symbol.toPrimitive](hint) {
 		if (hint == 'number') {
-			const binstr = this[advanced_usage.id_alg] ?? '\0';
-			return BigInt(binstrtobuf(binstr).reduce((a, v) => a + v.toString(16).padStart(2, '0'), '0x'));
+			return BigInt('0x' + this.#hex().join(''));
 		} else {
-			return Object.values(this).map(binstr => btoa_url(binstr)).join(',');
+			return btoa_url(this[this.#first_alg()]);
 		}
 	}
 }
 
-export async function make_id(cert, fingerprints = [advanced_usage.id_alg]) {
+export async function make_id(cert, fingerprints = ['sha-256']) {
 	const ret = new Id();
 	const are_we_done = () => fingerprints.every(algorithm => algorithm in ret);
 

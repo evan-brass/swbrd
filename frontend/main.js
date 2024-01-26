@@ -52,7 +52,7 @@ const all_events_dc = ['bufferedamountlow', 'close', 'closing', 'error', 'messag
 const config = {
 	iceTransportPolicy: 'relay',
 	iceServers: [
-		{urls: 'turn:127.0.0.1', username: 'the/turn/username/constant', credential: 'the/turn/credential/constant' }
+		{urls: 'turn:127.0.0.1:3478?transport=tcp', username: 'the/turn/username/constant', credential: 'the/turn/credential/constant' }
 	]
 };
 const a = new Conn(config);
@@ -62,9 +62,15 @@ all_events.map(e => [[a, e], [b, e]]).flat(1)
 const [siga, sigb] = await Promise.all([a.local, b.local]);
 // Replace the actual IP addresses of every candidate with the IPv4 broadcast address
 // [...siga.candidates, ...sigb.candidates].forEach(c => c.address = '255.255.255.255');
-siga.candidates = sigb.candidates = [
-	{address: '255.255.255.255', port: 4666}
-];
+// siga.candidates = sigb.candidates = [
+// 	{address: '255.255.255.255', port: 4666}
+// ];
+// a.sctp.transport.iceTransport.addEventListener('selectedcandidatepairchange', () => {
+// 	console.log('selected a', a.sctp.transport.iceTransport.getSelectedCandidatePair());
+// });
+// b.sctp.transport.iceTransport.addEventListener('selectedcandidatepairchange', () => {
+// 	console.log('selected b', b.sctp.transport.iceTransport.getSelectedCandidatePair());
+// });
 
 a.remote = sigb;
 b.remote = siga;
