@@ -2,8 +2,6 @@ use std::net::SocketAddr;
 
 use eyre::Result;
 
-pub mod stun;
-
 fn main() -> Result<()> {
 	let sock = std::net::UdpSocket::bind("[::]:3478")?;
 
@@ -16,7 +14,7 @@ fn main() -> Result<()> {
 			_ => sender
 		};
 		let packet = &buffer[..packet_length];
-		let mut known = stun::UnknownAttrs::default();
+		let mut known = stun::attr::UnknownAttrs::default();
 		let msg = stun::Stun::decode(packet, &mut known);
 		println!("{sender} {msg:?} {known:?}");
 	}

@@ -1457,6 +1457,13 @@ dependencies = [
 
 [[package]]
 name = "stun"
+version = "0.1.0"
+dependencies = [
+ "bytes",
+]
+
+[[package]]
+name = "stun"
 version = "0.5.0"
 source = "git+https://github.com/webrtc-rs/webrtc.git#fb59f4b0d5e11652c867160d6543d552231f072f"
 dependencies = [
@@ -1671,6 +1678,7 @@ version = "0.1.0"
 dependencies = [
  "bytes",
  "eyre",
+ "stun 0.1.0",
  "tokio",
  "tokio-stream",
  "tokio-util",
@@ -1688,7 +1696,7 @@ dependencies = [
  "md-5",
  "rand",
  "ring 0.17.7",
- "stun",
+ "stun 0.5.0",
  "thiserror",
  "tokio",
  "tokio-util",
@@ -1881,7 +1889,7 @@ dependencies = [
  "serde_json",
  "sha2",
  "smol_str",
- "stun",
+ "stun 0.5.0",
  "thiserror",
  "time",
  "tokio",
@@ -1959,7 +1967,7 @@ dependencies = [
  "rand",
  "serde",
  "serde_json",
- "stun",
+ "stun 0.5.0",
  "thiserror",
  "tokio",
  "turn 0.7.0",

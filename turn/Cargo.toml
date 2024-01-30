@@ -8,6 +8,7 @@ edition = "2021"
 [dependencies]
 bytes = "1.5.0"
 eyre = "0.6.11"
+stun = { version = "0.1.0", path = "../stun" }
 tokio = { version = "1.35.1", features = ["full"] }
 tokio-stream = { version = "0.1.14", features = ["full"] }
 tokio-util = { version = "0.7.10", features = ["codec", "net", "full"] }
