@@ -16,10 +16,10 @@ import { Addr, Id, Conn, Sig } from 'swbrd';
 const all_events = [
 	'connectionstatechange',
 	'datachannel',
-	'icecandidate',
-	'icecandidateerror',
-	'iceconnectionstatechange',
-	'icegatheringstatechange',
+	// 'icecandidate',
+	// 'icecandidateerror',
+	// 'iceconnectionstatechange',
+	// 'icegatheringstatechange',
 	'negotiationneeded',
 	'signalingstatechange',
 	'track'
@@ -49,17 +49,17 @@ const all_events_dc = ['bufferedamountlow', 'close', 'closing', 'error', 'messag
 
 
 // -- SIMULTANEOUS USING BROADCAST IP (Doesn't work - haven't yet figured out why)--
-const config = {
-	iceTransportPolicy: 'relay',
-	iceServers: [
-		{urls: 'turn:127.0.0.1:3478?transport=tcp', username: 'the/turn/username/constant', credential: 'the/turn/credential/constant' }
-	]
-};
-const a = new Conn(config);
-const b = new Conn(config);
-all_events.map(e => [[a, e], [b, e]]).flat(1)
-	.forEach(([c, e]) => c.addEventListener(e, console.log));
-const [siga, sigb] = await Promise.all([a.local, b.local]);
+// const config = {
+// 	iceTransportPolicy: 'relay',
+// 	iceServers: [
+// 		{urls: 'turn:127.0.0.1:3478?transport=tcp', username: 'the/turn/username/constant', credential: 'the/turn/credential/constant' }
+// 	]
+// };
+// const a = new Conn(config);
+// const b = new Conn(config);
+// all_events.map(e => [[a, e], [b, e]]).flat(1)
+// 	.forEach(([c, e]) => c.addEventListener(e, console.log));
+// const [siga, sigb] = await Promise.all([a.local, b.local]);
 // Replace the actual IP addresses of every candidate with the IPv4 broadcast address
 // [...siga.candidates, ...sigb.candidates].forEach(c => c.address = '255.255.255.255');
 // siga.candidates = sigb.candidates = [
@@ -72,8 +72,8 @@ const [siga, sigb] = await Promise.all([a.local, b.local]);
 // 	console.log('selected b', b.sctp.transport.iceTransport.getSelectedCandidatePair());
 // });
 
-a.remote = sigb;
-b.remote = siga;
+// a.remote = sigb;
+// b.remote = siga;
 
 
 // -- ADDRESS BIND V1 --
@@ -181,3 +181,20 @@ b.remote = siga;
 // a.remote = b_loc;
 // await a.connected;
 // console.log('a connected');
+
+// const a = new Conn();
+// const b = new Conn();
+// all_events.map(e => [[e, a], [e, b]]).flat(1)
+// 	.forEach(([e, c]) => c.addEventListener(e, console.log));
+
+// const [siga, sigb] = await Promise.all([a.local, b.local]);
+// a.remote = sigb;
+// b.remote = siga;
+
+
+const conn = new Addr('turn:eSfQhc2igaaF_yILi4avPLmpeI6ffxOLB6jr-hvFTJs@localhost?turn_transport=udp').connect();
+
+// const trans = a.addTransceiver('audio');
+// console.log(trans);
+
+// console.log(a.getConfiguration());
