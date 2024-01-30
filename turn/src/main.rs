@@ -1,14 +1,23 @@
+use std::net::SocketAddr;
+
 use eyre::Result;
-use tokio_stream::StreamExt;
 
 pub mod stun;
 
-#[tokio::main]
-async fn main() -> Result<()> {
-	let sock = tokio::net::UdpSocket::bind("[::]:3478").await?;
-	let mut framed = tokio_util::udp::UdpFramed::new(sock, stun::StunCodec::default());
-	while let Some(frame) = framed.next().await {
-		println!("{frame:?}");
+fn main() -> Result<()> {
+	let sock = std::net::UdpSocket::bind("[::]:3478")?;
+
+	let mut buffer = [0; 4096];
+	loop {
+		let Ok((packet_length, sender)) = sock.recv_from(&mut buffer) else { continue };
+		// Canonicalize the ipv6 ip address
+		let sender = match sender {
+			SocketAddr::V6(v6) => SocketAddr::new(v6.ip().to_canonical(), v6.port()),
+			_ => sender
+		};
+		let packet = &buffer[..packet_length];
+		let mut known = stun::UnknownAttrs::default();
+		let msg = stun::Stun::decode(packet, &mut known);
+		println!("{sender} {msg:?} {known:?}");
 	}
-	Ok(())
 }
