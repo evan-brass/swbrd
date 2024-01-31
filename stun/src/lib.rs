@@ -1,8 +1,36 @@
 use bytes::Buf;
 
 pub mod attr;
+pub mod attrs;
 
 const MAGIC: u32 = 0x2112A442;
+
+const fn m(method: u16) -> u16 {
+	if method >= 0x4000 { panic!("STUN: Method out of range") }
+	(method << 0) & 0b00_00000_0_000_0_1111 |
+	(method << 1) & 0b00_00000_0_111_0_0000 |
+	(method << 1) & 0b00_11111_0_000_0_0000
+}
+pub const fn req(method: u16) -> u16 {
+	m(method) | 0b00_00000_0_000_0_0000
+}
+pub const fn suc(method: u16) -> u16 {
+	m(method) | 0b00_00000_0_000_1_0000
+}
+pub const fn ind(method: u16) -> u16 {
+	m(method) | 0b00_00000_1_000_0_0000
+}
+pub const fn err(method: u16) -> u16 {
+	m(method) | 0b00_00000_1_000_1_0000
+}
+pub const fn method(typ: u16) -> Option<u16> {
+	if typ >= 0x4000 { return None }
+	Some(
+		(typ >> 0) & 0b00_00000_0_000_0_1111 |
+		(typ >> 1) & 0b00_00000_0_111_0_0000 |
+		(typ >> 2) & 0b00_11111_0_000_0_0000
+	)
+}
 
 
 #[derive(Debug)]

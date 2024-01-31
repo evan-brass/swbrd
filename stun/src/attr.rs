@@ -1,15 +1,27 @@
 pub trait StunAttr<'i>: StunAttrEncode {
 	const ATTR_TYPE: u16;
-	fn decode(header: &[u8; 20], attr_prefix: &[u8], value: &'i [u8]) -> Option<Self> where Self: Sized;
+	type Error;
+	fn decode(header: &[u8; 20], attr_prefix: &[u8], value: &'i [u8]) -> Result<Self, Self::Error> where Self: Sized;
 }
 pub trait StunAttrEncode {
 	fn header(&self) -> Option<(u16, u16)>;
-	fn encode(&self, header:  &[u8; 20], attr_prefix: &[u8], value: &mut [u8]);
+	fn encode(&self, header: &[u8; 20], attr_prefix: &[u8], value: &mut [u8]);
 }
 pub trait KnownStunAttrs<'i> {
 	fn decode_attr(&mut self, attr_typ: u16, header: &[u8; 20], attr_prefix: &[u8], value: &'i [u8]);
 	fn parse<A>(self, attr: &'i mut Option<A>) -> Parse<'i, A, Self> where Self: Sized {
 		Parse { attr, next: self }
+	}
+}
+
+impl<T: StunAttrEncode> StunAttrEncode for Option<T> {
+	fn header(&self) -> Option<(u16, u16)> {
+		self.as_ref().and_then(StunAttrEncode::header)
+	}
+	fn encode(&self, header: &[u8; 20], attr_prefix: &[u8], value: &mut [u8]) {
+		if let Some(t) = self {
+			t.encode(header, attr_prefix, value)
+		}
 	}
 }
 
@@ -26,11 +38,11 @@ pub struct Parse<'i, A, N> {
 	attr: &'i mut Option<A>,
 	next: N
 }
-impl<'i, A: StunAttr<'i>, N: KnownStunAttrs<'i>> KnownStunAttrs<'i> for Parse<'_, A, N> {
+impl<'i, A: StunAttr<'i>, N: KnownStunAttrs<'i>> KnownStunAttrs<'i> for Parse<'_, Result<A, A::Error>, N> {
 	fn decode_attr(&mut self, attr_typ: u16, header: &[u8; 20], attr_prefix: &[u8], value: &'i [u8]) {
 		if attr_typ == A::ATTR_TYPE {
 			if self.attr.is_none() {
-				*self.attr = A::decode(header, attr_prefix, value)
+				*self.attr = Some(A::decode(header, attr_prefix, value))
 			}
 		} else {
 			self.next.decode_attr(attr_typ, header, attr_prefix, value);
