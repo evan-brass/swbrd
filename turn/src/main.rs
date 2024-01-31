@@ -14,8 +14,7 @@ fn main() -> Result<()> {
 			_ => sender
 		};
 		let packet = &buffer[..packet_length];
-		let mut known = stun::attr::UnknownAttrs::default();
-		let msg = stun::Stun::decode(packet, &mut known);
-		println!("{sender} {msg:?} {known:?}");
+		let msg = stun::Stun::decode(packet, stun::attrs::Unknown::default());
+		println!("{sender} {msg:?}");
 	}
 }
