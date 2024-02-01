@@ -15,10 +15,7 @@ pub struct Stun<T, A> {
 #[derive(Debug)]
 pub enum StunDecodeError {
 	TooShort(usize),
-	TypeOutOfRange,
-	UnalignedLength,
-	BadMagic,
-	BadAttrLength
+	NotStun,
 }
 impl<'i, A: attrs::KnownAttrs<'i>> Stun<&'i [u8; 12], A> {
 	fn decode_inner(header: &mut [u8; 20], body: &'i [u8], attrs: &mut A) -> Result<u16, StunDecodeError> {
@@ -27,9 +24,9 @@ impl<'i, A: attrs::KnownAttrs<'i>> Stun<&'i [u8; 12], A> {
 			let mut header = header.as_slice();
 			(header.get_u16(), header.get_u16(), header.get_u32())
 		};
-		if typ >= 0x4000 { return Err(StunDecodeError::TypeOutOfRange) }
-		if length % 4 != 0 { return Err(StunDecodeError::UnalignedLength) }
-		if magic != MAGIC { return Err(StunDecodeError::BadMagic) }
+		if typ >= 0x4000 { return Err(StunDecodeError::NotStun) }
+		if length % 4 != 0 { return Err(StunDecodeError::NotStun) }
+		if magic != MAGIC { return Err(StunDecodeError::NotStun) }
 		if body.len() < length as usize { return Err(StunDecodeError::TooShort(20 + length as usize)) }
 
 		// Decode the attributes
@@ -38,7 +35,7 @@ impl<'i, A: attrs::KnownAttrs<'i>> Stun<&'i [u8; 12], A> {
 			let (attr_prefix, mut t) = body.split_at(i);
 			let attr_typ = t.get_u16();
 			let attr_len = t.get_u16();
-			if t.remaining() < attr_len as usize { return Err(StunDecodeError::BadAttrLength) }
+			if t.remaining() < attr_len as usize { return Err(StunDecodeError::NotStun) }
 			let value = &t[..attr_len as usize];
 
 			i += 4 + attr_len as usize;
@@ -47,7 +44,7 @@ impl<'i, A: attrs::KnownAttrs<'i>> Stun<&'i [u8; 12], A> {
 			// Modify the length in header
 			header[2..4].copy_from_slice(&(i as u16).to_be_bytes());
 
-			attrs.decode_attr(attr_typ, header, attr_prefix, value);
+			if let Some(e) = attrs.decode_attr(attr_typ, header, attr_prefix, value) { return Err(e) }
 		}
 
 		Ok(typ)
