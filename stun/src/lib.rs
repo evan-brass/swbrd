@@ -3,6 +3,7 @@ use bytes::Buf;
 const MAGIC: u32 = 0x2112A442;
 
 pub mod attrs;
+pub mod attr;
 
 #[derive(Debug)]
 pub struct Stun<T, A> {
