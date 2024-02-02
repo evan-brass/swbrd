@@ -1,6 +1,6 @@
 use std::net::SocketAddr;
 
-use crate::{StunAttrs, StunDecodeError};
+use crate::StunAttrs;
 
 pub struct StunError<'i> {
 	code: u16,
@@ -23,8 +23,6 @@ pub trait StunAuth {
 }
 
 pub struct Rfc8489<'i, A: StunAuth, N> {
-	decode_error: Option<()>,
-
 	authorizer: A,
 
 	mapped: Option<SocketAddr>,
@@ -40,8 +38,12 @@ pub struct Rfc8489<'i, A: StunAuth, N> {
 
 	next: N
 }
+pub enum Rfc8489Error<E> {
+	Next(E)
+}
 impl<'i, A: StunAuth, N: StunAttrs<'i>> StunAttrs<'i> for Rfc8489<'i, A, N> {
-	fn decode(&mut self, typ: u16, header: &[u8; 20], prefix: &[u8], value: &'i [u8]) -> Result<(), StunDecodeError> {
+	type Error = Rfc8489Error<N::Error>;
+	fn decode_attr(&mut self, header: &[u8; 20], prefix: &[u8], typ: u16, value: &'i [u8]) -> Result<(), Self::Error> {
 		todo!()
 	}
 }

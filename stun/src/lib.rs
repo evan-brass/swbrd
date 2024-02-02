@@ -1,22 +1,12 @@
-use bytes::Buf;
+use bytes::{Buf, BufMut};
 
 pub mod rfc8489;
 
 const MAGIC: u32 = 0x2112A442;
 
 pub trait StunAttrs<'i> {
-	fn decode(&mut self, typ: u16, header: &[u8; 20], prefix: &[u8], value: &'i [u8]) -> Result<(), StunDecodeError>;
-}
-
-type Unknown = Vec<u16>;
-impl StunAttrs<'_> for Unknown {
-	fn decode(&mut self, typ: u16, _: &[u8; 20], _: &[u8], _: &[u8]) -> Result<(), StunDecodeError>{
-		match typ {
-			0..=0x7fff => self.push(typ),
-			_ => {}
-		}
-		Ok(())
-	}
+	type Error;
+	fn decode_attr(&mut self, header: &[u8; 20], attr_prefix: &[u8], attr_typ: u16, value: &'i [u8]) -> Result<(), Self::Error>;
 }
 
 pub struct Stun<'i, A> {
@@ -27,26 +17,60 @@ pub struct Stun<'i, A> {
 
 pub enum StunDecodeError {
 	TooSmall(usize),
-	NotStun,
+	TypeOutOfRange,
+	UnalignedLength,
+	BadMagic,
 }
 
-impl<'i, A: StunAttrs<'i>> Stun<'i, A> {
-	fn decode_attrs(header: &mut [u8; 20], body: &'i [u8], attrs: &mut A) -> Result<u16, StunDecodeError> {
-
-
-		Ok(())
-	}
-	pub fn decode(buffer: &[u8], mut attrs: A) -> Result<Self, StunDecodeError> {
+impl<'i> Stun<'i, &'i [u8]> {
+	fn decode(buffer: &'i [u8]) -> Result<Self, StunDecodeError> {
 		if buffer.len() < 20 { return Err(StunDecodeError::TooSmall(20)) }
 
-		let (header, body) = buffer.split_at(20);
-		let mut header: [u8; 20] = header.try_into().unwrap();
-		
+		// Decode the STUN header
+		let (mut header, rest) = buffer.split_at(20);
+		let typ = header.get_u16();
+		let length = header.get_u16();
+		let magic = header.get_u32();
+		let txid = header.try_into().unwrap();
 
-		let (typ, length, magic, txid) = {
-			let mut t = &header;
-			(t.get_u16(), t.get_u16(), t.get_u32(), t.try_into().unwrap())
-		};
-		todo!()
+		if typ >= 0x4000 { return Err(StunDecodeError::TypeOutOfRange) }
+		if length % 4 != 0 { return Err(StunDecodeError::UnalignedLength) }
+		let packet_length = 20 + length as usize;
+		if buffer.len() < packet_length { return Err(StunDecodeError::TooSmall(packet_length)) }
+		if magic != MAGIC { return Err(StunDecodeError::BadMagic) }
+
+		let attrs = &rest[..length as usize];
+
+		Ok(Self { typ, txid, attrs })
+	}
+	fn decode_length(&self) -> usize {
+		20 + self.attrs.len()
+	}
+	fn parse<A: StunAttrs<'i>>(self, mut attrs: A) -> Result<Stun<'i, A>, A::Error> {
+		let mut header = [0u8; 20];
+		{	// Prep the header
+			let mut header = header.as_mut_slice();
+			header.put_u16(self.typ);
+			header.put_u16(0);
+			header.put_u32(MAGIC);
+			header.put_slice(self.txid);
+		}
+
+		let mut i = 0;
+		while i < self.attrs.len() {
+			let (prefix, mut rest) = self.attrs.split_at(i);
+			let attr_typ = rest.get_u16();
+			let attr_len = rest.get_u16();
+			if rest.remaining() < attr_len as usize { break }
+			let value = &rest[..attr_len as usize];
+
+			i += attr_len as usize;
+			while i % 4 != 0 { i += 1; }
+			header[2..4].copy_from_slice(&(i as u16).to_be_bytes());
+
+			attrs.decode_attr(&header, prefix, attr_typ, value)?;
+		}
+		
+		Ok(Stun { typ: self.typ, txid: self.txid, attrs })
 	}
 }
