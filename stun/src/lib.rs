@@ -3,8 +3,6 @@ use bytes::{Buf, BufMut};
 pub mod rfc8489;
 pub mod attr;
 pub mod attrs;
-#[doc(hidden)]
-pub mod temp;
 
 const MAGIC: u32 = 0x2112A442;
 
@@ -71,9 +69,9 @@ impl<'i> Stun<'i, &'i [u8]> {
 			while i % 4 != 0 { i += 1; }
 			header[2..4].copy_from_slice(&(i as u16).to_be_bytes());
 
-			attrs.decode_attr(&header, prefix, attr_typ, value)?;
+			attrs.decode_attr(&header, prefix, attr_typ, value);
 		}
 		
-		Ok(Stun { typ: self.typ, txid: self.txid, attrs })
+		Stun { typ: self.typ, txid: self.txid, attrs }
 	}
 }
