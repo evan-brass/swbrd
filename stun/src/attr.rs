@@ -1,7 +1,7 @@
 pub trait StunAttr<'i> {
 	const ATTR_TYP: u16;
 	type Error;
-	type Context;
+	type Context: ?Sized;
 	fn decode(ctx: &Self::Context, header: &[u8; 20], prefix: &[u8], value: &'i [u8]) -> Result<Self, Self::Error> where Self: Sized;
 	fn length(&self) -> u16;
 	fn encode(&self, header: &[u8; 20], prefix: &[u8], value: &mut [u8]);

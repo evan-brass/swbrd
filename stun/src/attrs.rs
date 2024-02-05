@@ -1,5 +1,7 @@
 use std::net::{IpAddr, SocketAddr};
 use bytes::{Buf, BufMut};
+use hmac::Mac;
+use sha1::Sha1;
 use super::attr::StunAttr;
 
 #[derive(Debug)]
@@ -63,8 +65,27 @@ impl<'i> StunAttr<'i> for Username<'i> {
 	}
 }
 
-// TODO: MessageIntegrity
-
-pub struct ErrorCode<'i> {
-	reason: 
+pub struct IntegrityError;
+pub struct Integrity;
+impl StunAttr<'_> for Integrity {
+	const ATTR_TYP: u16 = 0x0008;
+	type Context = [u8];
+	type Error = IntegrityError;
+	fn decode(ctx: &Self::Context, header: &[u8; 20], prefix: &[u8], value: &'_ [u8]) -> Result<Self, Self::Error> where Self: Sized {
+		let mut expected: hmac::Hmac<sha1::Sha1> = hmac::Hmac::new(ctx.into());
+		expected.update(header);
+		expected.update(prefix);
+		let expected = expected.finalize().into_bytes();
+		if value == expected.as_slice() {
+			Ok(Self)
+		} else {
+			Err(IntegrityError)
+		}
+	}
+	fn length(&self) -> u16 {
+		20
+	}
+	fn encode(&self, header: &[u8; 20], prefix: &[u8], value: &mut [u8]) {
+		todo!()
+	}
 }
