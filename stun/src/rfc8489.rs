@@ -1,5 +1,6 @@
 use std::net::SocketAddr;
-use std::str::Utf8Error;
+
+use bytes::Buf;
 
 use crate::StunAttrs;
 
@@ -22,18 +23,18 @@ pub struct Rfc8489<'i, N> {
 
 	next: N
 }
-pub enum Rfc8489Error<E> {
-	NonUtf8Username(Utf8Error),
-
-	Next(E)
-}
 impl<'i, N: StunAttrs<'i>> StunAttrs<'i> for Rfc8489<'i, N> {
-	type Error = Rfc8489Error<N::Error>;
-	fn decode_attr(&mut self, header: &[u8; 20], attr_prefix: &[u8], attr_typ: u16, value: &'i [u8]) -> Result<(), Self::Error> {
+	fn decode_attr(&mut self, header: &[u8; 20], attr_prefix: &[u8], attr_typ: u16, mut value: &'i [u8]) {
 		match attr_typ {
 			0x0001 /* MAPPED-ADDRESS */=> {}
 			_ if self.fingerprint => {}, // Ignore all attributes after the fingerprint
 			0x8028 /* FINGERPRINT */ => {
+
+				let actual = value.get_u32();
+				let mut expected = crc32fast::Hasher::new();
+				expected.update(header);
+				expected.update(attr_prefix);
+				let expected = expected ^ 0x5354554e;
 
 			}
 			_ if self.integrity => {}, // Ignore attributes after the integrity (except fingerprint)
@@ -41,7 +42,7 @@ impl<'i, N: StunAttrs<'i>> StunAttrs<'i> for Rfc8489<'i, N> {
 				self.username = std::str::from_utf8(value).map_err(Self::Error::NonUtf8Username)?;
 			}
 
-			_ => self.next.decode_attr(header, attr_prefix, attr_typ, value).map_err(Rfc8489Error::Next)?
+			_ => self.next.decode_attr(header, attr_prefix, attr_typ, value)
 		}
 		Ok(())
 	}

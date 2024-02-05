@@ -1,14 +1,15 @@
 use bytes::{Buf, BufMut};
 
 pub mod rfc8489;
+pub mod attr;
+pub mod attrs;
 #[doc(hidden)]
 pub mod temp;
 
 const MAGIC: u32 = 0x2112A442;
 
 pub trait StunAttrs<'i> {
-	type Error;
-	fn decode_attr(&mut self, header: &[u8; 20], attr_prefix: &[u8], attr_typ: u16, value: &'i [u8]) -> Result<(), Self::Error>;
+	fn decode_attr(&mut self, header: &[u8; 20], attr_prefix: &[u8], attr_typ: u16, value: &'i [u8]);
 }
 
 pub struct Stun<'i, A> {
@@ -48,7 +49,7 @@ impl<'i> Stun<'i, &'i [u8]> {
 	fn decode_length(&self) -> usize {
 		20 + self.attrs.len()
 	}
-	fn parse<A: StunAttrs<'i>>(self, mut attrs: A) -> Result<Stun<'i, A>, A::Error> {
+	fn parse<A: StunAttrs<'i>>(self, mut attrs: A) -> Stun<'i, A> {
 		let mut header = [0u8; 20];
 		{	// Prep the header
 			let mut header = header.as_mut_slice();
