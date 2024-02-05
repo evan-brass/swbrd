@@ -1,6 +1,8 @@
 use bytes::{Buf, BufMut};
 
 pub mod rfc8489;
+#[doc(hidden)]
+pub mod temp;
 
 const MAGIC: u32 = 0x2112A442;
 

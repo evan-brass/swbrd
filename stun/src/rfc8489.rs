@@ -1,4 +1,5 @@
 use std::net::SocketAddr;
+use std::str::Utf8Error;
 
 use crate::StunAttrs;
 
@@ -22,6 +23,8 @@ pub struct Rfc8489<'i, N> {
 	next: N
 }
 pub enum Rfc8489Error<E> {
+	NonUtf8Username(Utf8Error),
+
 	Next(E)
 }
 impl<'i, N: StunAttrs<'i>> StunAttrs<'i> for Rfc8489<'i, N> {
@@ -35,11 +38,10 @@ impl<'i, N: StunAttrs<'i>> StunAttrs<'i> for Rfc8489<'i, N> {
 			}
 			_ if self.integrity => {}, // Ignore attributes after the integrity (except fingerprint)
 			0x0006 /* USERNAME */ => {
-				self.username = std::str::from_utf8(value).unwrap_or_else(op);
+				self.username = std::str::from_utf8(value).map_err(Self::Error::NonUtf8Username)?;
 			}
-			todo!()
 
-			_ => return self.next.decode_attr(header, attr_prefix, attr_typ, value).map_err(Rfc8489Error::Next)
+			_ => self.next.decode_attr(header, attr_prefix, attr_typ, value).map_err(Rfc8489Error::Next)?
 		}
 		Ok(())
 	}
