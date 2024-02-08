@@ -6,13 +6,10 @@ pub mod attrs;
 
 const MAGIC: u32 = 0x2112A442;
 
-pub trait StunAttrs<'i> {
-	fn decode_attr(&mut self, header: &[u8; 20], attr_prefix: &[u8], attr_typ: u16, value: &'i [u8]);
-}
 
-pub struct Stun<'i, A> {
+pub struct Stun<T, A> {
 	pub typ: u16,
-	pub txid: &'i [u8; 12],
+	pub txid: T,
 	pub attrs: A
 }
 
@@ -21,6 +18,10 @@ pub enum StunDecodeError {
 	TypeOutOfRange,
 	UnalignedLength,
 	BadMagic,
+}
+
+impl<'i> Stun<&'i [u8; 12], > {
+
 }
 
 impl<'i> Stun<'i, &'i [u8]> {
