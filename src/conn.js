@@ -161,6 +161,10 @@ export class Conn extends RTCPeerConnection {
 	setLocalDescription() { throw new Error("Manual signaling disabled."); }
 	setRemoteDescription() { throw new Error("Manual signaling disabled."); }
 
+	// TODO: I haven't figured out how to satisfy Firefox when renegotiating to add media.  Sadly this means no audio/video support.
+	addTransceiver() { throw new Error("Renegotiating media is currently broken on Firefox"); }
+	addTrack() { throw new Error("Renegotiating media is currently broken on Firefox"); }
+
 	// Disable stuff:
 	addStream() { throw new Error("addStream is deprecated.") }
 	setIdentityProvider() { throw new Error("Firefox's identity stuff is disabled") }
