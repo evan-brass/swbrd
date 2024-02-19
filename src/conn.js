@@ -55,7 +55,7 @@ export class Conn extends RTCPeerConnection {
 	#config;
 	#dc = this.createDataChannel('', {negotiated: true, id: 0});
 	constructor(config = null) {
-		super({ ...default_configuration, ...config});
+		super({ ...default_configuration, ...config, peerIdentity: null });
 		this.#config = config;
 		this.#signaling_task();
 	}
@@ -161,12 +161,18 @@ export class Conn extends RTCPeerConnection {
 	setLocalDescription() { throw new Error("Manual signaling disabled."); }
 	setRemoteDescription() { throw new Error("Manual signaling disabled."); }
 
+	// Disable stuff:
+	addStream() { throw new Error("addStream is deprecated.") }
+	setIdentityProvider() { throw new Error("Firefox's identity stuff is disabled") }
+	getIdentityAssertion() { throw new Error("Firefox's identity stuff is disabled") }
+	get peerIdentity() { throw new Error("Firefox's identity stuff is disabled") }
+
 	// Generate a certificate with a sha-256 fingerprint as required by Id
 	static generateCertificate() {
 		return super.generateCertificate({ name: 'ECDSA', namedCurve: 'P-256', hash: 'SHA-256' });
 	}
 	// Add our default config even when using setConfiguration
 	setConfiguration(config = null) {
-		super.setConfiguration({ ...default_configuration, ...config });
+		super.setConfiguration({ ...default_configuration, ...config, peerIdentity: null });
 	}
 }
