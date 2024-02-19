@@ -82,6 +82,12 @@ export class Conn extends RTCPeerConnection {
 		const type = (this.signalingState == 'have-local-offer') ? 'answer' : 'offer';
 		return {type, sdp};
 	}
+	async #make_local(local_id) {
+		while (this.iceGatheringState != 'complete') await new Promise(res => this.addEventListener('icegatheringstatechange', res, {once: true}));
+		const local = new Sig({ id: local_id, ice_ufrag: this.#config?.ice_ufrag || '', ice_pwd: this.#config?.ice_pwd ?? '' });
+		local.add_sdp(this.localDescription.sdp);
+		this.#local_res(local);
+	}
 	async #signaling_task() {
 		const offer = await super.createOffer();
 		const local_id = Id.from_sdp(offer.sdp);
@@ -110,10 +116,7 @@ export class Conn extends RTCPeerConnection {
 		} catch {}})
 
 		// Spawn a task to deliver our local signaling message once icegathering completes
-		while (this.iceGatheringState != 'complete') await new Promise(res => this.addEventListener('icegatheringstatechange', res, {once: true}));
-		const local = new Sig({ id: local_id, ice_ufrag: this.#config?.ice_ufrag || '', ice_pwd: this.#config?.ice_pwd ?? '' });
-		local.add_sdp(this.localDescription.sdp);
-		this.#local_res(local);
+		this.#make_local(local_id);
 
 		// Finish the initial round of signaling
 		const remote = await this.#remote;
