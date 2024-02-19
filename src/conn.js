@@ -48,6 +48,7 @@ export class Sig {
 }
 
 export const default_configuration = {
+	bundlePolicy: 'max-bundle',
 	iceServers: [{urls: 'stun:global.stun.twilio.com'}]
 };
 export class Conn extends RTCPeerConnection {
@@ -67,21 +68,6 @@ export class Conn extends RTCPeerConnection {
 	#remote = new Promise(res => this.#remote_res = res);
 	set remote(remote_desc) { this.#remote_res(remote_desc); }
 
-	#desc(sig, polite) {
-		const sdp = [
-			'v=0',
-			'o=WebRTC-with-addresses 42 0 IN IP4 0.0.0.0',
-			's=-',
-			't=0 0',
-			'm=application 42 UDP/DTLS/SCTP webrtc-datachannel',
-			'c=IN IP4 0.0.0.0',
-			'a=sctp-port:5000',
-			...sig.sdp(polite),
-			''
-		].join('\n');
-		const type = (this.signalingState == 'have-local-offer') ? 'answer' : 'offer';
-		return {type, sdp};
-	}
 	async #make_local(local_id) {
 		while (this.iceGatheringState != 'complete') await new Promise(res => this.addEventListener('icegatheringstatechange', res, {once: true}));
 		const local = new Sig({ id: local_id, ice_ufrag: this.#config?.ice_ufrag || '', ice_pwd: this.#config?.ice_pwd ?? '' });
@@ -121,7 +107,22 @@ export class Conn extends RTCPeerConnection {
 		// Finish the initial round of signaling
 		const remote = await this.#remote;
 		const polite = local_id < remote.id;
-		await super.setRemoteDescription(this.#desc(remote, polite));
+		await super.setRemoteDescription({
+			type: 'answer',
+			sdp: [
+				'v=0',
+				'o=WebRTC-with-addresses 42 0 IN IP4 0.0.0.0',
+				's=-',
+				't=0 0',
+				'a=group:BUNDLE 0',
+				'm=application 42 UDP/DTLS/SCTP webrtc-datachannel',
+				'c=IN IP4 0.0.0.0',
+				'a=mid:0',
+				'a=sctp-port:5000',
+				...remote.sdp(polite),
+				''
+			].join('\n')
+		});
 
 		// Switchover into handling renegotiation
 		while (1) {
