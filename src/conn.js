@@ -1,89 +1,50 @@
-import { Id } from './id.js';
+import { cert as default_cert, idf } from './cert.js';
 
-export class Sig {
-	id;
-	candidates;
-	// ice_pwd;
-	// ice_ufrag;
-	// setup;
-	// ice_lite;
-	constructor() { Object.assign(this, ...arguments); }
-	*sdp(polite) {
-		yield* this.id.sdp();
-		const ice_ufrag = this.ice_ufrag || String(this.id);
-		yield 'a=ice-ufrag:' + ice_ufrag;
-		const ice_pwd = this.ice_pwd || 'the/ice/password/constant';
-		yield 'a=ice-pwd:' + ice_pwd;
-		if (this.ice_lite) yield 'a=ice-lite';
-		for (let i = 0; i < this.candidates.length; ++i) {
-			const candidate = this.candidates[i];
-			if (typeof candidate == 'string') yield 'a=candidate:' + candidate;
-			else if (typeof candidate == 'object') {
-				const {
-					foundation = 'foundation',
-					component = '1',
-					transport = 'udp',
-					priority = this.candidates.length - i,
-					address,
-					port = 3478,
-					type = 'host'
-				} = candidate;
-				yield `a=candidate:${foundation} ${component} ${transport} ${priority} ${address} ${port} typ ${type}`;
-			}
-		}
-		const setup = this.setup ?? (polite ? 'passive' : 'active');
-		yield 'a=setup:' + setup;
-	}
-	add_sdp(sdp) {
-		this.id ??= Id.from_sdp(sdp);
-		this.ice_ufrag ??= /^a=ice-ufrag:(.+)/im.exec(sdp)[1];
-		this.ice_pwd ??= /^a=ice-pwd:(.+)/im.exec(sdp)[1];
-		this.candidates ??= Array.from(
-			sdp.matchAll(/^a=candidate:([^ ]+) ([0-9]+) (udp) ([0-9]+) ([^ ]+) ([0-9]+) typ (host|srflx|relay)/img),
-			([_fm, foundation, component, transport, priority, address, port, type]) => {
-				return {priority: parseInt(priority), address, port: parseInt(port), type}
-			}
-		);
-	}
-}
-
-export const default_configuration = {
-	bundlePolicy: 'max-bundle',
+export const defaults = {
 	iceServers: [{urls: 'stun:global.stun.twilio.com'}]
 };
+
 export class Conn extends RTCPeerConnection {
-	#config;
 	#dc = this.createDataChannel('', {negotiated: true, id: 0});
-	constructor(config = null) {
-		super({ ...default_configuration, ...config, peerIdentity: null });
-		this.#config = config;
-		this.#signaling_task();
+	constructor(peerid, config = null) {
+		peerid = BigInt(peerid);
+		const cert = config?.cert ?? default_cert;
+
+		super({
+			...defaults,
+			...config,
+			certificates: [cert],
+			bundlePolicy: 'max-bundle',
+			rtcpMuxPolicy: 'require',
+			peerIdentity: null,
+		});
+
+		const polite = BigInt(cert) < peerid;
+		const {
+			setup,
+			ice_lite,
+			ice_pwd,
+			candidates
+		} = config ?? {};
+
+		this.#signaling_task({
+			cert, polite, peerid,
+			setup, ice_lite, ice_pwd, candidates
+		}).catch(() => this.close());
+	}
+	static async generateCertificate() {
+		return await super.generateCertificate({ name: 'ECDSA', namedCurve: 'P-256' });
 	}
 
-	#local_res;
-	#local = new Promise(res => this.#local_res = res);
-	get local() { return this.#local; }
-	
-	#remote_res;
-	#remote = new Promise(res => this.#remote_res = res);
-	set remote(remote_desc) { this.#remote_res(remote_desc); }
-
-	async #make_local(local_id) {
-		while (this.iceGatheringState != 'complete') await new Promise(res => this.addEventListener('icegatheringstatechange', res, {once: true}));
-		const local = new Sig({ id: local_id, ice_ufrag: this.#config?.ice_ufrag || '', ice_pwd: this.#config?.ice_pwd ?? '' });
-		local.add_sdp(this.localDescription.sdp);
-		this.#local_res(local);
+	async addIceCandidate(candidate) {
+		candidate.sdpMid ??= 'dc';
+		return await super.addIceCandidate(candidate);
 	}
-	async #signaling_task() {
-		const offer = await super.createOffer();
-		const local_id = Id.from_sdp(offer.sdp);
-		
-		// Mung the offer
-		offer.sdp = offer.sdp.replace(/^a=ice-ufrag:(.+)/im, `a=ice-ufrag:${this.#config?.ice_ufrag || local_id}`);
-		offer.sdp = offer.sdp.replace(/^a=ice-pwd:(.+)/im, `a=ice-pwd:${this.#config?.ice_pwd || 'the/ice/password/constant'}`);
-		
-		await super.setLocalDescription(offer);
-		// TODO: If browsers remove the ability to mung ice credentials then we'll need to add a fallback.
+
+	async #signaling_task(/* Session: */ { cert, peerid, polite, setup, ice_lite, ice_pwd, candidates }) {
+		ice_pwd ||= 'the/ice/password/constant';
+		setup ||= polite ? 'active' : 'passive';
+		candidates ||= [];
 
 		// Prepare for renegotiation
 		let negotiation_needed = false; this.addEventListener('negotiationneeded', () => negotiation_needed = true);
@@ -101,28 +62,37 @@ export class Conn extends RTCPeerConnection {
 			if (description) remote_desc = description;
 		} catch {}})
 
-		// Spawn a task to deliver our local signaling message once icegathering completes
-		this.#make_local(local_id);
+		// First pass of signaling
+		const fingerprint = idf.fingerprint(peerid);
+		const ice_ufrag = idf.toString(peerid).padStart(6, '0');
+		await super.setRemoteDescription({ type: 'offer', sdp: [
+			'v=0',
+			'o=swbrd 42 0 IN IP4 0.0.0.0',
+			's=-',
+			't=0 0',
+			'a=group:BUNDLE dc',
+			`a=fingerprint:${fingerprint}`,
+			`a=ice-ufrag:${ice_ufrag}`,
+			`a=ice-pwd:${ice_pwd}`,
+			'a=ice-options:trickle',
+			...(ice_lite != undefined ? ['a=ice-lite'] : []),
+			'm=application 42 UDP/DTLS/SCTP webrtc-datachannel',
+			'c=IN IP4 0.0.0.0',
+			'a=mid:dc',
+			`a=setup:${setup}`,
+			'a=sctp-port:5000',
+			''
+		].join('\n') });
+		const answer = await super.createAnswer();
+		answer.sdp = answer.sdp
+			.replace(/^a=ice-ufrag:.+/im, `a=ice-ufrag:${idf.toString(cert)}`)
+			.replace(/^a=ice-pwd:.+/im, `a=ice-pwd:${ice_pwd}`);
+		await super.setLocalDescription(answer);
 
-		// Finish the initial round of signaling
-		const remote = await this.#remote;
-		const polite = local_id < remote.id;
-		await super.setRemoteDescription({
-			type: 'answer',
-			sdp: [
-				'v=0',
-				'o=WebRTC-with-addresses 42 0 IN IP4 0.0.0.0',
-				's=-',
-				't=0 0',
-				'a=group:BUNDLE 0',
-				'm=application 42 UDP/DTLS/SCTP webrtc-datachannel',
-				'c=IN IP4 0.0.0.0',
-				'a=mid:0',
-				'a=sctp-port:5000',
-				...remote.sdp(polite),
-				''
-			].join('\n')
-		});
+		// Add any initial candidates
+		for (const candidate of candidates) {
+			await this.addIceCandidate(candidate);
+		}
 
 		// Switchover into handling renegotiation
 		while (1) {
@@ -155,28 +125,27 @@ export class Conn extends RTCPeerConnection {
 		}
 	}
 
-	// Disable manual signaling because we provide automatic renegotiation over #dc
-	createOffer() { throw new Error("Manual signaling disabled."); }
-	createAnswer() { throw new Error("Manual signaling disabled."); }
-	setLocalDescription() { throw new Error("Manual signaling disabled."); }
-	setRemoteDescription() { throw new Error("Manual signaling disabled."); }
+	// Disable manual signaling:
+	createOffer() { throw new Error("Manual signaling is disabled on Conn"); }
+	createAnswer() { throw new Error("Manual signaling is disabled on Conn"); }
+	setLocalDescription() { throw new Error("Manual signaling is disabled on Conn"); }
+	setRemoteDescription() { throw new Error("Manual signaling is disabled on Conn"); }
 
-	// TODO: I haven't figured out how to satisfy Firefox when renegotiating to add media.  Sadly this means no audio/video support.
-	addTransceiver() { throw new Error("Renegotiating media is currently broken on Firefox"); }
-	addTrack() { throw new Error("Renegotiating media is currently broken on Firefox"); }
-
-	// Disable stuff:
-	addStream() { throw new Error("addStream is deprecated.") }
-	setIdentityProvider() { throw new Error("Firefox's identity stuff is disabled") }
-	getIdentityAssertion() { throw new Error("Firefox's identity stuff is disabled") }
-	get peerIdentity() { throw new Error("Firefox's identity stuff is disabled") }
-
-	// Generate a certificate with a sha-256 fingerprint as required by Id
-	static generateCertificate() {
-		return super.generateCertificate({ name: 'ECDSA', namedCurve: 'P-256', hash: 'SHA-256' });
-	}
-	// Add our default config even when using setConfiguration
+	// Re-provide defaults when calling setConfiguration
 	setConfiguration(config = null) {
-		super.setConfiguration({ ...default_configuration, ...config, peerIdentity: null });
+		super.setConfiguration({
+			...defaults,
+			...config,
+			bundlePolicy: 'max-bundle',
+			rtcpMuxPolicy: 'require',
+			peerIdentity: null,
+		});
 	}
+
+	// Disable things:
+	addStream() { throw new Error("addStream is deprecated") }
+	removeStream() { throw new Error("removeStream is deprecated") }
+	getIdentityAssertion() { throw new Error("Identity assertions are disabled on Conn") }
+	setIdentityProvider() { throw new Error("Identity assertions are disabled on Conn") }
+	get peerIdentity() { throw new Error("Identity assertions are disabled on Conn") }
 }

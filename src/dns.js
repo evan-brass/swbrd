@@ -2,10 +2,7 @@ const encoder = new TextEncoder();
 const decoder = new TextDecoder('utf-8');
 
 /**
- * Use DNS over HTTPS (DoH) to find the Id for an address that doesn't contain a username.  We query the TXT entries for hostname
- * looking for any that start with "swbrd=".  We attempt to create an Id from these, returning the first Id that succeeds.
- * @param {string} hostname - The domain name to query
- * @param {number} query_bufflen - The size of buffer we'll allocate to encode the DNS Message
+ * Look through the TXT entries of a hostname to find entries that start with a given prefix.
  */
 export async function* query_txt(hostname, {
 	query_bufflen = 512,
