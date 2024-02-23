@@ -3,18 +3,19 @@ import { base58 } from './base58.js';
 export const idf = new class IdFingerprint {
 	algorithm;
 	bytes;
+	get bits() { return this.bytes * 8; }
+	get pad_len() { return Math.ceil(this.bits / Math.log2(58)); }
 	constructor() { Object.assign(this, ...arguments); }
-	[Symbol.toPrimitive](hint) {
-		if (hint == 'number') return 8 * this.bytes;
-		else return this.algorithm;
+	[Symbol.toPrimitive](_hint) {
+		return this.algorithm;
 	}
 	toString(id) {
-		return base58(BigInt(id));
+		return base58(BigInt(id)).padStart(this.pad_len, '0');
 	}
 	fromString(s) {
-		let ret = base58(String(s));
-		if (ret) ret = BigInt.asUintN(Number(this), ret);
-		return ret;
+		s = String(s);
+		if (s.length != this.pad_len) return;
+		return BigInt.asUintN(this.bits, base58(s));
 	}
 	fingerprint(id) {
 		return `${this.algorithm} ${BigInt(id).toString(16).padStart(2 * this.bytes, '0').replace(/[0-9a-f]{2}/ig, ':$&').slice(1)}`;
@@ -56,7 +57,7 @@ export class Cert extends RTCCertificate {
 		if (!fingerprint) return;
 
 		ret.id = BigInt.asUintN(
-			Number(idf),
+			idf.bits,
 			BigInt('0x' + fingerprint.split(':').join(''))
 		);
 		Object.freeze(ret);
