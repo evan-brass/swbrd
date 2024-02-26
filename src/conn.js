@@ -6,6 +6,7 @@ export const defaults = {
 
 export class Conn extends RTCPeerConnection {
 	#dc = this.createDataChannel('', {negotiated: true, id: 0});
+	#candidates = [];
 	constructor(peerid, config = null) {
 		peerid = BigInt(peerid);
 		const cert = config?.cert ?? default_cert;
@@ -19,17 +20,18 @@ export class Conn extends RTCPeerConnection {
 			peerIdentity: null,
 		});
 
+		this.#candidates.push(...(config?.candidates ?? []));
+
 		const polite = BigInt(cert) < peerid;
 		const {
 			setup,
 			ice_lite,
 			ice_pwd,
-			candidates
 		} = config ?? {};
 
 		this.#signaling_task({
 			cert, polite, peerid,
-			setup, ice_lite, ice_pwd, candidates
+			setup, ice_lite, ice_pwd
 		}).catch(() => this.close());
 	}
 	static async generateCertificate() {
@@ -38,13 +40,16 @@ export class Conn extends RTCPeerConnection {
 
 	async addIceCandidate(candidate) {
 		candidate.sdpMid ??= 'dc';
-		return await super.addIceCandidate(candidate);
+		if (Array.isArray(this.#candidates)) {
+			this.#candidates.push(candidate);
+		} else {
+			return await super.addIceCandidate(candidate);
+		}
 	}
 
-	async #signaling_task(/* Session: */ { cert, peerid, polite, setup, ice_lite, ice_pwd, candidates }) {
+	async #signaling_task(/* Session: */ { cert, peerid, polite, setup, ice_lite, ice_pwd }) {
 		ice_pwd ||= 'the/ice/password/constant';
 		setup ||= polite ? 'active' : 'passive';
-		candidates ||= [];
 
 		// Prepare for renegotiation
 		let negotiation_needed = false; this.addEventListener('negotiationneeded', () => negotiation_needed = true);
@@ -89,10 +94,12 @@ export class Conn extends RTCPeerConnection {
 			.replace(/^a=ice-pwd:.+/im, `a=ice-pwd:${ice_pwd}`);
 		await super.setLocalDescription(answer);
 
-		// Add any initial candidates
-		for (const candidate of candidates) {
-			await this.addIceCandidate(candidate);
+		// Add any initial candidates that we delayed delivering until after initial offer/answer
+		let candidate;
+		while (candidate = this.#candidates.shift()) {
+			await super.addIceCandidate(candidate);
 		}
+		this.#candidates = false;
 
 		// Switchover into handling renegotiation
 		while (1) {
