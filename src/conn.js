@@ -6,7 +6,7 @@ export const defaults = {
 
 export class Conn extends RTCPeerConnection {
 	#dc = this.createDataChannel('', {negotiated: true, id: 0});
-	#candidates = [];
+	#first_signaling;
 	constructor(peerid, config = null) {
 		peerid = BigInt(peerid);
 		const cert = config?.cert ?? default_cert;
@@ -20,6 +20,9 @@ export class Conn extends RTCPeerConnection {
 			peerIdentity: null,
 		});
 
+		let first_signaling_res;
+		this.#first_signaling = new Promise(res => first_signaling_res = res);
+
 		const polite = BigInt(cert) < peerid;
 		const {
 			setup,
@@ -29,7 +32,8 @@ export class Conn extends RTCPeerConnection {
 
 		this.#signaling_task({
 			cert, polite, peerid,
-			setup, ice_lite, ice_pwd
+			setup, ice_lite, ice_pwd,
+			first_signaling_res
 		}).catch(() => this.close());
 	}
 	static async generateCertificate() {
@@ -38,14 +42,11 @@ export class Conn extends RTCPeerConnection {
 
 	async addIceCandidate(candidate) {
 		candidate.sdpMid ??= 'dc';
-		if (Array.isArray(this.#candidates)) {
-			this.#candidates.push(candidate);
-		} else {
-			return await super.addIceCandidate(candidate);
-		}
+		await this.#first_signaling;
+		return await super.addIceCandidate(candidate);
 	}
 
-	async #signaling_task(/* Session: */ { cert, peerid, polite, setup, ice_lite, ice_pwd }) {
+	async #signaling_task(/* Session: */ { cert, peerid, polite, setup, ice_lite, ice_pwd, first_signaling_res }) {
 		ice_pwd ||= 'the/ice/password/constant';
 		setup ||= polite ? 'active' : 'passive';
 
@@ -92,12 +93,7 @@ export class Conn extends RTCPeerConnection {
 			.replace(/^a=ice-pwd:.+/im, `a=ice-pwd:${ice_pwd}`);
 		await super.setLocalDescription(answer);
 
-		// Add any initial candidates that we delayed delivering until after initial offer/answer
-		let candidate;
-		while ((candidate = this.#candidates.shift())) {
-			await super.addIceCandidate(candidate);
-		}
-		this.#candidates = false;
+		first_signaling_res();
 
 		// Switchover into handling renegotiation
 		while (1) {
