@@ -20,8 +20,6 @@ export class Conn extends RTCPeerConnection {
 			peerIdentity: null,
 		});
 
-		this.#candidates.push(...(config?.candidates ?? []));
-
 		const polite = BigInt(cert) < peerid;
 		const {
 			setup,
@@ -96,7 +94,7 @@ export class Conn extends RTCPeerConnection {
 
 		// Add any initial candidates that we delayed delivering until after initial offer/answer
 		let candidate;
-		while (candidate = this.#candidates.shift()) {
+		while ((candidate = this.#candidates.shift())) {
 			await super.addIceCandidate(candidate);
 		}
 		this.#candidates = false;

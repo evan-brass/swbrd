@@ -45,35 +45,33 @@ export class Addr extends URL {
 		const {hostname, port, username, password: ice_pwd} = this.#authority();
 		this.#id ??= idf.fromString(username);
 		if (!this.#id) return;
-		const candidates = this.searchParams.getAll('candidate').map(s => {
-			s = decodeURIComponent(s);
-			try { return JSON.parse(s); }
-			catch { return s; }
-		});
 		let setup = this.searchParams.get('setup');
 		let ice_lite = this.searchParams.get('ice_lite');
 
+		// Configure connection parameters
 		if (/^udp:/i.test(this.protocol)) {
-			candidates.push({
-				candidate: `candidate:foundation 1 udp 42 ${hostname} ${port} typ host`
-			});
 			setup ??= 'passive';
-			ice_lite ??= true;
-		}
-		else if (/^turns?:/i.test(this.protocol)) {
-			if (candidates.length < 1) candidates.push({
-				candidate: `candidate:foundation 1 udp 42 255.255.255.255 3478 typ relay`
-			});
-		}
+			ice_lite ??= true;		}
 
 		const ret = new Conn(this.#id, {
 			setup,
 			ice_lite,
 			ice_pwd,
-			candidates,
 			...config,
 			...this.config()
 		});
+
+		// Add ice candidates
+		for (const candidate of this.searchParams.getAll('candidate').map(s => {
+			s = decodeURIComponent(s);
+			try { return JSON.parse(s); }
+			catch { return s; }
+		})) {
+			ret.addIceCandidate(candidate);
+		}
+		if (/^udp:/i.test(this.protocol)) {
+			ret.addIceCandidate({ candidate: `candidate:foundation 1 udp 42 ${hostname} ${port} typ host` });
+		}
 
 		return ret;
 	}
