@@ -28,8 +28,8 @@ export class Addr extends URL {
 	config() {
 		if (/^turns?:/i.test(this.protocol)) {
 			const {host} = this.#authority();
-			let transport = this.searchParams.get('turn_transport') || 'tcp';
-			transport = (transport == 'udp') ? '' : '?transport=' + transport;
+			let transport = this.searchParams.get('turn_transport') || 'udp';
+			transport = transport ? '' : '?transport=' + transport;
 			return {
 				iceTransportPolicy: 'relay',
 				iceServers: [{
