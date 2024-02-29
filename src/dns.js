@@ -10,6 +10,7 @@ export async function* query_txt(hostname, {
 	doh_address = 'https://cloudflare-dns.com/dns-query',
 	// Alternative DoH address:
 	// doh_address = 'https://corsproxy.io/?' + encodeURIComponent('https://dns.google/dns-query')
+	// doh_address = 'https://corsproxy.io/?' + encodeURIComponent('https://doh.opendns.com/dns-query')
 } = {}) {
 	const labels = hostname.split('.');
 	if (labels.indexOf('') !== -1) return; // Error: Internal Null label
