@@ -11,16 +11,16 @@ export function parse_ipaddr(s) {
 	let v4 = parse_ipv4(s);
 	if (v4) return v4;
 	const parts = s.split(':');
-	const ret = new Uint8Array(16);
-	const retv = new DataView(ret.buffer, ret.byteOffset, ret.byteLength);
+	const ret = new Uint16Array(8);
 	if (s.startsWith('::')) parts.splice(0, 1); // Collapse dual empty strings
 	// Check if the last part is an ipv4:
 	let needed = 8;
 	v4 = parse_ipv4(parts[parts.length - 1]);
 	if (v4) {
 		parts.pop();
-		ret.set(v4, 12);
-		needed = 6;
+		ret[6] = v4[0] << 8 | v4[1];
+		ret[7] = v4[2] << 8 | v4[3];
+		needed = 4;
 	}
 
 	// Handle `::`
@@ -30,16 +30,14 @@ export function parse_ipaddr(s) {
 	while (parts.length < needed) parts.splice(ind, 0, '0');
 
 	const nums = parts.map(s => parseInt(s, 16));
-	if (nums.every(n => n >= 0 && n < 2 ** 16)) {
-		for (let i = 0; i < needed; ++i) {
-			retv.setUint16(2 * i, nums[i]);
-		}
+	if (nums.some(n => n < 0 || n >= 2 ** 16)) return;
 
-		// Check for ipv4 mapped addresses:
-		if ([0, 0, 0, 0, 0, 0xffff].every((v, i) => nums[i] == v)) {
-			return new Uint8Array(ret.buffer, ret.byteOffset + 12, 4);
-		}
+	ret.set(nums);
 
-		return ret;
+	// Check for ipv4 mapped addresses:
+	if ([0, 0, 0, 0, 0, 0xffff].every((v, i) => ret[i] == v)) {
+		return new Uint8Array([ret[6] >> 8, ret[6] & 0xFF, ret[7] >> 8, ret[7] & 0xFF]);
 	}
+
+	return ret;
 }
