@@ -70,7 +70,7 @@ export class Addr extends URL {
 			ret.addIceCandidate(candidate);
 		}
 		if (/^udp:/i.test(this.protocol)) {
-			ret.addIceCandidate({ candidate: `candidate:foundation 1 udp 42 ${hostname} ${port} typ host` });
+			ret.addIceCandidate({ candidate: `candidate:foundation 1 udp 42 ${hostname.replaceAll(/[\[\]]/g, '')} ${port} typ host` });
 		}
 
 		return ret;
