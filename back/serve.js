@@ -8,7 +8,7 @@ Deno.serve(req => serveDir(req, {
 	showDirListing: true
 }));
 
-for await (const [packet, addr] of Deno.listenDatagram({ transport: 'udp', hostname: '::1', port: 3478 })) {
+for await (const [packet, addr] of Deno.listenDatagram({ transport: 'udp', hostname: '::', port: 3478 })) {
 	const ip = parse_ipaddr(addr.hostname);
 	if (packet.byteLength < 20) continue;
 	const msg = new Stun(packet.buffer, packet.byteOffset, packet.byteLength);
