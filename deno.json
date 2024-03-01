@@ -1,0 +1,11 @@
+{
+	"imports": {
+		"@std/": "https://deno.land/std@0.218.0/"
+	},
+	"fmt": {
+		"useTabs": true
+	},
+	"tasks": {
+		"dev": "deno run --watch --allow-net --allow-read --unstable-net back/serve.js"
+	}
+}
