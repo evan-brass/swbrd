@@ -1,6 +1,9 @@
+import { crc32 } from "./crc32.js";
+
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 
+export const Magic = 0x2112A442;
 
 export const Class = {
 	request: 0b00,
@@ -23,6 +26,17 @@ export const known = new Map();
 known.set(0x0006, function username(buffer) {
 	return decoder.decode(buffer);
 });
+
+export class Attr extends DataView {
+	#msg;
+	constructor(msg, i, len) {
+		super(msg.buffer, msg.byteOffset + i, len);
+		this.#msg = msg;
+	}
+	get prefix() {
+		return new Uint8Array(this.buffer, this.#msg.byteOffset, this.byteOffset - this.#msg.byteOffset - 4);
+	}
+}
 
 export class Stun extends DataView {
 	// Getters
@@ -69,24 +83,41 @@ export class Stun extends DataView {
 	get txid() {
 		return new Uint8Array(this.buffer, this.byteOffset + 4, 16);
 	}
-	#attrs;
-	get attrs() {
-		if (!this.#attrs) {
-			this.#attrs = new Map();
-			let end = Math.min(20 + this.length, this.byteLength);
-			while (end % 4 != 0) end -= 1;
-	
-			for (let i = 20; i < end;) {
-				const attr_typ = this.getUint16(i);
-				const attr_len = this.getUint16(i + 2);
-				i += 4;
-				const value = new Uint8Array(this.buffer, this.byteOffset + i, Math.min(end - i, attr_len));
-				i += attr_len;
-				while (i % 4 != 0) i += 1;
-	
-				this.#attrs.set(attr_typ, value);
+	*[Symbol.iterator]() {
+		let end = Math.min(20 + this.length, this.byteLength);
+		while (end % 4 != 0) end -= 1;
+
+		for (let i = 20; i < end;) {
+			const attr_typ = this.getUint16(i);
+			const attr_len = this.getUint16(i + 2);
+			if (attr_len > end - i) break;
+			i += 4;
+			const value = new Attr(this, i, attr_len);
+			i += attr_len;
+			while (i % 4 != 0) i += 1;
+
+			// Modify the length as we go
+			this.length = i - 20;
+
+			yield { type: attr_typ, value };
+		}
+	}
+	add_attr(type, len) {
+
+	}
+	get fingerprint() {
+		for (const {type, value} of this) {
+			if (type == 0x8028) {
+				const actual = value.getInt32(0);
+				const expected = crc32(value.prefix) ^ 0x5354554e;
+
+				return actual === expected;
 			}
 		}
-		return this.#attrs;
+		return undefined;
+	}
+	set fingerprint(_) {
+		const value = this.add_attr(0x8028, 4);
+		
 	}
 }

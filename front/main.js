@@ -1,8 +1,8 @@
 import { Conn, Cert, Addr } from '../src/index.js';
 
-console.log(await new Addr('udp:seed.evan-brass.net').resolve_id());
+// console.log(await new Addr('udp:seed.evan-brass.net').resolve_id());
 
-const c = new Addr('udp:AC2ZoeeWTZAyFrpZAczuqRpQQ9vyKebnnAvTocdZyzeD@[::1]').connect();
+const c = new Addr('udp:AC2ZoeeWTZAyFrpZAczuqRpQQ9vyKebnnAvTocdZyzeD@local.evan-brass.net').connect();
 console.log(c);
 
 // const certa = await Cert.generate();

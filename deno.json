@@ -6,6 +6,6 @@
 		"useTabs": true
 	},
 	"tasks": {
-		"dev": "deno run --watch --allow-net --allow-read --unstable-net back/serve.js"
+		"dev": "deno run --inspect --watch --allow-net --allow-read --unstable-net back/serve.js"
 	}
 }
