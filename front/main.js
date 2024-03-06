@@ -2,7 +2,7 @@ import { Conn, Cert, Addr } from '../src/index.js';
 
 // console.log(await new Addr('udp:seed.evan-brass.net').resolve_id());
 
-const c = new Addr('udp:AC2ZoeeWTZAyFrpZAczuqRpQQ9vyKebnnAvTocdZyzeD@local.evan-brass.net').connect();
+const c = new Addr('turn:AC2ZoeeWTZAyFrpZAczuqRpQQ9vyKebnnAvTocdZyzeD@local.evan-brass.net').connect();
 console.log(c);
 
 // const certa = await Cert.generate();

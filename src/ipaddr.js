@@ -20,7 +20,7 @@ export function parse_ipaddr(s) {
 		parts.pop();
 		ret[6] = v4[0] << 8 | v4[1];
 		ret[7] = v4[2] << 8 | v4[3];
-		needed = 4;
+		needed = 6;
 	}
 
 	// Handle `::`
