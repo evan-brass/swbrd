@@ -244,7 +244,7 @@ export class Stun extends DataView {
 	set software(value) { this.set_txt(0x8022, value); }
 	get fingerprint() {
 		const attr = this.attrs.get(0x8028);
-		if (attr.length != 4) return false;
+		if (attr?.length != 4) return false;
 
 		const save = this.getUint16(2);
 		this.setUint16(2, attr.parent_length);

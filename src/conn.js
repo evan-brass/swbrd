@@ -41,7 +41,7 @@ export class Conn extends RTCPeerConnection {
 	}
 
 	async addIceCandidate(candidate) {
-		candidate.sdpMid ??= 'dc';
+		if (candidate) candidate.sdpMid ??= 'dc';
 		await this.#first_signaling;
 		return await super.addIceCandidate(candidate);
 	}
