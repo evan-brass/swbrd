@@ -51,7 +51,8 @@ export class Addr extends URL {
 		// Configure connection parameters
 		if (/^udp:/i.test(this.protocol)) {
 			setup ??= 'passive';
-			ice_lite ??= true;		}
+			ice_lite ??= true;
+		}
 
 		const ret = new Conn(this.#id, {
 			setup,

@@ -1,8 +1,8 @@
-import { Stun, Class, Method } from '../src/stun.js';
+import { Stun, Class, Method, encoder } from '../src/stun.js';
 import { assertEquals } from '@std/assert/mod.ts';
 
 // RFC 5769
-Deno.test(function vector1() {
+Deno.test(async function vector1() {
 	const test = new Stun(
 		new Uint8Array([
 			0x00, 0x01, 0x00, 0x58,
@@ -39,9 +39,11 @@ Deno.test(function vector1() {
 	assertEquals(test.magic, true, 'STUN magic');
 	assertEquals(test.software, 'STUN test client', 'ATTR software');
 	assertEquals(test.username, 'evtj:h6vY', 'ATTR username');
+	const key = await crypto.subtle.importKey('raw', encoder.encode('VOkJxbRl1RmTxUk/WvJxBt'), { name: 'HMAC', hash: 'SHA-1' }, true, ['verify']);
+	assertEquals(await test.verify(key), true, 'ATTR integrity');
 	assertEquals(test.fingerprint, true, 'STUN fingerprint attribute');
 });
-Deno.test(function vector2() {
+Deno.test(async function vector2() {
 	const test = new Stun(
 		new Uint8Array([
 			0x01, 0x01, 0x00, 0x3c,
@@ -71,9 +73,11 @@ Deno.test(function vector2() {
 	assertEquals(test.software, 'test vector', 'ATTR software');
 	assertEquals(test.xmapped.hostname, '192.0.2.1', 'ATTR xmapped hostname');
 	assertEquals(test.xmapped.port, 32853, 'ATTR xmapped port');
+	const key = await crypto.subtle.importKey('raw', encoder.encode('VOkJxbRl1RmTxUk/WvJxBt'), { name: 'HMAC', hash: 'SHA-1' }, true, ['verify']);
+	assertEquals(await test.verify(key), true, 'ATTR integrity');
 	assertEquals(test.fingerprint, true, 'ATTR fingerprint');
 });
-Deno.test(function vector3() {
+Deno.test(async function vector3() {
 	const test = new Stun(
 		new Uint8Array([
 			0x01, 0x01, 0x00, 0x48,
@@ -106,5 +110,7 @@ Deno.test(function vector3() {
 	assertEquals(test.software, 'test vector', 'ATTR software');
 	assertEquals(test.xmapped.hostname, '2001:db8:1234:5678:11:2233:4455:6677', 'ATTR xmapped hostname');
 	assertEquals(test.xmapped.port, 32853, 'ATTR xmapped port');
+	const key = await crypto.subtle.importKey('raw', encoder.encode('VOkJxbRl1RmTxUk/WvJxBt'), { name: 'HMAC', hash: 'SHA-1' }, true, ['verify']);
+	assertEquals(await test.verify(key), true, 'ATTR integrity');
 	assertEquals(test.fingerprint, true, 'ATTR fingerprint');
 });

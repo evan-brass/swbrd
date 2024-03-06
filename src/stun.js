@@ -45,6 +45,9 @@ export class Attr extends DataView {
 		this.#parent.length = (this.byteOffset - this.#parent.byteOffset - 20 + value);
 		this.#header.setUint16(2, value);
 	}
+	get parent_length() {
+		return this.byteOffset - this.#parent.byteOffset - 20 + this.length;
+	}
 	get prefix() {
 		return new Uint8Array(this.buffer, this.#parent.byteOffset, this.byteOffset - this.#parent.byteOffset - 4);
 	}
@@ -143,7 +146,7 @@ export class Stun extends DataView {
 		attr.length = buff.byteLength;
 		attr.bytes.set(buff);
 	}
-	get_addr(type, { transport = 'udp', xor = true } = {}) {
+	get_addr(type, { transport = 'udp', xor = true, ipv4_mapped = true } = {}) {
 		const attr = this.attrs.get(type);
 		if (!attr) return;
 		if (attr.length < 4) return;
@@ -153,7 +156,7 @@ export class Stun extends DataView {
 		// IPv4
 		if (family == 0x01) {
 			if (attr.length != 8) return;
-			hostname = Array.from({length: 4}, (_, i) => attr.getUint8(4 + i) ^ (xor ? this.getUint8(4 + i) : 0))
+			hostname = (ipv4_mapped ? '::ffff:' : '') + Array.from({length: 4}, (_, i) => attr.getUint8(4 + i) ^ (xor ? this.getUint8(4 + i) : 0))
 				.join('.');
 		}
 		// IPv6
@@ -205,12 +208,36 @@ export class Stun extends DataView {
 		attr.setUint8(2, Math.trunc(value / 100));
 		attr.setUint8(3, value % 100);
 	}
+	get lifetime() {
+		const attr = this.attrs.get(0x000D);
+		if (attr?.length != 4) return undefined;
+		return attr.getUint32(0);
+	}
+	set lifetime(value) {
+		const attr = this.new_attr();
+		attr.type = 0x000D;
+		attr.length = 4;
+		attr.setUint32(0, value);
+	}
+	get xpeer() { return this.get_addr(0x0012); }
+	set xpeer(value) { this.set_addr(0x0012, value); }
+	get data() {
+		const attr = this.attrs.get(0x0013);
+		if (!attr) return undefined;
+		return attr.bytes;
+	}
+	set data(value) {
+		const attr = this.new_attr(0x0013);
+		attr.type = 0x0013;
+		attr.length = value.byteLength;
+		attr.bytes.set(new Uint8Array(value.buffer ?? value, value.byteOffset, value.byteLength));
+	}
 	get realm() { return this.get_txt(0x0014); }
 	set realm(value) { this.set_txt(0x0014, value); }
 	get nonce() { return this.get_txt(0x0015); }
 	set nonce(value) { this.set_txt(0x0015, value); }
-	get xpeer() { return this.get_addr(0x0012); }
-	set xpeer(value) { this.set_addr(0x0012, value); }
+	get xrelayed() { return this.get_addr(0x0016); }
+	set xrelayed(value) { this.set_addr(0x0016, value); }
 	get xmapped() { return this.get_addr(0x0020); }
 	set xmapped(value) { this.set_addr(0x0020, value); }
 	get software() { return this.get_txt(0x8022); }
@@ -218,16 +245,59 @@ export class Stun extends DataView {
 	get fingerprint() {
 		const attr = this.attrs.get(0x8028);
 		if (attr.length != 4) return false;
+
+		const save = this.getUint16(2);
+		this.setUint16(2, attr.parent_length);
 		
 		const actual = attr.getInt32(0);
 		const expected = crc32(attr.prefix) ^ 0x5354554e;
 
+		this.setUint16(2, save);
+
 		return actual === expected;
 	}
 	set fingerprint(_) {
-		const a = this.new_attr();
-		a.type = 0x8028;
-		a.length = 4;
-		a.setInt32(crc32(a.prefix) ^ 0x5354554e);
+		const attr = this.new_attr();
+		attr.type = 0x8028;
+		attr.length = 4;
+		attr.setInt32(0, crc32(attr.prefix) ^ 0x5354554e);
+	}
+
+	async verify(key) {
+		let type;
+		if (key.algorithm.hash.name == 'SHA-1') {
+			type = 0x0008;
+		}
+		else if (key.algorithm.hash.name == 'SHA-256') {
+			type = 0x001C;
+		}
+		else { return false; }
+
+		const attr = this.attrs.get(type);
+		if (!attr) return false;
+
+		const save = this.getUint16(2);
+		this.setUint16(2, attr.parent_length);
+
+		const ret = await crypto.subtle.verify('HMAC', key, attr.bytes, attr.prefix);
+
+		this.setUint16(2, save);
+
+		return ret;
+	}
+	async sign(key) {
+		const attr = this.new_attr();
+		if (key.algorithm.hash.name == 'SHA-1') {
+			attr.type = 0x0008;
+			attr.length = 20;
+		}
+		else if (key.algorithm.hash.name == 'SHA-256') {
+			attr.type = 0x001C;
+			attr.length = 32;
+		}
+		else { throw new Error('Unknwon integrity key type'); }
+
+		const sig = await crypto.subtle.sign('HMAC', key, attr.prefix);
+		attr.bytes.set(new Uint8Array(sig));
 	}
 }

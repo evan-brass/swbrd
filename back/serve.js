@@ -13,7 +13,7 @@ const short_key = await crypto.subtle.importKey('raw', encoder.encode("the/ice/p
 	name: 'HMAC',
 	hash: 'SHA-1'
 }, true, ['sign', 'verify']);
-const long_key = await crypto.subtle.importKey('raw', md5("guest:realm:the/guest/password"), {
+const long_key = await crypto.subtle.importKey('raw', md5('guest:realm:the/guest/turn/credential/constant'), {
 	name: 'HMAC',
 	hash: 'SHA-1'
 }, true, ['sign', 'verify']);
@@ -29,6 +29,7 @@ for await (const [packet, sender] of sock) {
 	resp.class = Class.success;
 	resp.txid.set(msg.txid);
 	resp.length = 0;
+	resp.software = 'None';
 	let target = sender;
 
 	if (msg.method == Method.binding) {
@@ -39,14 +40,42 @@ for await (const [packet, sender] of sock) {
 	}
 	else if (msg.method == Method.allocate) {
 		if (msg.class != Class.request) continue;
-		if (!msg.nonce) {
+		if (!msg.nonce || !msg.realm) {
 			resp.class = Class.error;
 			resp.errcode = 401;
 			resp.nonce = 'nonce';
 			resp.realm = 'realm';
 		}
-		else { continue; }
+		else if (!await msg.verify(long_key)) {
+			resp.class = Class.error;
+			resp.errcode = 403;
+		}
+		else {
+			resp.xrelayed = sender;
+			resp.lifetime = msg.lifetime || 3600;
+			resp.xmapped = sender;
+			await resp.sign(long_key);
+		}
 	}
+	else if (msg.method == Method.createPermission) {
+		if (msg.class != Class.request) continue;
+		await resp.sign(long_key);
+	}
+	else if (msg.method == Method.refresh) {
+		if (msg.class != Class.request) continue;
+		resp.lifetime = msg.lifetime;
+		await resp.sign(long_key);
+	}
+	else if (msg.method == Method.send) {
+		if (msg.class != Class.indication) continue;
+		target = msg.xpeer;
+		resp.class = Class.indication;
+		resp.method = Method.data;
+		resp.xpeer = sender;
+		resp.data = msg.data;
+	}
+	else { continue; }
+	if (msg.fingerprint) resp.fingerprint = true;
 
 	console.log(sender, msg.class, msg.method, msg.username);
 
