@@ -1,4 +1,4 @@
-import { base58 } from './base58.js';
+import { base58, charset } from './base58.js';
 
 export const idf = new class IdFingerprint {
 	algorithm;
@@ -10,12 +10,14 @@ export const idf = new class IdFingerprint {
 		return this.algorithm;
 	}
 	toString(id) {
-		return base58(BigInt(id)).padStart(this.pad_len, '0');
+		return base58(BigInt(id)).padEnd(this.pad_len, charset[0]);
 	}
 	fromString(s) {
 		s = String(s);
 		if (s.length != this.pad_len) return;
-		return BigInt.asUintN(this.bits, base58(s));
+		const n = base58(s);
+		if (!n || BigInt.asUintN(this.bits, n) != n) return
+		return n;
 	}
 	fingerprint(id) {
 		return `${this.algorithm} ${BigInt(id).toString(16).padStart(2 * this.bytes, '0').replace(/[0-9a-f]{2}/ig, ':$&').slice(1)}`;
