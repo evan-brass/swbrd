@@ -41,7 +41,20 @@ export class Conn extends RTCPeerConnection {
 	}
 
 	async addIceCandidate(candidate) {
-		if (candidate) candidate.sdpMid ??= 'dc';
+		if (candidate == null) return;
+		if (typeof candidate != 'object') {
+			candidate = { candidate: candidate };
+		}
+		candidate.candidate ??= 'candidate:' + [
+			candidate.foundation || 'foundation',
+			candidate.component || '1',
+			candidate.transport || 'udp',
+			candidate.priority || '42',
+			candidate.address || '169.254.255.255',
+			candidate.port || '4666',
+			'typ', candidate.type || 'host'
+		].join(' ');
+		candidate.sdpMid ??= 'dc';
 		await this.#first_signaling;
 		return await super.addIceCandidate(candidate);
 	}
