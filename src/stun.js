@@ -124,7 +124,19 @@ export class Stun extends DataView {
 				i += 4 + attr_len;
 				while (i % 4 != 0) i += 1;
 
+				// Ignore certain attributes
+				if (this.#attrs.has(attr_typ)) continue; // Ignore duplicated attributes
+				if (this.#attrs.has(0x0008 /* Integrity */) && ![
+					0x001C, // Integrity 256
+					0x8028, // Fingerprint
+				].includes(attr_typ)) continue; // Ignore most attrs after the integrity attribute
+				if (this.#attrs.has(0x001C /* Integrity 256 */) && ![
+					0x8028, // Fingerprint
+				].includes(attr_typ)) continue; // Ignore most attrs after the integrity 256 attribute
+
 				this.#attrs.set(attr_typ, value);
+
+				if (attr_typ == 0x8028 /* Fingerprint */) break; // Ignore any attributes after the fingerprint
 			}
 		}
 		return this.#attrs;
@@ -240,6 +252,17 @@ export class Stun extends DataView {
 	set xrelayed(value) { this.set_addr(0x0016, value); }
 	get xmapped() { return this.get_addr(0x0020); }
 	set xmapped(value) { this.set_addr(0x0020, value); }
+	get priority() {
+		const attr = this.attrs.get(0x0024);
+		if (attr?.length != 4) return undefined;
+		return attr.getUint32(0);
+	}
+	set priority(value) {
+		const attr = this.new_attr();
+		attr.type = 0x0024;
+		attr.length = 4;
+		attr.setUint32(0, value);
+	}
 	get software() { return this.get_txt(0x8022); }
 	set software(value) { this.set_txt(0x8022, value); }
 	get fingerprint() {
