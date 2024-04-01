@@ -11,8 +11,8 @@ console.log(c);
 // const a = new Conn(certb, { cert: certa });
 // const b = new Conn(certa, { cert: certb });
 
-// a.addEventListener('candidate', async ({candidate}) => await b.addIceCandidate(candidate));
-// b.addEventListener('candidate', async ({candidate}) => await a.addIceCandidate(candidate));
+// a.addEventListener('icecandidate', async ({candidate}) => await b.addIceCandidate(candidate));
+// b.addEventListener('icecandidate', async ({candidate}) => await a.addIceCandidate(candidate));
 
 // == Basic usage: [simultaneous signaling, datachannel transmission] ==
 // const a = new Conn();

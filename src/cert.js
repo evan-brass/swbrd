@@ -112,7 +112,7 @@ export class Cert extends RTCCertificate {
 	}
 	[Symbol.toPrimitive](hint) {
 		if (hint == 'number') return this.id;
-		return this.toString();
+		return idf.toString(this);
 	}
 }
 
