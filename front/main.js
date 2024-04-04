@@ -1,12 +1,71 @@
-import { Conn, Cert, Addr } from '../src/index.js';
+import { idf } from "../src/cert.js";
+import { Conn, Cert, Addr, cert } from '../src/index.js';
+import { Class, Method, Stun } from "../src/stun.js";
+import { Listener } from '../src/listen.js';
+
+// const addr = new Addr('turn+tcp:AC2ZoeeWTZAyFrpZAczuqRpQQ9vyKebnnAvTocdZyzeD@local.evan-brass.net');
+// await addr.resolve_id();
+
+// const conn = addr.connect();
+// console.log(addr);
+// console.log(conn);
+
+// const certb = await Cert.generate();
+
+// const listener = new Listener();
+
+// const test = listener.address.connect({cert: certb});
+// console.log(test);
+
+// for await(const conn of listener) {
+// 	console.log(conn);
+// }
 
 // console.log(await new Addr('udp:seed.evan-brass.net').resolve_id());
 
-const c = new Addr('turn:AC2ZoeeWTZAyFrpZAczuqRpQQ9vyKebnnAvTocdZyzeD@local.evan-brass.net').connect();
-console.log(c);
+// const c = new Addr(`turn:${cert}@localhost`).connect({cert: certb});
+// console.log(c);
 
-// const certa = await Cert.generate();
-// const certb = await Cert.generate();
+const certa = await Cert.generate();
+const certb = await Cert.generate();
+
+const a = new Addr(`turn+tcp:${certb}@127.0.0.1`).connect({ cert: certa });
+const b = new Addr(`turn+tcp:${certa}@127.0.0.1`).connect({ cert: certb });
+// a.addEventListener('icecandidate', async ({candidate}) => await b.addIceCandidate(candidate));
+// b.addEventListener('icecandidate', async ({candidate}) => await a.addIceCandidate(candidate));
+
+// setInterval(async () => {
+// 	const stats = Object.groupBy(
+// 		(await a.getStats()).values(),
+// 		s => s.type
+// 	);
+// 	console.log(stats);
+// }, 3000);
+
+// [
+// 	'connectionstatechange',
+// 	'datachannel',
+// 	'icecandidate',
+// 	'icecandidateerror',
+// 	'iceconnectionstatechange',
+// 	'icegatheringstatechange',
+// 	'negotiationneeded',
+// 	'signalingstatechange',
+// 	'track'
+// ].forEach(ev => a.addEventListener(ev, console.log));
+// while (a.connectionState == 'new') await new Promise(res => a.addEventListener('connectionstatechange', res, {once: true}));
+// [
+// 	'statechange'
+// ].forEach(ev => a.sctp.addEventListener(ev, console.log));
+// [
+// 	'statechange',
+// 	'error'
+// ].forEach(ev => a.sctp.transport.addEventListener(ev, console.log));
+// [
+// 	'gatheringstatechange',
+// 	'selectedcandidatepairchange',
+// 	'statechange'
+// ].forEach(ev => a.sctp.transport.iceTransport.addEventListener(ev, console.log));
 
 // const a = new Conn(certb, { cert: certa });
 // const b = new Conn(certa, { cert: certb });

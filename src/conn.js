@@ -36,9 +36,6 @@ export class Conn extends RTCPeerConnection {
 			first_signaling_res
 		}).catch(() => this.close());
 	}
-	static async generateCertificate() {
-		return await super.generateCertificate({ name: 'ECDSA', namedCurve: 'P-256' });
-	}
 
 	async addIceCandidate(candidate) {
 		if (candidate == null) return;
@@ -50,9 +47,12 @@ export class Conn extends RTCPeerConnection {
 			candidate.component || '1',
 			candidate.transport || 'udp',
 			candidate.priority || '42',
-			candidate.address || '169.254.255.255',
-			candidate.port || '4666',
-			'typ', candidate.type || 'host'
+			// TODO: Currently my TURN server returns this address, but what we actually need to do is to use whatever address we received from the turn server
+			candidate.address || '169.254.0.1',
+			candidate.port || '1776',
+			'typ', candidate.type || 'relay',
+			// WEIRD: For some reason, Firefox won't pair the candidate unless it has a related address and port (which are supposed to be optional)?
+			'raddr', '0.0.0.0', 'rport', '0'
 		].join(' ');
 		candidate.sdpMid ??= 'dc';
 		await this.#first_signaling;
@@ -147,16 +147,19 @@ export class Conn extends RTCPeerConnection {
 
 	// Re-provide defaults when calling setConfiguration
 	setConfiguration(config = null) {
+		const certificates = this.getConfiguration()?.certificates;
 		super.setConfiguration({
 			...defaults,
 			...config,
 			bundlePolicy: 'max-bundle',
 			rtcpMuxPolicy: 'require',
 			peerIdentity: null,
+			certificates,
 		});
 	}
 
 	// Disable things:
+	static generateCertificate() { throw new Error("generateCertificate is disabled on Conn. You can use `Conn.generate()` instead."); }
 	addStream() { throw new Error("addStream is deprecated") }
 	removeStream() { throw new Error("removeStream is deprecated") }
 	getIdentityAssertion() { throw new Error("Identity assertions are disabled on Conn") }

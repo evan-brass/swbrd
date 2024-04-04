@@ -23,26 +23,11 @@ export class Addr extends URL {
 		const https = new URL(this.href.replace(/^[^:]+:/, 'https:'));
 		const host = (http.host.length < https.host.length) ? https.host : http.host;
 		const port = parseInt(http.port || https.port || 3478);
-		return { username: http.username, password: http.password, hostname: http.hostname, host, port };
-	}
-	config() {
-		if (/^turns?:/i.test(this.protocol)) {
-			const {host} = this.#authority();
-			let transport = this.searchParams.get('turn_transport') || 'udp';
-			transport = transport ? '' : '?transport=' + transport;
-			return {
-				iceTransportPolicy: 'relay',
-				iceServers: [{
-					urls: `${this.protocol}${host}${transport}`,
-					username: this.searchParams.get('turn_username') || 'guest',
-					credential: this.searchParams.get('turn_credential') || 'the/guest/turn/credential/constant'
-				}]
-			};
-		}
-		return null;
+		const address = http.hostname.replaceAll(/[\[\]]/g, '')
+		return { username: http.username, password: http.password, hostname: http.hostname, host, port, address };
 	}
 	connect(config = null) {
-		const {hostname, port, username, password: ice_pwd} = this.#authority();
+		const {address, port, username, password: ice_pwd} = this.#authority();
 		this.#id ??= idf.fromString(username);
 		if (!this.#id) return;
 		let setup = this.searchParams.get('setup');
@@ -54,25 +39,72 @@ export class Addr extends URL {
 			ice_lite ??= true;
 		}
 
+		// Adjust the config if needed
+		let adjustment = null, turn_res;
+		if ((turn_res = /^(turns?)(?:\+(tcp|udp))?:/i.exec(this.protocol))) {
+			const {1: proto, 2: transport} = turn_res;
+			const {host} = this.#authority();
+			adjustment = {
+				iceTransportPolicy: 'relay',
+				iceServers: [{
+					urls: `${proto}:${host}${transport ? '?transport=' + transport : ''}`,
+					username: this.searchParams.get('turn_username') || 'guest',
+					credential: this.searchParams.get('turn_credential') || 'the/guest/turn/credential/constant'
+				}]
+			};
+		}
+
+		// Prepare the candidates 
+		const candidates = Array.from(this.searchParams.getAll('candidate'), s => {
+			s = decodeURI(s);
+			try { return JSON.parse(s); } catch { return s }
+		});
+		if (candidates.length < 1) {
+			if (/^udp:/i.test(this.protocol)) {
+				candidates.push({address, port, transport: 'udp'});
+			}
+			else if (/^(turns?)(?:\+(tcp|udp))?:/i.test(this.protocol)) {
+				candidates.push({ usernameFragment: username }); // Append the default candidate (probably a broadcast candidate)
+			}
+		}
+
+		// Create the connection
 		const ret = new Conn(this.#id, {
 			setup,
 			ice_lite,
 			ice_pwd,
 			...config,
-			...this.config()
+			...adjustment
 		});
 
-		// Add ice candidates
-		for (const candidate of this.searchParams.getAll('candidate').map(s => {
-			s = decodeURIComponent(s);
-			try { return JSON.parse(s); }
-			catch { return s; }
-		})) {
-			ret.addIceCandidate(candidate);
-		}
-		if (/^udp:/i.test(this.protocol)) {
-			ret.addIceCandidate({ candidate: `candidate:foundation 1 udp 42 ${hostname.replaceAll(/[\[\]]/g, '')} ${port} typ host` });
-		}
+		// Spawn the task to signal the connection
+		(async () => {
+			for (const candidate of candidates) {
+				await ret.addIceCandidate(candidate);
+			}
+
+			// Undo the adjustement
+			if (adjustment) {
+				// Wait for the connection to succeed (or close)
+				while (!['connected', 'closed'].includes(ret.connectionState)) await new Promise(
+					res => ret.addEventListener('connectionstatechange', res, {once: true})
+				);
+
+				// If the connection is closed, then the config adjustment is irrelevant
+				if (ret.connectionState == 'closed') return;
+				
+				// Remove the adjustment
+				ret.setConfiguration({
+					setup,
+					ice_lite,
+					ice_pwd,
+					...config
+				});
+				
+				// Restart ICE so that the configuration can take effect
+				// ret.restartIce();
+			}
+		})();
 
 		return ret;
 	}

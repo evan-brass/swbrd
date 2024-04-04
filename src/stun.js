@@ -99,6 +99,9 @@ export class Stun extends DataView {
 		if (this.type < 0x4000) return 20 + this.length;
 		return Infinity;
 	}
+	get frame() {
+		return new Uint8Array(this.buffer, this.byteOffset, this.needed);
+	}
 	get magic() {
 		return this.getUint32(4) === Magic;
 	}
