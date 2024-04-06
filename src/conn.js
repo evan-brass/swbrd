@@ -48,8 +48,8 @@ export class Conn extends RTCPeerConnection {
 			candidate.transport || 'udp',
 			candidate.priority || '42',
 			// TODO: Currently my TURN server returns this address, but what we actually need to do is to use whatever address we received from the turn server
-			candidate.address || '169.254.0.1',
-			candidate.port || '1776',
+			candidate.address || '169.254.255.255',
+			candidate.port || '4666',
 			'typ', candidate.type || 'relay',
 			// WEIRD: For some reason, Firefox won't pair the candidate unless it has a related address and port (which are supposed to be optional)?
 			'raddr', '0.0.0.0', 'rport', '0'

@@ -64,7 +64,7 @@ export class Addr extends URL {
 				candidates.push({address, port, transport: 'udp'});
 			}
 			else if (/^(turns?)(?:\+(tcp|udp))?:/i.test(this.protocol)) {
-				candidates.push({ usernameFragment: username }); // Append the default candidate (probably a broadcast candidate)
+				candidates.push({}); // Append the default candidate (probably a broadcast candidate)
 			}
 		}
 
@@ -102,7 +102,7 @@ export class Addr extends URL {
 				});
 				
 				// Restart ICE so that the configuration can take effect
-				// ret.restartIce();
+				ret.restartIce();
 			}
 		})();
 
