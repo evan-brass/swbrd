@@ -7,6 +7,14 @@ export const defaults = {
 export class Conn extends RTCPeerConnection {
 	#dc = this.createDataChannel('', {negotiated: true, id: 0});
 	#first_signaling;
+	#default_address = new Promise(res => this.addEventListener('icecandidate', ({ candidate }) => {
+		if (candidate === null) return res('255.255.255.255');
+		const {1: address} = /([^ ]+) [^ ]+ typ relay/i.exec(candidate.candidate) ?? {};
+		if (address) return res(address);
+	})).then(address => {
+		this.#default_address = address;
+		return address;
+	});
 	constructor(peerid, config = null) {
 		peerid = BigInt(peerid);
 		const cert = config?.cert ?? default_cert;
@@ -48,10 +56,10 @@ export class Conn extends RTCPeerConnection {
 			candidate.transport || 'udp',
 			candidate.priority || '42',
 			// TODO: Currently my TURN server returns this address, but what we actually need to do is to use whatever address we received from the turn server
-			candidate.address || '169.254.255.255',
+			candidate.address || await this.#default_address,
 			candidate.port || '4666',
 			'typ', candidate.type || 'relay',
-			// WEIRD: For some reason, Firefox won't pair the candidate unless it has a related address and port (which are supposed to be optional)?
+			// WEIRD: For some reason, Firefox won't pair the candidate unless it has a related address and port (which are supposed to be optional?)
 			'raddr', '0.0.0.0', 'rport', '0'
 		].join(' ');
 		candidate.sdpMid ??= 'dc';
@@ -68,7 +76,7 @@ export class Conn extends RTCPeerConnection {
 		this.#dc.addEventListener('message', async ({ data }) => { try {
 			const { candidate } = JSON.parse(data);
 			if (candidate) await this.addIceCandidate(candidate);
-		} catch {}});
+		} catch (e) { console.warn(e); }});
 		this.addEventListener('icecandidate', ({candidate}) => {
 			if (candidate && this.#dc.readyState == 'open') {
 				this.#dc.send(JSON.stringify({ candidate }));
@@ -77,7 +85,7 @@ export class Conn extends RTCPeerConnection {
 		let remote_desc = false; this.#dc.addEventListener('message', ({data}) => { try {
 			const { description } = JSON.parse(data);
 			if (description) remote_desc = description;
-		} catch {}})
+		} catch (e) { console.warn(e); /* Possibly a misbehaving peer */}})
 
 		// First pass of signaling
 		const fingerprint = idf.fingerprint(peerid);

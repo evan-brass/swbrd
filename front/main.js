@@ -30,7 +30,16 @@ const certa = await Cert.generate();
 const certb = await Cert.generate();
 
 const a = new Addr(`turn+tcp:${certb}@127.0.0.1`).connect({ cert: certa });
-const b = new Addr(`turn+tcp:${certa}@127.0.0.1`).connect({ cert: certb });
+a.addEventListener('icecandidate', ({ candidate }) => {
+	if (candidate == null) throw new Error();
+	let {1: port} = /([^ ]+) typ relay/i.exec(candidate.candidate) ?? {};
+	if (!port) throw new Error();
+	port = parseInt(port);
+
+	// Create a connection using the allocated port:
+	const b = new Addr(`turn+tcp:${certa}@127.0.0.1?candidate=${encodeURIComponent(JSON.stringify({port}))}`).connect({ cert: certb });
+	console.log(b);
+}, {once: true});
 // a.addEventListener('icecandidate', async ({candidate}) => await b.addIceCandidate(candidate));
 // b.addEventListener('icecandidate', async ({candidate}) => await a.addIceCandidate(candidate));
 
