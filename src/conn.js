@@ -89,7 +89,7 @@ export class Conn extends RTCPeerConnection {
 
 		// First pass of signaling
 		const fingerprint = idf.fingerprint(peerid);
-		const ice_ufrag = idf.toString(peerid).padStart(6, '0');
+		const ice_ufrag = idf.toString(peerid);
 		await super.setRemoteDescription({ type: 'offer', sdp: [
 			'v=0',
 			'o=swbrd 42 0 IN IP4 0.0.0.0',
