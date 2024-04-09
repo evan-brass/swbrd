@@ -64,6 +64,7 @@ export class Conn extends RTCPeerConnection {
 		].join(' ');
 		candidate.sdpMid ??= 'dc';
 		await this.#first_signaling;
+		candidate.usernameFragment ??= /a=ice-ufrag:(.+)/i.exec(super.remoteDescription.sdp)[1];
 		return await super.addIceCandidate(candidate);
 	}
 
