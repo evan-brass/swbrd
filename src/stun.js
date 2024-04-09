@@ -223,6 +223,18 @@ export class Stun extends DataView {
 		attr.setUint8(2, Math.trunc(value / 100));
 		attr.setUint8(3, value % 100);
 	}
+	get channel() {
+		const attr = this.attrs.get(0x000C);
+		if (attr?.length != 4) return undefined;
+		return attr.getUint16(0);
+	}
+	set channel(value) {
+		const attr = this.new_attr();
+		attr.type = 0x000C;
+		attr.length = 4;
+		attr.setUint16(0, value);
+		attr.setUint16(2, 0); // Future use padding
+	}
 	get lifetime() {
 		const attr = this.attrs.get(0x000D);
 		if (attr?.length != 4) return undefined;
