@@ -6,97 +6,28 @@ import { md5 } from "../src/md5.js";
 // 	name: 'HMAC',
 // 	hash: 'SHA-1'
 // }, true, ['sign', 'verify']);
-const long_key = await crypto.subtle.importKey('raw', md5('guest:realm:the/guest/turn/credential/constant'), {
+const long_key = await crypto.subtle.importKey('raw', md5('guest:none:the/guest/turn/credential/constant'), {
 	name: 'HMAC',
 	hash: 'SHA-1'
 }, true, ['sign', 'verify']);
 
 const maxByteLength = 2**13;
-const fake_addr = Object.assign(Object.create(null), {
-	hostname: '169.254.255.255', port: 4666
-});
+const fake = {
+	hostname: '255.255.255.255', port: 4666
+};
 
-const writers = new Set();
-
-async function serve(frame, addr, {send}) {
-	const response = new Stun(send);
-	response.length = 0;
-
-	if (frame instanceof Stun) {
-		response.method = frame.method;
-		response.txid.set(frame.txid);
-
-		if (frame.method == Method.binding && frame.class == Class.request) {
-			response.class = Class.success;
-			response.mapped = addr;
-			response.xmapped = addr;
-		}
-		else if (frame.method == Method.allocate && frame.class == Class.request) {
-			if (!frame.nonce || !frame.realm) {
-				response.class = Class.error;
-				response.errcode = 401;
-				response.nonce = 'nonce';
-				response.realm = 'realm';
-			}
-			else if (!await frame.verify(long_key)) {
-				response.class = Class.error;
-				response.errcode = 403;
-			}
-			else {
-				response.class = Class.success;
-				response.xmapped = addr;
-				response.xrelayed = fake_addr;
-				response.lifetime = frame.lifetime || 3600;
-				await response.sign(long_key);
-			}
-		}
-		else if (frame.method == Method.createPermission && frame.class == Class.request) {
-			response.class = Class.success;
-			await response.sign(long_key);
-		}
-		else if (frame.method == Method.refresh && frame.class == Class.request) {
-			response.class = Class.success;
-			response.lifetime = frame.lifetime;
-			await response.sign(long_key);
-		}
-		else if (frame.method == Method.channelBind && frame.class == Class.request) {
-			response.class = Class.success;
-			await response.sign(long_key);
-		}
-		else if (frame.method == Method.send && frame.class == Class.indication) {
-			response.class = Class.indication;
-			response.method = Method.data;
-			response.xpeer = fake_addr;
-			response.data = frame.data;
-
-			return { forward: response };
-		}
-		else {
-			return {};
-		}
-
-		return { response };
-	}
-	else if (frame instanceof ChannelData) {
-		crypto.getRandomValues(response.txid);
-		response.class = Class.indication;
-		response.method = Method.data;
-		response.xpeer = fake_addr;
-		response.data = frame.data;
-
-		return { forward: response };
-	}
-
-	return {};
-}
+const all_conns = new Set();
+const routing_table = new Map(); // Map<username: string, Set<writer>>
 
 async function handle(conn) {
 	let recv = new ArrayBuffer(40, {maxByteLength});
 	const send = new ArrayBuffer(40, {maxByteLength});
 
-	const writer = conn.writable.getWriter(); writers.add(writer);
+	const writer = conn.writable.getWriter(); all_conns.add(writer);
 	let available = 0;
 	const reader = conn.readable.getReader({ mode: 'byob' });
+
+	let username;
 	try {
 		while (true) {
 			const {value, done} = await reader.read(new Uint8Array(recv, available));
@@ -110,23 +41,82 @@ async function handle(conn) {
 				recv.resize(res);
 				continue;
 			}
-	
-			// Handle the frame
-			console.log('request', res.frame);
-			const { response, forward } = await serve(res, conn.remoteAddr, { send });
+			
+			const frame = res;
+			if (frame instanceof Stun && frame.class == Class.request) {
+				const response = new Stun(send);
+				response.method = frame.method;
+				response.length = 0;
+				response.txid.set(frame.txid);
+				console.log('request', conn.remoteAddr.hostname, conn.remoteAddr.port, frame.method);
 
-			if (forward) {
-				console.log('forward', forward.frame);
-				for (const other of writers.values()) {
-					if (other === writer) continue;
-					while (other.desiredSize < 1) await other.ready;
-					await other.write(forward.frame);
+				if (frame.method == Method.binding) {
+					response.class = Class.success;
+					response.xmapped = conn.remoteAddr;
 				}
-			}
-			if (response) {
-				console.log('response', response.frame);
-				while (writer.desiredSize < 1) await writer.ready;
+				else if (frame.method == Method.allocate) {
+					if (frame.nonce != 'none' || frame.realm != 'none') {
+						response.class = Class.error; response.errcode = 401;
+						response.nonce = 'none'; response.realm = 'none';
+					} else {
+						response.class = Class.success;
+						response.xmapped = conn.remoteAddr;
+						response.xrelayed = fake;
+						response.lifetime = frame.lifetime || 3600;
+						await response.sign(long_key);
+					}
+				}
+				else if (frame.method == Method.createPermission) {
+					response.class = Class.success;
+					await response.sign(long_key);
+				}
+				else {
+					response.class = Class.error; response.errcode = 404;
+				}
+
+				if (frame.fingerprint) response.fingerprint = true;
+
+				console.log('response', response.class, response.method);
+
+				while (writer.desiredLength < 1) await writer.ready;
 				await writer.write(response.frame);
+			}
+			else if (frame instanceof ChannelData || (frame instanceof Stun && frame.class == Class.indication && frame.method == Method.send)) {
+				// Prepare a data indication for this packet
+				const indication = new Stun(send);
+				indication.method = Method.data;
+				indication.class = Class.indication;
+				indication.length = 0;
+				if (frame.txid) {
+					indication.txid.set(frame.txid);
+				} else {
+					crypto.getRandomValues(indication.txid);
+					indication.magic = true;
+				}
+				indication.xpeer = fake;
+				indication.data = frame.data;
+				const inner = parse(indication.data);
+
+				// Update the routing table
+				if (!username && inner instanceof Stun && inner.method == Method.binding && inner.username) {
+					username = inner.username;
+					const listen_username = username.split(':').reverse().join(':');
+					// Get or set the set of conns for a given listen_username
+					const siblings = routing_table.get(listen_username) ?? new Set();
+					routing_table.set(listen_username, siblings);
+					siblings.add(writer);
+				}
+
+				// Route the packet:
+				if (username) {
+					const destinations = routing_table.get(username) ?? new Set();
+					console.log('routing', username, destinations.size);
+					for (const w of destinations) {
+						if (w == writer) continue;
+						while (w.desiredLength < 1) await w.ready;
+						await w.write(indication.frame);
+					}
+				}
 			}
 	
 			// Shift unused data to the front of the buffer
@@ -137,7 +127,7 @@ async function handle(conn) {
 		console.warn(e);
 		// Do Nothing
 	} finally {
-		writers.delete(writer);
+		all_conns.delete(writer);
 	}
 	// Cleanup the connection?
 }
