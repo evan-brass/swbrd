@@ -278,6 +278,16 @@ export class Stun extends DataView {
 		attr.length = 4;
 		attr.setUint32(0, value);
 	}
+	get usecandidate() {
+		const attr = this.attrs.get(0x0025);
+		if (attr?.length !== 0) return undefined;
+		return true;
+	}
+	set usecandidate(_) {
+		const attr = this.new_attr();
+		attr.type = 0x0025;
+		attr.length = 0;
+	}
 	get software() { return this.get_txt(0x8022); }
 	set software(value) { this.set_txt(0x8022, value); }
 	get fingerprint() {
@@ -299,6 +309,28 @@ export class Stun extends DataView {
 		attr.type = 0x8028;
 		attr.length = 4;
 		attr.setInt32(0, crc32(attr.prefix) ^ 0x5354554e);
+	}
+	get controlled() {
+		const attr = this.attrs.get(0x8029);
+		if (attr?.length != 8) return undefined;
+		return attr.getBigUint64(0);
+	}
+	set controlled(value) {
+		const attr = this.new_attr();
+		attr.type = 0x8029;
+		attr.length = 8;
+		attr.setBigUint64(0, value);
+	}
+	get controlling() {
+		const attr = this.attrs.get(0x802A);
+		if (attr?.length != 8) return undefined;
+		return attr.getBigUint64(0);
+	}
+	set controlling(value) {
+		const attr = this.new_attr();
+		attr.type = 0x802A;
+		attr.length = 8;
+		attr.setBigUint64(0, value);
 	}
 
 	async verify(key) {
