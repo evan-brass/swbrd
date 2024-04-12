@@ -15,6 +15,8 @@ const maxByteLength = 2**13;
 
 const writers = new Map();
 
+const hostname = '::ffff:169.254.255.255';
+
 async function write(writer, frame) {
 	console.log('write', writer, frame.byteLength);
 	while (writer.desiredSize < 0) await writer.ready;
@@ -30,12 +32,14 @@ async function handle(conn) {
 	let available = 0;
 	const reader = conn.readable.getReader({ mode: 'byob' });
 
-	// Assign a random 10. address for the peer
-	const xrelayed = {
-		hostname: '::ffff:10.' + crypto.getRandomValues(new Uint8Array(3)).join('.'),
-		port: crypto.getRandomValues(new Uint16Array(1))[0]
-	};
-	writers.set(xrelayed.hostname, writer);
+	// Allocate a port for the peer
+	let port;
+	while (!port || writers.has(port)) {
+		port = crypto.getRandomValues(new Uint16Array(1))[0]
+	}
+	writers.set(port, writer);
+	const xrelayed = {hostname, port};
+
 	const channels = new Map();
 	try {
 		while (true) {
@@ -116,15 +120,15 @@ async function handle(conn) {
 					indication.xpeer = xrelayed;
 					indication.data = frame.data;
 					const inner = parse(frame.data);
-					console.log('broadcast', inner.username, inner.controlled, inner.controlling, inner.usecandidate);
 
 					// Try to unicast the packet
-					const uni = writers.get(xpeer.hostname);
+					const uni = xpeer.hostname == hostname && writers.get(xpeer.port);
 					if (uni && uni !== writer) {
 						await write(uni, indication.frame);
 					}
 					// Otherwise broadcast the packet (So long as it's a connection test)
 					else if (inner instanceof Stun && inner.method == Method.binding && inner.class == Class.request) {
+						console.log('broadcast', inner.username, inner.controlled, inner.controlling, inner.usecandidate);
 						for (const broad of writers.values()) {
 							if (broad == writer) continue;
 							await write(broad, indication.frame);
