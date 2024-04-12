@@ -18,8 +18,8 @@ export class ChannelData extends DataView {
 	}
 	get needed() {
 		if (this.byteLength < 4) return 4;
-		if (this.type < 0x4000) return Infinity;
-		if (this.type < 0x8000) {
+		if (this.channel < 0x4000) return Infinity;
+		if (this.channel < 0x8000) {
 			let ret = 4 + this.length;
 			while (ret % 4 != 0) ret += 1;
 			return ret;

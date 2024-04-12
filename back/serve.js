@@ -12,9 +12,7 @@ const long_key = await crypto.subtle.importKey('raw', md5('guest:none:the/guest/
 }, true, ['sign', 'verify']);
 
 const maxByteLength = 2**13;
-const fake = {
-	hostname: '255.255.255.255', port: 4666
-};
+const fake = { hostname: '255.255.255.255', port: 4666 };
 
 const all_conns = new Set();
 const routing_table = new Map(); // Map<username: string, Set<writer>>
@@ -30,9 +28,11 @@ async function handle(conn) {
 	let username;
 	try {
 		while (true) {
-			const {value, done} = await reader.read(new Uint8Array(recv, available));
-			if (done) break;
-			available += value.byteLength; recv = value.buffer;
+			try {
+				const {value, done} = await reader.read(new Uint8Array(recv, available));
+				if (done) break;
+				available += value.byteLength; recv = value.buffer;
+			} catch { break; }
 	
 			const res = parse(new Uint8Array(recv, 0, available));
 			if (typeof res == 'number') {
@@ -70,13 +70,15 @@ async function handle(conn) {
 					response.class = Class.success;
 					await response.sign(long_key);
 				}
+				else if (frame.method == Method.channelBind) {
+					response.class = Class.success;
+					await response.sign(long_key);
+				}
 				else {
 					response.class = Class.error; response.errcode = 404;
 				}
 
 				if (frame.fingerprint) response.fingerprint = true;
-
-				console.log('response', response.class, response.method);
 
 				while (writer.desiredLength < 1) await writer.ready;
 				await writer.write(response.frame);
@@ -110,7 +112,6 @@ async function handle(conn) {
 				// Route the packet:
 				if (username) {
 					const destinations = routing_table.get(username) ?? new Set();
-					console.log('routing', username, destinations.size);
 					for (const w of destinations) {
 						if (w == writer) continue;
 						while (w.desiredLength < 1) await w.ready;

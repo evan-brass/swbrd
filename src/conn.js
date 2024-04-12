@@ -47,9 +47,13 @@ export class Conn extends RTCPeerConnection {
 
 	async addIceCandidate(candidate) {
 		if (candidate == null) return;
+
+		await this.#first_signaling;
+
 		if (typeof candidate != 'object') {
 			candidate = { candidate: candidate };
 		}
+		candidate.usernameFragment ??= /a=ice-ufrag:(.+)/i.exec(super.remoteDescription.sdp)[1];
 		candidate.candidate ??= 'candidate:' + [
 			candidate.foundation || 'foundation',
 			candidate.component || '1',
@@ -60,11 +64,10 @@ export class Conn extends RTCPeerConnection {
 			candidate.port || '4666',
 			'typ', candidate.type || 'relay',
 			// WEIRD: For some reason, Firefox won't pair the candidate unless it has a related address and port (which are supposed to be optional?)
-			'raddr', '0.0.0.0', 'rport', '0'
+			'raddr', '0.0.0.0', 'rport', '0',
+			'ufrag', candidate.usernameFragment,
 		].join(' ');
 		candidate.sdpMid ??= 'dc';
-		await this.#first_signaling;
-		candidate.usernameFragment ??= /a=ice-ufrag:(.+)/i.exec(super.remoteDescription.sdp)[1];
 		return await super.addIceCandidate(candidate);
 	}
 
@@ -168,7 +171,7 @@ export class Conn extends RTCPeerConnection {
 	}
 
 	// Disable things:
-	static generateCertificate() { throw new Error("generateCertificate is disabled on Conn. You can use `Conn.generate()` instead."); }
+	static generateCertificate() { throw new Error("generateCertificate is disabled on Conn. You can use `Cert.generate()` instead."); }
 	addStream() { throw new Error("addStream is deprecated") }
 	removeStream() { throw new Error("removeStream is deprecated") }
 	getIdentityAssertion() { throw new Error("Identity assertions are disabled on Conn") }
