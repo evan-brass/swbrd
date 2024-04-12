@@ -15,6 +15,13 @@ const maxByteLength = 2**13;
 
 const writers = new Map();
 
+async function write(writer, frame) {
+	console.log('write', writer, frame.byteLength);
+	while (writer.desiredSize < 0) await writer.ready;
+	if (writer.desiredSize == null || writer.desiredSize == 0) return;
+	await writer.write(frame);
+}
+
 async function handle(conn) {
 	let recv = new ArrayBuffer(40, {maxByteLength});
 	const send = new ArrayBuffer(40, {maxByteLength});
@@ -90,8 +97,7 @@ async function handle(conn) {
 
 				if (frame.fingerprint) response.fingerprint = true;
 
-				while (writer.desiredLength < 1) await writer.ready;
-				await writer.write(response.frame);
+				await write(writer, response.frame);
 			}
 			else if (frame instanceof ChannelData || (frame instanceof Stun && frame.class == Class.indication && frame.method == Method.send)) {
 				const xpeer = frame.xpeer ?? channels.get(frame.channel);
@@ -115,15 +121,13 @@ async function handle(conn) {
 					// Try to unicast the packet
 					const uni = writers.get(xpeer.hostname);
 					if (uni && uni !== writer) {
-						while (uni.desiredLength < 1) await uni.ready;
-						await uni.write(indication.frame);
+						await write(uni, indication.frame);
 					}
 					// Otherwise broadcast the packet (So long as it's a connection test)
 					else if (inner instanceof Stun && inner.method == Method.binding && inner.class == Class.request) {
 						for (const broad of writers.values()) {
 							if (broad == writer) continue;
-							while (broad.desiredLength < 1) await broad.ready;
-							await broad.write(indication.frame);
+							await write(broad, indication.frame);
 						}
 					}
 				}
