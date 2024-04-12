@@ -129,7 +129,7 @@ export class Conn extends RTCPeerConnection {
 			else if (negotiation_needed) {
 				negotiation_needed = false;
 				await super.setLocalDescription();
-				try { this.#dc.send(JSON.stringify({ description: this.localDescription })); } catch {}
+				try { this.#dc.send(JSON.stringify({ description: this.localDescription })); } catch {/* noop */}
 			}
 			else if (remote_desc) {
 				const desc = remote_desc; remote_desc = false;

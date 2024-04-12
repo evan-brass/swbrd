@@ -31,6 +31,8 @@ const certb = await Cert.generate();
 
 const a = new Addr(`turn+tcp:${certb}@127.0.0.1`).connect({ cert: certa });
 const b = new Addr(`turn+tcp:${certa}@127.0.0.1`).connect({ cert: certb });
+a.addEventListener('connectionstatechange', () => console.log('a', a.connectionState));
+b.addEventListener('connectionstatechange', () => console.log('b', b.connectionState));
 
 // Pass candidates from a to b, but delete everything except the port field (use defaults for everything except port):
 // a.addEventListener('icecandidate', async ({candidate}) => {console.log(JSON.stringify(candidate)); await b.addIceCandidate({ port: candidate?.port })});
