@@ -1,7 +1,6 @@
 import { idf } from "../src/cert.js";
 import { Conn, Cert, Addr, cert } from '../src/index.js';
-import { Class, Method, Stun } from "../src/stun.js";
-import { Listener } from '../src/listen.js';
+// import { Class, Method, Stun } from "../switch/stun.js";
 
 // const addr = new Addr('turn+tcp:AC2ZoeeWTZAyFrpZAczuqRpQQ9vyKebnnAvTocdZyzeD@local.evan-brass.net');
 // await addr.resolve_id();

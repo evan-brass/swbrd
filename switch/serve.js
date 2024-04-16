@@ -1,5 +1,5 @@
-import { Stun, Class, Method } from '../src/stun.js';
-import { ChannelData, parse } from '../src/turn.js';
+import { Stun, Class, Method } from './stun.js';
+import { ChannelData, parse } from './turn.js';
 import { write } from "./util.js";
 import { realm, users, long_term } from "./auth.js";
 import { allocations, allocate, hostname } from "./allocate.js";

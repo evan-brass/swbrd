@@ -1,4 +1,4 @@
-import { md5 } from "../src/md5.js";
+import { md5 } from "./md5.js";
 import { encoder } from "./util.js";
 
 export const users = new Map();
