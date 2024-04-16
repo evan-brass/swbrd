@@ -40,7 +40,6 @@ async function handle(conn) {
 				response.method = frame.method;
 				response.length = 0;
 				response.txid.set(frame.txid);
-				console.log('request', conn.remoteAddr.hostname, conn.remoteAddr.port, frame.method);
 
 				const key = users.get(frame.username);
 
@@ -92,9 +91,8 @@ async function handle(conn) {
 				await write(writer, response.frame);
 			}
 			else if (xrelayed && frame instanceof ChannelData || (frame instanceof Stun && frame.class == Class.indication && frame.method == Method.send)) {
-				// TODO: Limit bandwidth
 				const xpeer = frame.xpeer ?? channels.get(frame.channel);
-				if (xpeer && frame.data) {
+				if (xpeer?.hostname == hostname && frame.data) {
 					// Prepare a data indication for this packet
 					const indication = new Stun(send);
 					indication.method = Method.data;
@@ -111,13 +109,12 @@ async function handle(conn) {
 					const inner = parse(frame.data);
 
 					// Try to unicast the packet
-					const uni = xpeer.hostname == hostname && allocations.get(xpeer.port);
+					const uni = allocations.get(xpeer.port);
 					if (uni && uni !== writer) {
 						await write(uni, indication.frame);
 					}
 					// Otherwise broadcast the packet (So long as it's a connection test)
 					else if (inner instanceof Stun && inner.method == Method.binding && inner.class == Class.request) {
-						console.log('broadcast', inner.username, inner.controlled, inner.controlling, inner.usecandidate);
 						for (const broad of allocations.values()) {
 							if (broad == writer) continue;
 							await write(broad, indication.frame);
