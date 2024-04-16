@@ -1,28 +1,12 @@
 import { Stun, Class, Method } from '../src/stun.js';
 import { ChannelData, parse } from '../src/turn.js';
-import { md5 } from "../src/md5.js";
+import { write } from "./util.js";
+import { realm, users, long_term } from "./auth.js";
+import { allocations, allocate, hostname } from "./allocate.js";
 
-// const short_key = await crypto.subtle.importKey('raw', encoder.encode("the/ice/password/constant"), {
-// 	name: 'HMAC',
-// 	hash: 'SHA-1'
-// }, true, ['sign', 'verify']);
-const long_key = await crypto.subtle.importKey('raw', md5('guest:none:the/guest/turn/credential/constant'), {
-	name: 'HMAC',
-	hash: 'SHA-1'
-}, true, ['sign', 'verify']);
+await long_term('guest', 'the/guest/turn/credential/constant');
 
 const maxByteLength = 2**13;
-
-const writers = new Map();
-
-const hostname = '::ffff:169.254.255.255';
-
-async function write(writer, frame) {
-	console.log('write', writer, frame.byteLength);
-	while (writer.desiredSize < 0) await writer.ready;
-	if (writer.desiredSize == null || writer.desiredSize == 0) return;
-	await writer.write(frame);
-}
 
 async function handle(conn) {
 	let recv = new ArrayBuffer(40, {maxByteLength});
@@ -32,14 +16,7 @@ async function handle(conn) {
 	let available = 0;
 	const reader = conn.readable.getReader({ mode: 'byob' });
 
-	// Allocate a port for the peer
-	let port;
-	while (!port || writers.has(port)) {
-		port = crypto.getRandomValues(new Uint16Array(1))[0]
-	}
-	writers.set(port, writer);
-	const xrelayed = {hostname, port};
-
+	let xrelayed;
 	const channels = new Map();
 	try {
 		while (true) {
@@ -65,25 +42,33 @@ async function handle(conn) {
 				response.txid.set(frame.txid);
 				console.log('request', conn.remoteAddr.hostname, conn.remoteAddr.port, frame.method);
 
-				if (frame.method == Method.binding) {
+				const key = users.get(frame.username);
+
+				if (!frame.username || frame.nonce != 'none' || frame.realm != realm) {
+					response.class = Class.error; response.errcode = 401;
+					response.nonce = 'none'; response.realm = 'none';
+				}
+				else if (frame.method == Method.binding) {
 					response.class = Class.success;
 					response.xmapped = conn.remoteAddr;
 				}
+				else if (!key) {
+					response.class = Class.error; response.errcode = 403;
+				}
 				else if (frame.method == Method.allocate) {
-					if (frame.nonce != 'none' || frame.realm != 'none') {
-						response.class = Class.error; response.errcode = 401;
-						response.nonce = 'none'; response.realm = 'none';
-					} else {
+					xrelayed ??= allocate(writer);
+					if (!xrelayed) {
+						response.class = Class.error; response.errcode = 508;
+					}
+					else {
 						response.class = Class.success;
 						response.xmapped = conn.remoteAddr;
 						response.xrelayed = xrelayed;
 						response.lifetime = frame.lifetime || 3600;
-						await response.sign(long_key);
 					}
 				}
 				else if (frame.method == Method.createPermission) {
 					response.class = Class.success;
-					await response.sign(long_key);
 				}
 				else if (frame.method == Method.channelBind) {
 					if (channels.size < 5 && frame.xpeer) {
@@ -93,17 +78,21 @@ async function handle(conn) {
 						response.class = Class.error;
 						response.errcode = 508;
 					}
-					await response.sign(long_key);
+				}
+				else if (frame.method == Method.refresh) {
+					response.class = Class.success;
 				}
 				else {
 					response.class = Class.error; response.errcode = 404;
 				}
 
+				if (key) await response.sign(key);
 				if (frame.fingerprint) response.fingerprint = true;
 
 				await write(writer, response.frame);
 			}
-			else if (frame instanceof ChannelData || (frame instanceof Stun && frame.class == Class.indication && frame.method == Method.send)) {
+			else if (xrelayed && frame instanceof ChannelData || (frame instanceof Stun && frame.class == Class.indication && frame.method == Method.send)) {
+				// TODO: Limit bandwidth
 				const xpeer = frame.xpeer ?? channels.get(frame.channel);
 				if (xpeer && frame.data) {
 					// Prepare a data indication for this packet
@@ -122,14 +111,14 @@ async function handle(conn) {
 					const inner = parse(frame.data);
 
 					// Try to unicast the packet
-					const uni = xpeer.hostname == hostname && writers.get(xpeer.port);
+					const uni = xpeer.hostname == hostname && allocations.get(xpeer.port);
 					if (uni && uni !== writer) {
 						await write(uni, indication.frame);
 					}
 					// Otherwise broadcast the packet (So long as it's a connection test)
 					else if (inner instanceof Stun && inner.method == Method.binding && inner.class == Class.request) {
 						console.log('broadcast', inner.username, inner.controlled, inner.controlling, inner.usecandidate);
-						for (const broad of writers.values()) {
+						for (const broad of allocations.values()) {
 							if (broad == writer) continue;
 							await write(broad, indication.frame);
 						}
@@ -145,9 +134,9 @@ async function handle(conn) {
 		console.warn(e);
 		// Do Nothing
 	} finally {
-		writers.delete(xrelayed.hostname);
+		if (xrelayed) allocations.delete(xrelayed.port);
 	}
-	// Cleanup the connection?
+	// Cleanup the connection / reader / writer?
 }
 
 for await (const conn of Deno.listen({ hostname: '::', port: 3478 })) {
