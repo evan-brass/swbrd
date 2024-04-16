@@ -5,7 +5,7 @@ import { query_txt } from './dns.js';
  * Example Addr-esses:
  * const a = new Addr('udp:seed.evan-brass.net'); await a.resolve_id(); const conn = a.connect();
  * const conn = new Addr('udp:vMLqtj41eqxrH4ExSw893MLbgDm1JHWqkv9R9AMqhHDE@example.com').connect();
- * const conn = new Addr('turn:U5PYjsHYz77HroCoCTy7hM9YuZ9G6oFZ6z3mWrFCP8uF@127.0.0.1?turn_transport=tcp').connect();
+ * const conn = new Addr('turn+tcp:U5PYjsHYz77HroCoCTy7hM9YuZ9G6oFZ6z3mWrFCP8uF@127.0.0.1').connect();
  */
 export class Addr extends URL {
 	#id;
