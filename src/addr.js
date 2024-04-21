@@ -24,7 +24,7 @@ export class Addr extends URL {
 		const host = (http.host.length < https.host.length) ? https.host : http.host;
 		const port = parseInt(http.port || https.port || 3478);
 		const address = http.hostname.replaceAll(/[\[\]]/g, '')
-		return { username: http.username, password: http.password, hostname: http.hostname, host, port, address };
+		return { username: decodeURIComponent(http.username), password: decodeURIComponent(http.password), hostname: http.hostname, host, port, address };
 	}
 	connect(config = null) {
 		const {address, port, username, password: ice_pwd} = this.#authority();
