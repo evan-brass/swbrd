@@ -48,3 +48,29 @@ export function parse(data) {
 		return channel;
 	}
 }
+
+export async function* parse_readable(readable, {recv}) {
+	const reader = readable.getReader({mode: 'byob'});
+	let available = 0;
+	while (true) {
+		try {
+			const {value, done} = await reader.read(new Uint8Array(recv, available));
+			if (done) break;
+			available += value.byteLength; recv = value.buffer;
+		} catch { break; }
+
+		const res = parse(new Uint8Array(recv, 0, available));
+		if (typeof res == 'number') {
+			// Try to resize recv to accomodate the required size:
+			if (res > recv.maxByteLength) break;
+			recv.resize(res);
+			continue;
+		}
+
+		yield res;
+
+		// Shift unused data to the front of the buffer
+		available -= res.needed;
+		new Uint8Array(recv, 0).set(new Uint8Array(recv, res.needed));
+	}
+}

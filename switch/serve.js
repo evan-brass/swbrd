@@ -1,5 +1,5 @@
 import { Stun, Class, Method } from './stun.js';
-import { ChannelData, parse } from './turn.js';
+import { ChannelData, parse, parse_readable } from './turn.js';
 import { write } from "./util.js";
 import { realm, users, long_term } from "./auth.js";
 import { allocations, allocate, hostname } from "./allocate.js";
@@ -9,32 +9,15 @@ await long_term('guest', 'the/guest/turn/credential/constant');
 const maxByteLength = 2**13;
 
 async function handle(conn) {
-	let recv = new ArrayBuffer(40, {maxByteLength});
+	const recv = new ArrayBuffer(40, {maxByteLength});
 	const send = new ArrayBuffer(40, {maxByteLength});
 
 	const writer = conn.writable.getWriter();
-	let available = 0;
-	const reader = conn.readable.getReader({ mode: 'byob' });
 
 	let xrelayed;
 	const channels = new Map();
 	try {
-		while (true) {
-			try {
-				const {value, done} = await reader.read(new Uint8Array(recv, available));
-				if (done) break;
-				available += value.byteLength; recv = value.buffer;
-			} catch { break; }
-	
-			const res = parse(new Uint8Array(recv, 0, available));
-			if (typeof res == 'number') {
-				// Try to resize recv to accomodate the required size:
-				if (res > recv.maxByteLength) break;
-				recv.resize(res);
-				continue;
-			}
-			
-			const frame = res;
+		for await (const frame of parse_readable(conn.readable, {recv})) {
 			if (frame instanceof Stun && frame.class == Class.request) {
 				const response = new Stun(send);
 				response.method = frame.method;
@@ -122,10 +105,6 @@ async function handle(conn) {
 					}
 				}
 			}
-	
-			// Shift unused data to the front of the buffer
-			available -= res.needed;
-			new Uint8Array(recv, 0).set(new Uint8Array(recv, res.needed));
 		}
 	} catch (e) {
 		console.warn(e);
