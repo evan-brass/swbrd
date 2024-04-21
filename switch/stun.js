@@ -161,7 +161,7 @@ export class Stun extends DataView {
 		attr.length = buff.byteLength;
 		attr.bytes.set(buff);
 	}
-	get_addr(type, { transport = 'udp', xor = true, ipv4_mapped = true } = {}) {
+	get_addr(type, { xor = true, ipv4_mapped = true } = {}) {
 		const attr = this.attrs.get(type);
 		if (!attr) return;
 		if (attr.length < 4) return;
@@ -184,7 +184,7 @@ export class Stun extends DataView {
 		// Unknown
 		else { return }
 
-		return { hostname, port, transport };
+		return { hostname, port };
 	}
 	set_addr(type, {hostname, port}, { xor = true} = {}) {
 		const ip = parse_ipaddr(hostname).map((v, i, arr) => {
