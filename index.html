@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html>
+	<head><meta charset="UTF-8"><title>Switchboard</title></head>
+	<body>
+		<script type="module">
+			import { Addr, Cert } from './src/index.js';
+
+			const pass = 'alongicepasswordandshit';
+
+			const certa = await Cert.load('testa');
+			const addra = new Addr(`turn+tcp://${certa}:${encodeURIComponent(pass)}@switch.evan-brass.net`);
+			console.log(certa, addra);
+
+			const certb = await Cert.load('testb');
+			const addrb = new Addr(`turn+tcp://${certb}:${encodeURIComponent(pass)}@switch.evan-brass.net`);
+			console.log(certb, addrb);
+
+			const a = addrb.connect({ cert: certa });
+			a.addEventListener('connectionstatechange', () => console.log('a', a.connectionState));
+			console.log(a);
+
+			const b = addra.connect({ cert: certb });
+			b.addEventListener('connectionstatechange', () => console.log('b', b.connectionState));
+			console.log(b);
+		</script>
+	</body>
+</html>
