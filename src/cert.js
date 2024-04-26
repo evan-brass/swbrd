@@ -1,28 +1,4 @@
-import { base58, charset } from './base58.js';
-
-export const idf = new class IdFingerprint {
-	algorithm;
-	bytes;
-	get bits() { return this.bytes * 8; }
-	get pad_len() { return Math.ceil(this.bits / Math.log2(58)); }
-	constructor() { Object.assign(this, ...arguments); }
-	[Symbol.toPrimitive](_hint) {
-		return this.algorithm;
-	}
-	toString(id) {
-		return base58(BigInt(id)).padEnd(this.pad_len, charset[0]);
-	}
-	fromString(s) {
-		s = String(s);
-		if (s.length != this.pad_len) return;
-		const n = base58(s);
-		if (!n || BigInt.asUintN(this.bits, n) != n) return
-		return n;
-	}
-	fingerprint(id) {
-		return `${this.algorithm} ${BigInt(id).toString(16).padStart(2 * this.bytes, '0').replace(/[0-9a-f]{2}/ig, ':$&').slice(1)}`;
-	}
-}({ algorithm: 'sha-256', bytes: 32 });
+import { algorithm, from_bytes, to_string } from "./id.js";
 
 export class Cert extends RTCCertificate {
 	id;
@@ -34,7 +10,7 @@ export class Cert extends RTCCertificate {
 		// Try to retreive the fingerprint using getFingerprints
 		if (ret?.getFingerprints) {
 			for (const {algorithm, value} of ret.getFingerprints()) {
-				if (algorithm.toLowerCase() == String(idf)) {
+				if (algorithm.toLowerCase() == algorithm) {
 					fingerprint = value;
 					break;
 				}
@@ -47,7 +23,7 @@ export class Cert extends RTCCertificate {
 			temp.createDataChannel('');
 			const offer = await temp.createOffer();
 			for (const {1: algorithm, 2: value} of offer.sdp.matchAll(/^a=fingerprint:([^ ]+) ([0-9a-f]{2}(:[0-9a-f]{2})+)/img)) {
-				if (algorithm.toLowerCase() == String(idf)) {
+				if (algorithm.toLowerCase() == algorithm) {
 					fingerprint = value;
 					break;
 				}
@@ -58,10 +34,7 @@ export class Cert extends RTCCertificate {
 		// If we didn't get the required fingerprint, then return nothing
 		if (!fingerprint) return;
 
-		ret.id = BigInt.asUintN(
-			idf.bits,
-			BigInt('0x' + fingerprint.split(':').join(''))
-		);
+		ret.id = from_bytes(fingerprint.split(':'));
 		Object.freeze(ret);
 
 		return ret;
@@ -80,7 +53,7 @@ export class Cert extends RTCCertificate {
 		openreq.onblocked = ({ oldVersion, newVersion }) => rej(new Error(`Certificate Database blocked: ${oldVersion} -> ${newVersion}`));
 		const db = await wrap(openreq);
 
-		// Generate a replacement in case the existing certificate has expired / doesn't match the idf / etc.
+		// Generate a replacement in case the existing certificate has expired / doesn't match the algorithm / etc.
 		const candidate = await this.generate();
 
 		const trans = db.transaction('certs', 'readwrite');
@@ -88,11 +61,11 @@ export class Cert extends RTCCertificate {
 		const cursor_req = certs.openCursor(key);
 		let cursor;
 		while (cursor = await wrap(cursor_req)) {
-			const { cert, id, algorithm } = cursor.value;
+			const { cert, id, algorithm: alg } = cursor.value;
 			if (cert.expires - Date.now() < 2 * (24 * 60 * 60 * 1000)) {
 				cursor.delete();
 			}
-			else if (algorithm != String(idf)) {
+			else if (alg != algorithm) {
 				cursor.continue();
 			}
 			else {
@@ -105,14 +78,14 @@ export class Cert extends RTCCertificate {
 		await wrap(certs.put({
 			cert: candidate,
 			id: candidate.id,
-			algorithm: String(idf)
+			algorithm
 		}, key));
 
 		return candidate;
 	}
 	[Symbol.toPrimitive](hint) {
 		if (hint == 'number') return this.id;
-		return idf.toString(this);
+		return to_string(this.id);
 	}
 }
 

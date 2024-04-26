@@ -1,4 +1,4 @@
-import { idf } from './cert.js';
+import { algorithm, from_string } from "./id.js";
 import { Conn } from './conn.js';
 import { query_txt } from './dns.js';
 /**
@@ -11,9 +11,9 @@ export class Addr extends URL {
 	#id;
 	async resolve_id() {
 		const {username, hostname} = this.#authority();
-		this.#id ??= idf.fromString(username);
-		for await (const txt of query_txt(hostname, {prefix: `swbrd(${idf.algorithm})=`})) {
-			this.#id ??= idf.fromString(txt);
+		this.#id ??= from_string(username);
+		for await (const txt of query_txt(hostname, {prefix: `swbrd(${algorithm})=`})) {
+			this.#id ??= from_string(txt);
 		}
 		return this.#id;
 	}
@@ -28,7 +28,7 @@ export class Addr extends URL {
 	}
 	connect(config = null) {
 		const {address, port, username, password: ice_pwd} = this.#authority();
-		this.#id ??= idf.fromString(username);
+		this.#id ??= from_string(username);
 		if (!this.#id) return;
 		let setup = this.searchParams.get('setup');
 		let ice_lite = this.searchParams.get('ice_lite');

@@ -1,4 +1,5 @@
-import { cert as default_cert, idf } from './cert.js';
+import { cert as default_cert } from './cert.js';
+import { to_fingerprint, to_string } from "./id.js";
 
 export const defaults = {
 	iceServers: [{urls: 'stun:global.stun.twilio.com'}]
@@ -92,16 +93,14 @@ export class Conn extends RTCPeerConnection {
 		} catch (e) { console.warn(e); /* Possibly a misbehaving peer */}})
 
 		// First pass of signaling
-		const fingerprint = idf.fingerprint(peerid);
-		const ice_ufrag = idf.toString(peerid);
 		await super.setRemoteDescription({ type: 'offer', sdp: [
 			'v=0',
 			'o=swbrd 42 0 IN IP4 0.0.0.0',
 			's=-',
 			't=0 0',
 			'a=group:BUNDLE dc',
-			`a=fingerprint:${fingerprint}`,
-			`a=ice-ufrag:${ice_ufrag}`,
+			`a=fingerprint:${to_fingerprint(peerid)}`,
+			`a=ice-ufrag:${to_string(peerid)}`,
 			`a=ice-pwd:${ice_pwd}`,
 			'a=ice-options:trickle',
 			...(ice_lite != undefined ? ['a=ice-lite'] : []),
@@ -114,7 +113,7 @@ export class Conn extends RTCPeerConnection {
 		].join('\n') });
 		const answer = await super.createAnswer();
 		answer.sdp = answer.sdp
-			.replace(/^a=ice-ufrag:.+/im, `a=ice-ufrag:${idf.toString(cert)}`)
+			.replace(/^a=ice-ufrag:.+/im, `a=ice-ufrag:${to_string(cert)}`)
 			.replace(/^a=ice-pwd:.+/im, `a=ice-pwd:${ice_pwd}`);
 		await super.setLocalDescription(answer);
 
