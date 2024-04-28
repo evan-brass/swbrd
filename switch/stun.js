@@ -254,7 +254,7 @@ export class Stun extends DataView {
 		return attr.bytes;
 	}
 	set data(value) {
-		const attr = this.new_attr(0x0013);
+		const attr = this.new_attr();
 		attr.type = 0x0013;
 		attr.length = value.byteLength;
 		attr.bytes.set(new Uint8Array(value.buffer ?? value, value.byteOffset, value.byteLength));
