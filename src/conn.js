@@ -74,6 +74,7 @@ export class Conn extends RTCPeerConnection {
 
 	async #signaling_task(/* Session: */ { cert, peerid, polite, setup, ice_lite, ice_pwd, first_signaling_res }) {
 		ice_pwd ||= 'the/ice/password/constant';
+		// Read the following line as: "If I am polite, then the remote peer will be active therefore I must be passive": unless overridden, the polite peer is the DTLS server.
 		setup ||= polite ? 'active' : 'passive';
 
 		// Prepare for renegotiation
