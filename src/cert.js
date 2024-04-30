@@ -1,8 +1,11 @@
 import { algorithm, from_bytes, to_string } from "./id.js";
 
+const day_in_ms = 24 * 60 * 60 * 1000;
+const year_in_ms = 365 * day_in_ms;
+
 export class Cert extends RTCCertificate {
 	id;
-	static async generate(params = { name: 'ECDSA', namedCurve: 'P-256' }) {
+	static async generate(params = { name: 'ECDSA', namedCurve: 'P-256', expires: Date.now() + year_in_ms }) {
 		const ret = await RTCPeerConnection.generateCertificate(params);
 		Object.setPrototypeOf(ret, this.prototype);
 
@@ -62,7 +65,7 @@ export class Cert extends RTCCertificate {
 		let cursor;
 		while (cursor = await wrap(cursor_req)) {
 			const { cert, id, algorithm: alg } = cursor.value;
-			if (cert.expires - Date.now() < 2 * (24 * 60 * 60 * 1000)) {
+			if (cert.expires - Date.now() < 2 * day_in_ms) {
 				cursor.delete();
 			}
 			else if (alg != algorithm) {
