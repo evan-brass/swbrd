@@ -23,7 +23,7 @@ export function base(input, {
 			if (d == -1) return;
 			ret += BigInt(d) * BigInt(charset.length) ** BigInt(input.length - i - 1);
 		}
-		if (BigInt.asUintN(bits, ret) != ret) return; // Make sure that the result is within the numbers representable with the given number of bits
+		if (typeof ret != 'bigint' || BigInt.asUintN(bits, ret) != ret) return; // Make sure that the result is within the numbers representable with the given number of bits
 	}
 	else {
 		input = BigInt(input);
