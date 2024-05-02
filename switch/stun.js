@@ -1,5 +1,4 @@
 import { crc32 } from "./crc32.js";
-import { parse_ipaddr } from "./ipaddr.js";
 
 export const encoder = new TextEncoder();
 export const decoder = new TextDecoder();
@@ -161,33 +160,30 @@ export class Stun extends DataView {
 		attr.length = buff.byteLength;
 		attr.bytes.set(buff);
 	}
-	get_addr(type, { xor = true, ipv4_mapped = true } = {}) {
+	get_addr(type, { xor = true } = {}) {
 		const attr = this.attrs.get(type);
 		if (!attr) return;
 		if (attr.length < 4) return;
 		const family = attr.getUint8(1);
 		const port = attr.getUint16(2) ^ (xor ? this.getUint16(4) : 0);
-		let hostname;
+		let ip;
 		// IPv4
 		if (family == 0x01) {
 			if (attr.length != 8) return;
-			hostname = (ipv4_mapped ? '::ffff:' : '') + Array.from({length: 4}, (_, i) => attr.getUint8(4 + i) ^ (xor ? this.getUint8(4 + i) : 0))
-				.join('.');
+			ip = Uint8Array.from({length: 4}, (_, i) => attr.getUint8(4 + i) ^ (xor ? this.getUint8(4 + i) : 0));
 		}
 		// IPv6
 		else if (family == 0x02) {
 			if (attr.length != 20) return;
-			hostname = Array.from({length: 8}, (_, i) => attr.getUint16(4 + 2 * i) ^ (xor ? this.getUint16(4 + 2 * i) : 0))
-				.map(n => n.toString(16))
-				.join(':');
+			ip = Uint16Array.from({length: 8}, (_, i) => attr.getUint16(4 + 2 * i) ^ (xor ? this.getUint16(4 + 2 * i) : 0));
 		}
 		// Unknown
 		else { return }
 
-		return { hostname, port };
+		return { ip, port };
 	}
-	set_addr(type, {hostname, port}, { xor = true} = {}) {
-		const ip = parse_ipaddr(hostname).map((v, i, arr) => {
+	set_addr(type, {ip, port}, { xor = true} = {}) {
+		const xip = ip.map((v, i, arr) => {
 			const xv = xor ? (arr instanceof Uint8Array ? this.getUint8(4 + i) : this.getUint16(4 + 2 * i)) : 0;
 			return v ^ xv
 		});
@@ -198,7 +194,7 @@ export class Stun extends DataView {
 		attr.setUint8(0, 0);
 		attr.setUint8(1, family);
 		attr.setUint16(2, port ^ (xor ? this.getUint16(4) : 0));
-		ip.forEach((v, i, arr) => {
+		xip.forEach((v, i, arr) => {
 			if (arr instanceof Uint8Array) {
 				attr.setUint8(4 + i, v);
 			} else {

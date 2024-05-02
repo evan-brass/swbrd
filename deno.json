@@ -6,6 +6,6 @@
 		"useTabs": true
 	},
 	"tasks": {
-		"dev": "deno run --watch --allow-net --allow-env switch/serve.js"
+		"dev": "deno run --watch --allow-net --allow-env --allow-read switch/serve.js"
 	}
 }

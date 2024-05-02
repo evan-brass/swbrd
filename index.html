@@ -18,12 +18,12 @@
 			// -- Step 2: Create connections using your certificates
 			//  - Option 1: Simultaneously connect using addresses through a switchboard server
 			// const swbrd = 'switch.evan-brass.net';
-			const swbrd = '127.0.0.1';
-			const addra = new Addr(`turn+tcp://${certa}@${swbrd}`);
-			const addrb = new Addr(`turn+tcp://${certb}@${swbrd}`);
-			console.log('addresses', addra, addrb);
-			const a = addrb.connect({ cert: certa });
-			const b = addra.connect({ cert: certb });
+			// const swbrd = '127.0.0.1';
+			// const addra = new Addr(`turn+tcp://${certa}@${swbrd}`);
+			// const addrb = new Addr(`turn+tcp://${certb}@${swbrd}`);
+			// console.log('addresses', addra, addrb);
+			// const a = addrb.connect({ cert: certa });
+			// const b = addra.connect({ cert: certb });
 
 			//  - Option 2: Simultaneously connect without a server, by passing ICE candidates
 			// const a = new Conn(certb, { cert: certa });
@@ -37,8 +37,8 @@
 			// const a = addr.connect({ cert: certa }); const b = new EventTarget();
 
 			//  - Option 4: Make a connection to a server using a non-vanity address
-			// const addr = new Addr('turn+tcp://ucCm6JK3s22XuCRiTZVFpWajUq0tIpB7lDn1Sv8dRv3@127.0.0.1');
-			// const a = addr.connect({ cert: certa }); const b = new EventTarget();
+			const addr = new Addr('turn+tcp://ucCm6JK3s22XuCRiTZVFpWajUq0tIpB7lDn1Sv8dRv3@127.0.0.1');
+			const a = addr.connect({ cert: certa }); const b = new EventTarget();
 			// const b = addr.connect({ cert: certb }); const a = new EventTarget();
 
 
