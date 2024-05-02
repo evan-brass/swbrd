@@ -1,4 +1,5 @@
 import { short_term } from "./auth.js";
+import { Protocol } from "./proto.js";
 import { Class, Method, Stun } from "./stun.js";
 import { allocations } from "./turn.js";
 
@@ -10,25 +11,10 @@ const short_key = await short_term();
 // 1.b if they are directed at someone else then check if we have a connection to them and forward it to them as a datachannel message
 // 2. Filter out everything except DTLS packets
 // 3. Pass DTLS packets onward
-export class IceLite {
-	#inner;
-	#writer;
-	#reader;
-	writable;
-	readable;
-	constructor(inner) {
-		this.#inner = inner;
-		this.writable = new WritableStream(this);
-		this.type = 'bytes';
-		this.readable = new ReadableStream(this);
-	}
-	start(_controller) {
-		this.#writer ??= this.#inner.writable.getWriter();
-		this.#reader ??= this.#inner.readable.getReader();
-	}
+export class IceLite extends Protocol {
 	async pull(controller) {
 		for (;;) {
-			const { value, done } = await this.#reader.read();
+			const { value, done } = await super.read();
 			if (done) { controller.close(); return }
 			if (value.byteLength < 1) continue;
 
@@ -66,7 +52,7 @@ export class IceLite {
 					else {
 						msg.length = 0;
 						msg.class = Class.success;
-						msg.xmapped = this.#inner.remoteAddr;
+						msg.xmapped = this.inner.remoteAddr;
 						await msg.sign(short_key);
 					}
 					msg.fingerprint = true;
@@ -76,20 +62,11 @@ export class IceLite {
 				else {
 					// TODO: Remove this broadcasting and replace it with a datachannel message to the dst that src is trying to connect to them
 					for (const turn of allocations.values()) {
-						if (turn == this.#inner) continue;
-						await turn.write(value, { xpeer: this.#inner.remoteAddr });
+						if (turn == this.inner) continue;
+						await turn.write(value, { xpeer: this.inner.remoteAddr });
 					}
 				}
 			} 
 		}
 	}
-	async cancel(reason) { await this.#reader.cancel(reason); }
-
-	async write(chunk) {
-		while (this.#writer.desiredSize < 0) await this.#writer.ready;
-		if (this.#writer.desiredSize == null || this.#writer.desiredSize == 0) return;
-		await this.#writer.write(chunk);
-	}
-	async close() { await this.#writer.close(); }
-	async abort(reason) { await this.#writer.abort(reason); }
 }

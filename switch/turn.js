@@ -1,6 +1,7 @@
 import { parse_ipaddr } from "./ipaddr.js";
 import { Stun, Class, Method } from './stun.js';
 import { long_term, realm } from "./auth.js";
+import { Protocol } from "./proto.js";
 
 export const allocations = new Map();
 const fake_ip = new Uint8Array([169, 254, 255, 255]);
@@ -27,8 +28,7 @@ const maxByteLength = 2**13;
 const indication = new Stun(new ArrayBuffer(40, {maxByteLength}));
 indication.class = Class.indication; indication.method = Method.data;
 
-export class TurnConn {
-	#inner;
+export class TurnConn extends Protocol {
 	#xmapped;
 	#xrelayed;
 	#long_key;
@@ -36,22 +36,11 @@ export class TurnConn {
 	#recv;
 	#available = 0;
 	#send;
-	#reader;
-	#writer;
-	readable;
-	writable;
 	constructor(inner) {
-		this.#inner = inner;
+		super(inner, {mode: 'byob'});
 		this.#xmapped = { ip: parse_ipaddr(inner.remoteAddr.hostname), port: inner.remoteAddr.port };
 		this.#recv = new ArrayBuffer(40, {maxByteLength});
 		this.#send = new ArrayBuffer(40, {maxByteLength});
-		this.writable = new WritableStream(this);
-		this.type = 'bytes'; // 
-		this.readable = new ReadableStream(this);
-	}
-	start(_controller) {
-		this.#reader ??= this.#inner.readable.getReader({mode: 'byob'});
-		this.#writer ??= this.#inner.writable.getWriter();
 	}
 	get remoteAddr() {
 		return { ip: fake_ip, port: this.#xrelayed };
@@ -60,7 +49,7 @@ export class TurnConn {
 		for (;;) {
 			let frame;
 			try {
-				const {value, done} =  await this.#reader.read(new Uint8Array(this.#recv, this.#available));
+				const {value, done} =  await super.read(new Uint8Array(this.#recv, this.#available));
 				if (done) { controller.close(); break; }
 				this.#available += value.byteLength; this.#recv = value.buffer;
 	
@@ -176,37 +165,23 @@ export class TurnConn {
 			}
 		}
 	}
-	async cancel(reason) {
-		await Promise.all([
-			this.#reader.cancel(reason),
-			this.#writer.abort(reason)
-		]);
-	}
 
 	// WritableStream
 	async write(chunk, {xpeer = {ip: fake_ip, port: 4666}} = {}) {
-		while (this.#writer.desiredSize < 0) await this.#writer.ready;
-		if (this.#writer.desiredSize == null || this.#writer.desiredSize == 0) return;
-		
-		if (!(chunk instanceof Stun || chunk instanceof ChannelData)) {
-			indication.length = 0;
-			crypto.getRandomValues(indication.txid); indication.magic = true;
-			indication.xpeer = xpeer;
-			indication.data = chunk;
-			chunk = indication;
-		}
-
 		// TODO: Limit the # of bytes sent to not exceed the # of bytes received
 		// TODO: Cap bandwidth
 
-		await this.#writer.write(chunk.frame);
-	}
-	async close() { await this.#writer.close(); }
-	async abort(reason) {
-		await Promise.all([
-			this.#writer.abort(reason),
-			this.#reader.cancel(reason)
-		]);
+		await super.write(chunk, { map(chunk) {
+			if (!(chunk instanceof Stun || chunk instanceof ChannelData)) {
+				indication.length = 0;
+				crypto.getRandomValues(indication.txid); indication.magic = true;
+				indication.xpeer = xpeer;
+				indication.data = chunk;
+				return indication.frame;
+			} else {
+				return chunk.frame;
+			}
+		}});
 	}
 }
 
