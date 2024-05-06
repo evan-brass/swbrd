@@ -7,10 +7,11 @@
 // import { parse_ipaddr } from "./ipaddr.js";
 import { TurnConn } from "./turn.js";
 import { IceLite } from "./lite.js";
+import { Dtls } from "./dtls.js";
 
 async function handle(conn) {
 	console.log('conn', conn);
-	const wrapped = new IceLite(new TurnConn(conn));
+	const wrapped = new Dtls(new IceLite(new TurnConn(conn)));
 	await wrapped.readable.pipeTo(wrapped.writable).catch(console.log);
 }
 

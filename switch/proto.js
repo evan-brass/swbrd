@@ -21,8 +21,12 @@ export class Protocol {
 
 	async pull(controller) {
 		const { value, done } = await this.read();
-		if (value) controller.enqueue(value);
-		if (done) controller.close();
+		if (controller) {
+			if (value) controller.enqueue(value);
+			if (done) controller.close();
+		} else {
+			return value;
+		}
 	}
 	read() {
 		return this.#reader.read(...arguments);
