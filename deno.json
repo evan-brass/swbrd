@@ -6,6 +6,7 @@
 		"useTabs": true
 	},
 	"tasks": {
-		"dev": "deno run --watch --allow-net --allow-env --allow-read --allow-ffi --unstable-ffi switch/serve.js"
+		"dev": "deno run --watch --allow-net --allow-env --allow-read --allow-ffi --unstable-ffi switch/serve.js",
+		"build": "docker run -v ./switch/dist:/build/dist $(docker build -q -f build/Dockerfile .)"
 	}
 }
