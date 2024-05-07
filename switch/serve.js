@@ -12,7 +12,11 @@ import { Dtls } from "./dtls.js";
 async function handle(conn) {
 	console.log('conn', conn);
 	const wrapped = new Dtls(new IceLite(new TurnConn(conn)));
-	await wrapped.readable.pipeTo(wrapped.writable).catch(console.log);
+	await wrapped.readable.pipeThrough(new TransformStream({
+		transform(chunk, controller) {
+			console.log('sctp', chunk);
+		}
+	})).pipeTo(wrapped.writable).catch(console.warn);
 }
 
 for await (const conn of Deno.listen({ hostname: '::', port: 3478 })) {

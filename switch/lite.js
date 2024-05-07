@@ -2,8 +2,11 @@ import { short_term } from "./auth.js";
 import { Protocol } from "./proto.js";
 import { Class, Method, Stun } from "./stun.js";
 import { allocations } from "./turn.js";
+import { id } from "./dtls.js";
+import { to_string } from "../src/id.js";
 
-const ice_ufrag = 'ucCm6JK3s22XuCRiTZVFpWajUq0tIpB7lDn1Sv8dRv3';
+const ice_ufrag = to_string(id);
+console.log(ice_ufrag);
 const short_key = await short_term();
 
 // 1. Detect ICE connection tests

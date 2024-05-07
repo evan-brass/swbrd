@@ -1,0 +1,6 @@
+{
+	"files.associations": {
+		"*.wasm": "wasm",
+		"ostream": "c"
+	}
+}
