@@ -9,6 +9,7 @@ __attribute__((import_name("set_timer"))) void js_set_timer(void* ctx, unsigned 
 __attribute__((import_name("get_timer"))) int js_get_timer(void* ctx);
 __attribute__((import_name("send"))) int js_send(void* ctx, const unsigned char *buf, size_t len);
 __attribute__((import_name("recv"))) int js_recv(void* ctx, unsigned char *buf, size_t len);
+__attribute__((import_name("verify"))) int js_verify(void* ctx, unsigned char* fingerprint, int preverify);
 
 typedef struct ssl_config {
 	mbedtls_ssl_config server;
@@ -20,6 +21,33 @@ typedef struct ssl_config {
 
 __attribute__((visibility("default"))) unsigned char * fingerprint(ssl_config* conf) {
 	return conf->fingerprint;
+}
+
+int verify(void* ctx, mbedtls_x509_crt* cert, int preverify, uint32_t* flags) {
+	mbedtls_sha256_context hasher;
+	mbedtls_sha256_init(&hasher);
+
+	unsigned char fingerprint[32];
+
+	if (mbedtls_sha256_starts(
+		&hasher,
+		0
+	) != 0) preverify = -1;
+	if (mbedtls_sha256_update(
+		&hasher,
+		cert->raw.p,
+		cert->raw.len
+	) != 0) preverify = -1;
+	if (mbedtls_sha256_finish(
+		&hasher,
+		fingerprint
+	) != 0) preverify = -1;
+
+	mbedtls_sha256_free(&hasher);
+
+	*flags = 0;
+
+	return js_verify(ctx, fingerprint, preverify);
 }
 
 __attribute__((visibility("default"))) ssl_config* setup(unsigned char* buffer, size_t length) {
@@ -38,8 +66,10 @@ __attribute__((visibility("default"))) ssl_config* setup(unsigned char* buffer, 
 	mbedtls_pk_init(&ret->pkey);
 	mbedtls_x509_crt_init(&ret->cert);
 
-	mbedtls_ssl_conf_authmode(&ret->server, MBEDTLS_SSL_VERIFY_NONE);
-	mbedtls_ssl_conf_authmode(&ret->client, MBEDTLS_SSL_VERIFY_NONE);
+	mbedtls_ssl_conf_authmode(&ret->server, MBEDTLS_SSL_VERIFY_REQUIRED);
+	mbedtls_ssl_conf_authmode(&ret->client, MBEDTLS_SSL_VERIFY_REQUIRED);
+	mbedtls_ssl_conf_ca_chain(&ret->server, &ret->cert, NULL);
+	mbedtls_ssl_conf_ca_chain(&ret->client, &ret->cert, NULL);
 
 	if (mbedtls_ssl_config_defaults(
 		&ret->server,
@@ -115,6 +145,7 @@ __attribute__((visibility("default"))) mbedtls_ssl_context* session(ssl_config* 
 
 	mbedtls_ssl_init(ret);
 	mbedtls_ssl_set_mtu(ret, 1200);
+	mbedtls_ssl_set_verify(ret, verify, ret);
 	mbedtls_ssl_set_timer_cb(ret, ret, js_set_timer, js_get_timer);
 	mbedtls_ssl_set_bio(ret, ret, js_send, js_recv, NULL);
 

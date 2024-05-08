@@ -1,6 +1,6 @@
-import { Protocol } from "./proto.js";
+// import { Protocol } from "./proto.js";
 
-const debug = false;
+const debug = true;
 
 const encoder = new TextEncoder();
 // const decoder = new TextDecoder();
@@ -19,13 +19,13 @@ const { module: _module, instance } = await WebAssembly.instantiateStreaming(fet
 			crypto.getRandomValues(mem8(offset, length));
 			return 0;
 		},
-		verify(ptr, fingerprint) {
+		verify(ptr, fingerprint, preverify) {
 			const session = sessions.get(ptr);
 			if (!session) throw new Error();
 
 			const actual = BigInt(mem8(fingerprint, 32).reduce((a, v) => a + v.toString(16).padStart(2, '0'), '0x'));
-			const ret = Number(session.pid == actual);
-			// console.log('verify', ...arguments, '->', ret);
+			const ret = session.pid == actual ? 0 : -666;
+			debug && console.log('verify', ...arguments, '->', ret);
 			return ret;
 		},
 		set_timer(ctx, int_delay, fin_delay) {
@@ -103,27 +103,39 @@ const MBEDTLS_ERR_SSL_PEER_CLOSE_NOTIFY = -0x7880;
 
 const byteLength = 1650;
 
-export class Dtls extends Protocol {
+export class Dtls {
+	pid;
+	#controller;
+
 	#ptr;
+	#recv_res;
 	#recv;
 	#send;
 	#wbuff;
 	#rbuff;
-	constructor() {
-		super(...arguments);
-	}
-	async start() {
-		await super.start(...arguments);
-		this.#ptr = dtls.session(ssl_config, true);
+	readable;
+	writable;
+	constructor(pid, controller) {
+		this.pid = pid;
+		this.#controller = controller;
+
+		this.#ptr = dtls.session(ssl_config, id < pid);
 		this.#wbuff = dtls.malloc(byteLength);
 		this.#rbuff = dtls.malloc(byteLength);
 		if (!this.#ptr || !this.#wbuff || !this.#rbuff) throw new Error();
 		sessions.set(this.#ptr, this);
+
+		this.writable = new WritableStream(this);
+		this.type = 'bytes';
+		this.readable = new ReadableStream(this);
+	}
+	data(chunk) {
+		this.#recv_res({ value: chunk, done: false });
 	}
 	recv(buff) {
 		debug && console.log('this.#recv', this.#recv);
-		if (!this.#recv || typeof this.#recv.then == 'function') {
-			this.#recv ??= super.read().then(v => this.#recv = v, err => this.#recv = {err});
+		if (!this.#recv) {
+			this.#recv ??= new Promise(res => this.#recv_res = res).then(v => this.#recv = v, err => this.#recv = {err});
 			return MBEDTLS_ERR_SSL_WANT_READ;
 		}
 		const { value, done, err } = this.#recv;
@@ -141,15 +153,8 @@ export class Dtls extends Protocol {
 		return 0;
 	}
 	send(buff) {
-		if (this.#send === true) {
-			this.#send = null;
-			return buff.byteLength;
-		}
-		else if (this.#send === false) {
-			return -1;
-		}
-		this.#send ??= super.write(buff.slice()).then(() => this.#send = true, () => this.#send = false);
-		return MBEDTLS_ERR_SSL_WANT_WRITE;
+		this.#controller.enqueue(buff.slice());
+		return buff.byteLength;
 	}
 	async pull(controller) {
 		for (;;) {
@@ -171,7 +176,6 @@ export class Dtls extends Protocol {
 	close() {
 		debug && console.log(":::close called:::");
 		dtls.close(this.#ptr);
-		return super.close();
 	}
 	async write(chunk, controller) {
 		mem8(this.#wbuff, byteLength).set(new Uint8Array(chunk.buffer, chunk.byteOffset, chunk.byteLength));
