@@ -71,7 +71,7 @@ Deno.test(async function vector2() {
 	assertEquals(test.class, Class.success, 'STUN class');
 	assertEquals(test.method, Method.binding, 'STUN method');
 	assertEquals(test.software, 'test vector', 'ATTR software');
-	assertEquals(test.xmapped.hostname, '::ffff:192.0.2.1', 'ATTR xmapped hostname');
+	assertEquals(test.xmapped.ip, Uint8Array.from([192, 0, 2, 1]), 'ATTR xmapped hostname');
 	assertEquals(test.xmapped.port, 32853, 'ATTR xmapped port');
 	const key = await crypto.subtle.importKey('raw', encoder.encode('VOkJxbRl1RmTxUk/WvJxBt'), { name: 'HMAC', hash: 'SHA-1' }, true, ['verify']);
 	assertEquals(await test.verify(key), true, 'ATTR integrity');
@@ -108,7 +108,7 @@ Deno.test(async function vector3() {
 	assertEquals(test.class, Class.success, 'STUN class');
 	assertEquals(test.method, Method.binding, 'STUN method');
 	assertEquals(test.software, 'test vector', 'ATTR software');
-	assertEquals(test.xmapped.hostname, '2001:db8:1234:5678:11:2233:4455:6677', 'ATTR xmapped hostname');
+	assertEquals(test.xmapped.ip, Uint16Array.from([0x2001, 0xdb8, 0x1234, 0x5678, 0x11, 0x2233, 0x4455, 0x6677]), 'ATTR xmapped hostname');
 	assertEquals(test.xmapped.port, 32853, 'ATTR xmapped port');
 	const key = await crypto.subtle.importKey('raw', encoder.encode('VOkJxbRl1RmTxUk/WvJxBt'), { name: 'HMAC', hash: 'SHA-1' }, true, ['verify']);
 	assertEquals(await test.verify(key), true, 'ATTR integrity');
