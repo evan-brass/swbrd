@@ -7,7 +7,6 @@ export const defaults = {
 
 export class Conn extends RTCPeerConnection {
 	#dc = this.createDataChannel('', {negotiated: true, id: 0});
-	#first_signaling;
 	#default_address = new Promise(res => this.addEventListener('icecandidate', ({ candidate }) => {
 		if (candidate === null) return res('255.255.255.255');
 		const {1: address} = /([^ ]+) [^ ]+ typ relay/i.exec(candidate.candidate) ?? {};
@@ -29,9 +28,6 @@ export class Conn extends RTCPeerConnection {
 			peerIdentity: null,
 		});
 
-		let first_signaling_res;
-		this.#first_signaling = new Promise(res => first_signaling_res = res);
-
 		const polite = BigInt(cert) < peerid;
 		const {
 			setup,
@@ -42,25 +38,25 @@ export class Conn extends RTCPeerConnection {
 		this.#signaling_task({
 			cert, polite, peerid,
 			setup, ice_lite, ice_pwd,
-			first_signaling_res
 		}).catch(() => this.close());
 	}
 
 	async addIceCandidate(candidate) {
 		if (candidate == null) return;
 
-		await this.#first_signaling;
-
 		if (typeof candidate != 'object') {
 			candidate = { candidate: candidate };
 		}
+
+		// Can't add ICE candidates while the remote description is null:
+		while (super.remoteDescription === null) await new Promise(res => this.addEventListener('signalingstatechange', res, {once: true}));
+		
 		candidate.usernameFragment ??= /a=ice-ufrag:(.+)/i.exec(super.remoteDescription.sdp)[1];
 		candidate.candidate ??= 'candidate:' + [
 			candidate.foundation || 'foundation',
 			candidate.component || '1',
 			candidate.transport || 'udp',
 			candidate.priority || '42',
-			// TODO: Currently my TURN server returns this address, but what we actually need to do is to use whatever address we received from the turn server
 			candidate.address || await this.#default_address,
 			candidate.port || '4666',
 			'typ', candidate.type || 'relay',
@@ -72,7 +68,7 @@ export class Conn extends RTCPeerConnection {
 		return await super.addIceCandidate(candidate);
 	}
 
-	async #signaling_task(/* Session: */ { cert, peerid, polite, setup, ice_lite, ice_pwd, first_signaling_res }) {
+	async #signaling_task(/* Session: */ { cert, peerid, polite, setup, ice_lite, ice_pwd }) {
 		ice_pwd ||= 'the/ice/password/constant';
 		// Read the following line as: "If I am polite, then the remote peer will be active therefore I must be passive": unless overridden, the polite peer is the DTLS server.
 		setup ||= polite ? 'active' : 'passive';
@@ -117,8 +113,6 @@ export class Conn extends RTCPeerConnection {
 			.replace(/^a=ice-ufrag:.+/im, `a=ice-ufrag:${to_string(cert)}`)
 			.replace(/^a=ice-pwd:.+/im, `a=ice-pwd:${ice_pwd}`);
 		await super.setLocalDescription(answer);
-
-		first_signaling_res();
 
 		// Switchover into handling renegotiation
 		while (1) {
