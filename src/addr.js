@@ -30,12 +30,11 @@ export class Addr extends URL {
 		const {address, port, username, password: ice_pwd} = this.#authority();
 		this.#id ??= from_string(username);
 		if (!this.#id) return;
-		let setup = this.searchParams.get('setup');
+		const setup = this.searchParams.get('setup') ?? 'passive';
 		let ice_lite = this.searchParams.get('ice_lite');
 
 		// Configure connection parameters
 		if (/^udp:/i.test(this.protocol)) {
-			setup ??= 'passive';
 			ice_lite ??= true;
 		}
 
