@@ -49,7 +49,7 @@ export class TurnConn extends Protocol {
 		for (;;) {
 			let frame;
 			try {
-				const {value, done} =  await super.read(new Uint8Array(this.#recv, this.#available));
+				const {value, done} = await super.read(new Uint8Array(this.#recv, this.#available));
 				if (done) { controller.close(); break; }
 				this.#available += value.byteLength; this.#recv = value.buffer;
 	
