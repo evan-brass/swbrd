@@ -15,6 +15,7 @@ export class Conn extends RTCPeerConnection {
 		this.#default_address = address;
 		return address;
 	});
+	// TODO: Allow cert to be optional - In some cases it's possible (and desirable) to not use pregenerated certificates. This means we won't know our local pid until after createOffer which means we can't determine politeness until then which also means we can't use politeness to determine any parameters (currently just the setup parameter if it hasn't already been set).  In this scenario you are probably talking to an ICE Lite + DTLS server with optional client cert verification, which means that you (if it behaves well) don't need to mung your ICE credentials.
 	constructor(peerid, config = null) {
 		peerid = BigInt(peerid);
 		const cert = config?.cert ?? default_cert;
