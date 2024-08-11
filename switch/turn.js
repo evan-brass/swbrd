@@ -2,6 +2,13 @@ import { parse_ipaddr } from "./ipaddr.js";
 import { Stun, Class, Method } from './stun.js';
 import { long_term, realm } from "./auth.js";
 import { Protocol } from "./proto.js";
+import { id } from "./dtls.js";
+import { to_string, from_string } from "../src/id.js";
+import { short_term } from "./auth.js";
+
+const ice_ufrag = to_string(id);
+console.log(ice_ufrag);
+const short_key = await short_term();
 
 export const allocations = new Map();
 const fake_ip = new Uint8Array([169, 254, 255, 255]);
@@ -31,6 +38,7 @@ indication.class = Class.indication; indication.method = Method.data;
 export class TurnConn extends Protocol {
 	#xmapped;
 	#xrelayed;
+	get allocated() { return this.#xrelayed; }
 	#long_key;
 	#channels = new Map();
 	#recv;
@@ -41,9 +49,6 @@ export class TurnConn extends Protocol {
 		this.#xmapped = { ip: parse_ipaddr(inner.remoteAddr.hostname), port: inner.remoteAddr.port };
 		this.#recv = new ArrayBuffer(40, {maxByteLength});
 		this.#send = new ArrayBuffer(40, {maxByteLength});
-	}
-	get remoteAddr() {
-		return { ip: fake_ip, port: this.#xrelayed };
 	}
 	async pull(controller) {
 		for (;;) {
@@ -139,23 +144,81 @@ export class TurnConn extends Protocol {
 				) {
 					const port = frame instanceof ChannelData ? this.#channels.get(frame.channel) : frame.xpeer.port;
 					const data = frame.data;
-					const uni = allocations.get(port);
-					if (uni) {
-						// Relay the packet:
-						await uni.write(data, {xpeer: {ip: fake_ip, port: this.#xrelayed}});
-					} else {
-						// Pass the data up to the parent
-						if (controller.byobRequest) {
-							new Uint8Array(
-								controller.byobRequest.view.buffer,
-								controller.byobRequest.view.byteOffset,
-								controller.byobRequest.view.byteLength
-							).set(data);
-							controller.byobRequest.respond(Math.min(controller.byobRequest.view.byteLength, data.byteLength));
-						} else {
-							controller.enqueue(data.slice());
+					const msg = new Stun(data.buffer, data.byteOffset, data.byteLength);
+					if (port < min_port) {
+						const first_byte = data?.[0];
+
+						// Yield DTLS packets up to the parent protocol
+						if (20 <= first_byte && first_byte <= 64) {
+							// Pass the data up to the parent
+							if (controller.byobRequest) {
+								new Uint8Array(
+									controller.byobRequest.view.buffer,
+									controller.byobRequest.view.byteOffset,
+									controller.byobRequest.view.byteLength
+								).set(data);
+								controller.byobRequest.respond(Math.min(controller.byobRequest.view.byteLength, data.byteLength));
+							} else {
+								controller.enqueue(data.slice());
+							}
+							return;
 						}
-						return;
+						// Handle ICE connection tests to unallocated ports:
+						// - These could be to our hosted peer(s) or
+						// - It could be for another peer who has bound through this server
+						else if (
+							msg.byteLength >= msg.needed &&
+							msg.class == Class.request &&
+							msg.method == Method.binding &&
+							msg.username.indexOf(':') != -1 &&
+							msg.fingerprint
+						) {
+							const [dst, src] = msg.username.split(':')
+
+							// Hosted:
+							if (dst == ice_ufrag) {
+								const pid = from_string(src);
+
+								if (!await msg.verify(short_key)) {
+									msg.length = 0;
+									msg.class = Class.error; msg.errcode = 401;
+								}
+								else if (msg.controlled) {
+									msg.length = 0;
+									msg.class = Class.error; msg.errcode = 487;
+									await msg.sign(short_key);
+								}
+								else if (!pid) {
+									msg.length = 0;
+									msg.class = Class.error; msg.errcode = 403;
+									await msg.sign(short_key);
+								}
+								else {
+									msg.length = 0;
+									msg.class = Class.success;
+									msg.xmapped = { ip: fake_ip, port: this.#xrelayed };
+									await msg.sign(short_key);
+								}
+								msg.fingerprint = true;
+								await this.write(msg.frame);
+							}
+							// Send the msg as a datachannel message to the dst
+							else {
+								console.log('TODO: forward connection test', dst, '<-', src);
+								// TODO: Remove this broadcasting and replace it with a datachannel message to the dst that src is trying to connect to them
+								// for (const turn of allocations.values()) {
+								// 	if (turn == this.inner) continue;
+								// 	await turn.write(value, { xpeer: this.inner.remoteAddr });
+								// }
+							}
+						}
+						else { /* Drop anything else */ }
+					}
+					// Messages sent to ports >= to min_port should be unicast (or dropped)
+					else {
+						const uni = allocations.get(port);
+						// TODO: Maybe we should catch errors when writing to the other person's connection?
+						if (uni) await uni.write(data, {xpeer: {ip: fake_ip, port: this.#xrelayed}});
 					}
 				}
 			} finally {

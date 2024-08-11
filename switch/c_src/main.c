@@ -10,6 +10,66 @@ __attribute__((import_name("get_timer"))) int js_get_timer(void* ctx);
 __attribute__((import_name("send"))) int js_send(void* ctx, const unsigned char *buf, size_t len);
 __attribute__((import_name("recv"))) int js_recv(void* ctx, unsigned char *buf, size_t len);
 __attribute__((import_name("verify"))) int js_verify(void* ctx, unsigned char* fingerprint, int preverify);
+__attribute__((import_name("cert_pem"))) size_t cert_pem(unsigned char* buffer, size_t len);
+
+static unsigned char fingerprint[32];
+static mbedtls_ssl_config conf;
+static mbedtls_pk_context pkey;
+static mbedtls_x509_crt cert;
+
+int main() {
+	unsigned char pem_buffer[2048];
+	mbedtls_sha256_context hasher;
+
+	size_t pem_len = cert_pem(pem_buffer, sizeof(pem_buffer));
+
+	mbedtls_sha256_init(&hasher);
+	mbedtls_ssl_config_init(&conf);
+	mbedtls_ssl_conf_rng(&conf, js_random, NULL);
+	mbedtls_pk_init(&pkey);
+	mbedtls_x509_crt_init(&cert);
+
+	mbedtls_ssl_conf_authmode(&conf, MBEDTLS_SSL_VERIFY_OPTIONAL);
+	mbedtls_ssl_conf_ca_chain(&conf, &cert, NULL); // TODO: I only want to check the expiration, not the CA so... hmm
+
+	if (mbedtls_ssl_config_defaults(
+		&conf,
+		MBEDTLS_SSL_IS_SERVER,
+		MBEDTLS_SSL_TRANSPORT_DATAGRAM,
+		MBEDTLS_SSL_PRESET_DEFAULT
+	) != 0) exit(-1);
+	if (mbedtls_pk_parse_key(
+		&pkey,
+		pem_buffer, pem_len,
+		NULL, 0,
+		js_random, NULL
+	) != 0) exit(-1);
+	if (mbedtls_x509_crt_parse(
+		&cert,
+		pem_buffer, pem_len
+	) != 0) exit(-1);
+
+	if (mbedtls_ssl_conf_own_cert(
+		&conf,
+		&cert,
+		&pkey
+	) != 0) exit(-1);
+
+	// Get the sha256 fingerprint of the cert
+	if (mbedtls_sha256_starts(
+		&hasher,
+		0
+	) != 0) exit(-1);
+	if (mbedtls_sha256_update(
+		&hasher,
+		cert.raw.p,
+		cert.raw.len
+	) != 0) exit(-1);
+	if (mbedtls_sha256_finish(
+		&hasher,
+		fingerprint
+	) != 0) exit(-1);
+}
 
 typedef struct ssl_config {
 	mbedtls_ssl_config server;
@@ -19,8 +79,8 @@ typedef struct ssl_config {
 	unsigned char fingerprint[32];
 } ssl_config;
 
-__attribute__((visibility("default"))) unsigned char * fingerprint(ssl_config* conf) {
-	return conf->fingerprint;
+__attribute__((visibility("default"), export_name("fingerprint"))) unsigned char * get_fingerprint(ssl_config* conf) {
+	return fingerprint;
 }
 
 int verify(void* ctx, mbedtls_x509_crt* cert, int preverify, uint32_t* flags) {
@@ -139,7 +199,7 @@ __attribute__((visibility("default"))) ssl_config* setup(unsigned char* buffer, 
 	return ret;
 }
 
-__attribute__((visibility("default"))) mbedtls_ssl_context* session(ssl_config* conf, int polite) {
+__attribute__((visibility("default"))) mbedtls_ssl_context* session() {
 	mbedtls_ssl_context* ret = (mbedtls_ssl_context*) malloc(sizeof(mbedtls_ssl_context));
 	if (ret == NULL) goto abort;
 
@@ -151,7 +211,7 @@ __attribute__((visibility("default"))) mbedtls_ssl_context* session(ssl_config* 
 
 	if (mbedtls_ssl_setup(
 		ret,
-		polite ? (&conf->server) : (&conf->client)
+		&conf
 	) != 0) goto abort;
 
 	goto done;
@@ -177,5 +237,3 @@ __attribute__((visibility("default"))) int close(mbedtls_ssl_context* ssl) {
 __attribute__((visibility("default"))) int pending(mbedtls_ssl_context* ssl) {
 	return mbedtls_ssl_check_pending(ssl);
 }
-
-int main() {}

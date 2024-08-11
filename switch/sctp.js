@@ -1,8 +1,292 @@
+import { crc32 } from "./crc32.js";
+import { encoder, decoder } from "./util.js";
+
+const chunk_types = new Map();
+export class Chunk extends DataView {
+	static get fixed() { return 4; }
+	constructor() {
+		super(...arguments);
+		if (this.byteLength < this.constructor.fixed) this.length = this.constructor.fixed;
+		if (Number.isInteger(this.constructor.type) && this.type != this.constructor.type) this.type = this.constructor.type;
+	}
+	get type() {
+		return this.getUint8(0);
+	}
+	set type(value) {
+		this.setUint8(0, value);
+	}
+	get flags() {
+		return this.getUint8(1);
+	}
+	get length() {
+		if (this.byteLength < 4) return 4;
+		return Math.max(this.getUint16(2), 4);
+	}
+	set length(value) {
+		if (value < 4) throw new Error();
+		let padded = value;
+		while (padded % 4 != 0) padded += 1;
+		if (this.byteLength < padded) this.buffer.resize(this.byteOffset + padded);
+		this.setUint16(2, value);
+	}
+	*[Symbol.iterator]() {
+		for (let i = this.constructor.fixed; i < this.length;) {
+			let param = new Param(this.buffer, this.byteOffset + i);
+			i += param.length;
+
+			if (chunk_types.has(param.type)) param = new (chunk_types.get(param.type))(this.buffer, param.byteOffset, param.length);
+			param.parent = this;
+
+			yield param;
+		}
+	}
+}
+
+const param_types = new Map();
+export class Param extends DataView {
+	static append(chunk) {
+		const ret = new this(chunk.buffer, chunk.byteOffset + chunk.length);
+		ret.parent = chunk;
+		ret.length = 4;
+		return ret;
+	}
+	parent;
+	get type() {
+		return this.getUint16(0);
+	}
+	set type(value) {
+		this.setUint16(0, value);
+	}
+	get length() {
+		if (this.byteLength < 4) return 4;
+		return Math.max(this.getUint16(2), 4);
+	}
+	set length(value) {
+		if (value < 4) throw new Error();
+		this.parent.length = this.byteOffset + value - this.parent.byteOffset;
+		this.setUint16(2, value);
+	}
+	get value() {
+		return new Uint8Array(this.buffer, this.byteOffset + 4, this.length - 4);
+	}
+}
+
+export class Data extends Chunk {
+	static get fixed() { return 16; }
+	get tsn() {
+		return this.getUint32(4);
+	}
+	set tsn(value) {
+		this.setUint32(4, value);
+	}
+	get stream() {
+		return this.getUint16(8);
+	}
+	set stream(value) {
+		this.setUint16(8, value);
+	}
+	get seq() {
+		return this.getUint16(10);
+	}
+	set seq(value) {
+		this.setUint16(10, value);
+	}
+	get ppi() {
+		return this.getUint32(12);
+	}
+	set ppi(value) {
+		this.setUint32(12, value);
+	}
+	get data() {
+		return new Uint8Array(this.buffer, this.byteOffset + this.constructor.fixed, this.length - this.constructor.fixed)
+	}
+}
+chunk_types.set(0x00, Data);
+
+export class Init extends Chunk {
+	static get fixed() { return 20; }
+	get init_vtag() {
+		return this.getUint32(4);
+	}
+	set init_vtag(value) {
+		this.setUint32(4, value);
+	}
+	get arwnd() {
+		return this.getUint32(8);
+	}
+	set arwnd(value) {
+		this.setUint32(8, value);
+	}
+	get out_count() {
+		return this.getUint16(12);
+	}
+	set out_count(value) {
+		this.setUint16(12, value);
+	}
+	get in_count() {
+		return this.getUint16(14);
+	}
+	set in_count(value) {
+		this.setUint16(14, value);
+	}
+	get init_tsn() {
+		return this.getUint32(16);
+	}
+	set init_tsn(value) {
+		this.setUint32(16, value);
+	}
+}
+chunk_types.set(0x01, Init);
+
+export class InitAck extends Init {
+	static get type() { return 2; }
+}
+chunk_types.set(InitAck.type, InitAck);
+
+export class Sack extends Chunk {
+	static get type() { return 3; }
+	static get fixed() { return 16; }
+	get cum_tsn() {
+		return this.getUint32(4);
+	}
+	set cum_tsn(value) {
+		this.setUint32(4, value);
+	}
+	get arwnd() {
+		return this.getUint32(8);
+	}
+	set arwnd(value) {
+		this.setUint32(8, value);
+	}
+	get gaps() {
+		return this.getUint16(12);
+	}
+	// set gaps(value) {
+	// 	this.setUint16(12, value);
+	// }
+	get dups() {
+		return this.getUint16(14);
+	}
+	// set dups(value) {
+	// 	this.setUint16(14, value);
+	// }
+}
+chunk_types.set(Sack.type, Sack);
+
+export class Cookie extends Chunk {
+	static get type() { return 10; }
+}
+chunk_types.set(Cookie.type, Cookie);
+
+export class CookieAck extends Chunk {
+	static get type() { return 11; }
+}
+chunk_types.set(CookieAck.type, CookieAck);
 
 
-export class Sctp {
-	async transform(chunk) {
+export class Sctp extends DataView {
+	constructor() {
+		super(...arguments);
+		if (this.byteLength < 12) this.buffer.resize(this.byteOffset + 12);
+	}
+	get sport() {
+		return this.getUint16(0);
+	}
+	set sport(value) {
+		this.setUint16(0, value);
+	}
+	get dport() {
+		return this.getUint16(2);
+	}
+	set dport(value) {
+		this.setUint16(2, value);
+	}
+	get vtag() {
+		return this.getUint32(4);
+	}
+	set vtag(value) {
+		this.setUint32(4, value);
+	}
+	*#sum_bytes() {
+		yield* new Uint8Array(this.buffer, this.byteOffset, 8);
+		yield* [0, 0, 0, 0];
+		yield* new Uint8Array(new Uint8Array(this.buffer, this.byteOffset + 12, this.byteLength - 12));
+	}
+	get checksum() {
+		const actual = this.getUint32(8, true); // Fuck if I know why this is little endian instead of big endian but whatever.
+		const expected = crc32(this.#sum_bytes(), 0x82F63B78);
+		return actual === expected;
+	}
+	set checksum(_value) {
+		this.setUint32(8, crc32(this.#sum_bytes(), 0x82F63B78), true);
+	}
+	*[Symbol.iterator]() {
+		for (let i = 12; i + 4 < this.byteLength;) {
+			let chunk = new Chunk(this.buffer, this.byteOffset + i, this.byteLength - i);
+			i += chunk.length;
+			while (i % 4 != 0) i += 1;
+			if (i > this.byteLength) break;
+
+			if (chunk_types.has(chunk.type)) chunk = new (chunk_types.get(chunk.type))(this.buffer, chunk.byteOffset, chunk.length);
+
+			yield chunk;
+		}
+	}
+}
+
+const maxByteLength = 400;
+
+export class SctpConn {
+	lvtag = 0;
+	rvtag = 0;
+	tsn = crypto.getRandomValues(new Uint32Array(1))[0];
+	async transform(chunk, controller) {
+		console.log('sctp<-', chunk);
+		if (chunk.byteLength < 12) return;
+
+		const p = new Sctp(chunk.buffer, chunk.byteOffset, chunk.byteLength);
+
+		const response = new Sctp(new ArrayBuffer(12, {maxByteLength}))
+		response.sport = p.dport; response.dport = response.sport;
+
+		console.log(p.sport, p.dport, p.vtag, p.checksum);
+		for (const chunk of p) {
+			if (chunk instanceof Init) {
+				this.rvtag = chunk.init_vtag;
+				this.lvtag = crypto.getRandomValues(new Uint32Array(1))[0];
+				console.log('response len', response.buffer.byteLength);
+				const ack = new InitAck(response.buffer, response.buffer.byteLength);
+				ack.init_vtag = this.lvtag;
+				ack.init_tsn = this.tsn;
+				ack.arwnd = 6000;
+				ack.out_count = 65535;
+				ack.in_count = 65535;
+				const cookie = Param.append(ack);
+				cookie.type = 7;
+				cookie.length = 12;
+				crypto.getRandomValues(cookie.value);
+			}
+			else if (chunk instanceof Cookie) {
+				new CookieAck(response.buffer, response.buffer.byteLength);
+			}
+			else if (chunk instanceof Data) {
+				console.log('sctp data', chunk.ppi, decoder.decode(chunk.data));
+				const sack = new Sack(response.buffer, response.buffer.byteLength);
+				sack.cum_tsn = chunk.tsn;
+				sack.arwnd = 6000;
+			}
+		}
 		// TODO: handle
-		console.log('sctp', chunk);
+
+		// Only enqueue the response SCTP packet if it has at least one chunk
+		if (response.byteLength <= 12) return;
+
+		response.vtag = this.rvtag;
+		response.checksum = true;
+		
+		const ret = new Uint8Array(response.buffer);
+		console.log('sctp->', ret);
+		this.tsn = (this.tsn + ret.byteLength) >>> 0;
+		controller.enqueue(ret);
 	}
 }

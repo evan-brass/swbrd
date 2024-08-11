@@ -6,14 +6,15 @@
 // import { from_string } from "../src/id.js";
 // import { parse_ipaddr } from "./ipaddr.js";
 import { TurnConn } from "./turn.js";
-import { Hosted } from "./hosted.js";
-// import { Dtls } from "./dtls.js";
+// import { Hosted } from "./hosted.js";
+import { Dtls } from "./dtls.js";
+import { SctpConn } from "./sctp.js";
 
 async function handle(conn) {
 	console.log('conn', conn);
 	const relay = new TurnConn(conn);
-	const hosted = new Hosted(relay);
-	await relay.readable.pipeThrough(new TransformStream(hosted)).pipeTo(relay.writable);
+	const decrypt = new Dtls(relay);
+	await decrypt.readable.pipeThrough(new TransformStream(new SctpConn())).pipeTo(decrypt.writable);
 }
 
 for await (const conn of Deno.listen({ hostname: '::', port: 3478 })) {

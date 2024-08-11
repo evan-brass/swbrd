@@ -4,7 +4,7 @@ import { Class, Method, Stun } from "./stun.js";
 // import { allocations } from "./turn.js";
 import { from_string, to_string } from "../src/id.js";
 import { id, Dtls } from "./dtls.js";
-import { Sctp } from "./sctp.js";
+import { SctpConn } from "./sctp.js";
 
 const ice_ufrag = to_string(id);
 console.log(ice_ufrag);
@@ -69,7 +69,7 @@ export class Hosted {
 
 					if (!this.#dtls) {
 						this.#dtls = new Dtls(pid, controller);
-						const sctp = new Sctp();
+						const sctp = new SctpConn();
 						const prom = this.#dtls.readable.pipeThrough(new TransformStream(sctp)).pipeTo(this.#dtls.writable);
 						// TODO: do something with prom here.
 					}
