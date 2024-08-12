@@ -210,7 +210,7 @@ export class Sctp extends DataView {
 	*#sum_bytes() {
 		yield* new Uint8Array(this.buffer, this.byteOffset, 8);
 		yield* [0, 0, 0, 0];
-		yield* new Uint8Array(new Uint8Array(this.buffer, this.byteOffset + 12, this.byteLength - 12));
+		yield* new Uint8Array(this.buffer, this.byteOffset + 12, this.byteLength - 12);
 	}
 	get checksum() {
 		const actual = this.getUint32(8, true); // Fuck if I know why this is little endian instead of big endian but whatever.
