@@ -1,6 +1,5 @@
 FROM --platform=$BUILDPLATFORM alpine AS builder
-RUN apk add build-base llvm17 clang17 lld binaryen
-RUN apk add --repository=http://dl-cdn.alpinelinux.org/alpine/edge/main/ wasi-sdk
+RUN apk add build-base llvm17 clang17 lld binaryen wasi-sdk
 RUN apk add --repository=http://dl-cdn.alpinelinux.org/alpine/edge/testing/ wabt
 
 WORKDIR /build

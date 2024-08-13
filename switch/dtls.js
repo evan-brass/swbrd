@@ -8,11 +8,16 @@ const encoder = new TextEncoder();
 const sessions = new Map();
 const delays = new Map();
 
+function unimplemented() {
+	throw new Error(Array.from(arguments).toString());
+}
+
 const { module: _module, instance } = await WebAssembly.instantiateStreaming(fetch(new URL('./dist/dtls.wasm', import.meta.url)), {
 	wasi_snapshot_preview1: {
-		proc_exit(code) {
-			throw new Error(`exit(${code})`);
-		},
+		proc_exit: unimplemented,
+		fd_fdstat_get: unimplemented,
+		fd_seek: unimplemented,
+		fd_write: unimplemented,
 	},
 	env: {
 		cert_pem(offset, len) {
