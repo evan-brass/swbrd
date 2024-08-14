@@ -48,7 +48,7 @@ export class Addr extends URL {
 				iceServers: [{
 					urls: `${proto}:${host}${transport ? '?transport=' + transport : ''}`,
 					username: this.searchParams.get('turn_username') || 'guest',
-					credential: this.searchParams.get('turn_credential') || 'the/guest/turn/credential/constant'
+					credential: this.searchParams.get('turn_credential') || 'password'
 				}]
 			};
 		}
@@ -63,7 +63,7 @@ export class Addr extends URL {
 				candidates.push({address, port, transport: 'udp'});
 			}
 			else if (/^(turns?)(?:\+(tcp|udp))?:/i.test(this.protocol)) {
-				candidates.push({}); // Append the default candidate (probably a broadcast candidate)
+				candidates.push({});
 			}
 		}
 
