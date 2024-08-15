@@ -16,6 +16,7 @@ static unsigned char fingerprint[32];
 static mbedtls_ssl_config conf;
 static mbedtls_pk_context pkey;
 static mbedtls_x509_crt cert;
+static mbedtls_ssl_cookie_ctx cookies;
 
 int main() {
 	unsigned char pem_buffer[2048];
@@ -28,6 +29,7 @@ int main() {
 	mbedtls_ssl_conf_rng(&conf, js_random, NULL);
 	mbedtls_pk_init(&pkey);
 	mbedtls_x509_crt_init(&cert);
+	mbedtls_ssl_cookie_init(&cookies);
 
 	mbedtls_ssl_conf_authmode(&conf, MBEDTLS_SSL_VERIFY_OPTIONAL);
 	mbedtls_ssl_conf_ca_chain(&conf, &cert, NULL); // TODO: I only want to check the expiration, not the CA so... hmm

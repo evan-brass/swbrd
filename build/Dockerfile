@@ -10,6 +10,6 @@ RUN mkdir mbedtls && tar -xjf mbedtls-3.6.0.tar.bz2 -C mbedtls --strip-component
 VOLUME /build/dist
 
 COPY --link build/Makefile .
-COPY --link switch/c_src c_src
+COPY --link server/c_src c_src
 
 CMD ["make", "-B"]

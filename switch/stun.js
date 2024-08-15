@@ -90,7 +90,10 @@ export class Stun extends DataView {
 	set length(len) {
 		while (len % 4 != 0) len += 1;
 		const packet_len = 20 + len;
-		if (packet_len > this.byteLength) this.buffer.resize(this.byteOffset + packet_len);
+		if (packet_len > this.byteLength) {
+			if (this.buffer.maxByteLength > packet_len) this.buffer.resize(this.byteOffset + packet_len);
+			else throw new Error(`Couldn't resize, because ${packet_len} is bigger than this.buffer.maxByteLength of ${this.buffer.maxByteLength}`)
+		}
 		this.setUint16(2, len);
 	}
 	get needed() {
