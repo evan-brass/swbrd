@@ -56,7 +56,6 @@ const { instance } = await WebAssembly.instantiateStreaming(fetch(new URL('./dis
 			console.log(`${file}:${line}`, msg);
 		},
 		random(_ctx, offset, length) {
-			// console.log('random', ...arguments);
 			crypto.getRandomValues(mem8(offset, length));
 			return 0;
 		},
@@ -74,7 +73,6 @@ export const id = from_bytes(mem8(instance.exports.fingerprint(), 32));
 
 export function new_session(key) {
 	const ret = instance.exports.create_session();
-	console.log(ret);
 	if (ret) encoder.encodeInto(key, mem8(ret, 48));
 
 	return ret;
@@ -83,6 +81,15 @@ export function new_session(key) {
 const recv_len = 2048;
 const recv_buffer = instance.exports.malloc(recv_len);
 if (!recv_buffer) throw new Error("OOM");
+
+const send_len = 600;
+const send_buffer = instance.exports.malloc(send_len);
+
+export function send_buff() { return mem8(send_buffer, send_len); }
+
+export function write(ptr, len) {
+	return instance.exports.write(ptr, send_buffer, len);
+}
 
 export function push(ptr, datagram) {
 	const offset = instance.exports.push(ptr, datagram.byteLength);

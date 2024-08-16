@@ -1,12 +1,13 @@
 import { sock, send } from './sock.js';
 import { encoder } from "../switch/util.js";
-import { new_session, pull, push } from './support.js';
+import { new_session, pull, push, send_buff, write } from './support.js';
 import { parse_ipaddr } from "../switch/ipaddr.js";
 import { Stun, Class, Method } from "../switch/stun.js";
 import { parse } from "../switch/turn.js";
 import { mapped } from "../switch/util.js";
 import { id } from "./support.js";
 import { to_string } from "../src/id.js";
+import { Chunk, Cookie, Init, InitAck, Param, Sack, Sctp, Data } from "../switch/sctp.js";
 
 const hosted_ufrag = to_string(id) + ':';
 
@@ -81,8 +82,14 @@ export async function handle(datagram, sender) {
 		const mip = mapped(ip);
 		const key = `[${Array.from(mip, v => v.toString(16)).join(':')}]:${sender.port}\0`;
 
-		let ptr = sessions.get(key);
-		if (!ptr) sessions.set(key, ptr = new_session(key));
+		let {
+			ptr,
+			tsn = crypto.getRandomValues(new Uint32Array(1)),
+			vtag = new Uint32Array(1),
+		} = { ...sessions.get(key) };
+		if (!ptr && (ptr = new_session(key))) {
+			sessions.set(key, { ptr, tsn, vtag });
+		}
 		if (!ptr) return;
 		push(ptr, datagram);
 
@@ -90,11 +97,73 @@ export async function handle(datagram, sender) {
 		while (1) {
 			pulled = pull(ptr);
 			if (pulled instanceof Uint8Array) {
-				console.log('sctp', Array.from(pulled));
-				continue;
+				if (pulled.byteLength < 12) continue;
+
+				const sctp = new Sctp(pulled.buffer, pulled.byteOffset, pulled.byteLength);
+				const sb = send_buff();
+
+				let byteLength = 12;
+				for (const chunk of sctp) {
+					if (chunk instanceof Data && (sb.byteLength - byteLength) >= 16) {
+						const sack = new Sack(sb.buffer, sb.byteOffset + byteLength, 16);
+						byteLength += 16;
+						sack.type = Sack.type;
+						sack.flags = 0;
+						sack.length = 16;
+						sack.cum_tsn = chunk.tsn;
+						sack.arwnd = 6000;
+						sack.gaps = 0;
+						sack.dups = 0;
+						console.log('SCTP data', chunk.flags.toString(2), chunk.stream, chunk.seq, chunk.ppi, Array.from(chunk.buffer))
+					}
+					else if (chunk instanceof Init && (sb.byteLength - byteLength) >= 32) {
+						vtag[0] = chunk.init_vtag;
+
+						const ack = new InitAck(sb.buffer, sb.byteOffset + byteLength, 20);
+						byteLength += 20;
+						ack.type = InitAck.type;
+						ack.flags = 0;
+						ack.length = 32;
+						ack.init_vtag = crypto.getRandomValues(new Uint32Array(1))[0];
+						ack.arwnd = 6000;
+						ack.out_count = 65535;
+						ack.in_count = 65535;
+						ack.init_tsn = tsn[0];
+
+						const cookie = new Param(sb.buffer, sb.byteOffset + byteLength, 12);
+						byteLength += 12;
+						cookie.type = 7;
+						cookie.length = 12;
+						crypto.getRandomValues(cookie.value);
+					}
+					else if (chunk instanceof Cookie && (sb.byteLength - byteLength) >= 4) {
+						const cookie_ack = new Chunk(sb.buffer, sb.byteOffset + byteLength, 4);
+						byteLength += 4;
+						cookie_ack.type = 11;
+						cookie_ack.flags = 0;
+						cookie_ack.length = 4;
+					}
+					else {
+						console.log('ignored SCTP chunk', chunk.type);
+					}
+				}
+
+				// Only queue the response if we added at least one chunk.
+				if (byteLength <= 12) continue;
+
+				const resp = new Sctp(sb.buffer, sb.byteOffset, byteLength);
+				resp.dport = sctp.sport;
+				resp.sport = sctp.dport;
+				resp.vtag = vtag[0];
+				resp.checksum = true;
+
+				const ret = write(ptr, byteLength);
+				if (ret == 0) console.warn("Didn't send SCTP");
+				if (ret < 0) {
+					sessions.delete(key);
+				}
 			}
 			if (pulled < 0) {
-				console.log('Closing DTLS session');
 				sessions.delete(key);
 			}
 			break;
@@ -102,10 +171,6 @@ export async function handle(datagram, sender) {
 	}
 	// Trap
 	else {
-		console.log('unhandled?', fb);
+		console.log('unhandled hosted fb:', fb);
 	}
-}
-
-export async function sample(datagram) {
-	console.log('sample', datagram);
 }

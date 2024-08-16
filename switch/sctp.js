@@ -1,14 +1,9 @@
-import { crc32 } from "./crc32.js";
+import { crc32c } from "./crc32.js";
 import { encoder, decoder } from "./util.js";
 
 const chunk_types = new Map();
 export class Chunk extends DataView {
 	static get fixed() { return 4; }
-	constructor() {
-		super(...arguments);
-		if (this.byteLength < this.constructor.fixed) this.length = this.constructor.fixed;
-		if (Number.isInteger(this.constructor.type) && this.type != this.constructor.type) this.type = this.constructor.type;
-	}
 	get type() {
 		return this.getUint8(0);
 	}
@@ -18,15 +13,15 @@ export class Chunk extends DataView {
 	get flags() {
 		return this.getUint8(1);
 	}
+	set flags(value) {
+		this.setUint8(1, value);
+	}
 	get length() {
 		if (this.byteLength < 4) return 4;
 		return Math.max(this.getUint16(2), 4);
 	}
 	set length(value) {
 		if (value < 4) throw new Error();
-		let padded = value;
-		while (padded % 4 != 0) padded += 1;
-		if (this.byteLength < padded) this.buffer.resize(this.byteOffset + padded);
 		this.setUint16(2, value);
 	}
 	*[Symbol.iterator]() {
@@ -44,13 +39,6 @@ export class Chunk extends DataView {
 
 const param_types = new Map();
 export class Param extends DataView {
-	static append(chunk) {
-		const ret = new this(chunk.buffer, chunk.byteOffset + chunk.length);
-		ret.parent = chunk;
-		ret.length = 4;
-		return ret;
-	}
-	parent;
 	get type() {
 		return this.getUint16(0);
 	}
@@ -63,7 +51,6 @@ export class Param extends DataView {
 	}
 	set length(value) {
 		if (value < 4) throw new Error();
-		this.parent.length = this.byteOffset + value - this.parent.byteOffset;
 		this.setUint16(2, value);
 	}
 	get value() {
@@ -161,15 +148,15 @@ export class Sack extends Chunk {
 	get gaps() {
 		return this.getUint16(12);
 	}
-	// set gaps(value) {
-	// 	this.setUint16(12, value);
-	// }
+	set gaps(value) {
+		this.setUint16(12, value);
+	}
 	get dups() {
 		return this.getUint16(14);
 	}
-	// set dups(value) {
-	// 	this.setUint16(14, value);
-	// }
+	set dups(value) {
+		this.setUint16(14, value);
+	}
 }
 chunk_types.set(Sack.type, Sack);
 
@@ -185,10 +172,6 @@ chunk_types.set(CookieAck.type, CookieAck);
 
 
 export class Sctp extends DataView {
-	constructor() {
-		super(...arguments);
-		if (this.byteLength < 12) this.buffer.resize(this.byteOffset + 12);
-	}
 	get sport() {
 		return this.getUint16(0);
 	}
@@ -214,11 +197,11 @@ export class Sctp extends DataView {
 	}
 	get checksum() {
 		const actual = this.getUint32(8, true); // Fuck if I know why this is little endian instead of big endian but whatever.
-		const expected = crc32(this.#sum_bytes(), 0x82F63B78);
+		const expected = crc32c(this.#sum_bytes(), 0x82F63B78);
 		return actual === expected;
 	}
 	set checksum(_value) {
-		this.setUint32(8, crc32(this.#sum_bytes(), 0x82F63B78), true);
+		this.setUint32(8, crc32c(this.#sum_bytes(), 0x82F63B78), true);
 	}
 	*[Symbol.iterator]() {
 		for (let i = 12; i + 4 < this.byteLength;) {

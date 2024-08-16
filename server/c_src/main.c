@@ -91,6 +91,19 @@ __attribute__((visibility("default"))) int pull(dtls* sess, unsigned char* buffe
 	return -1;
 }
 
+__attribute__((visibility("default"))) int write(dtls* sess, unsigned char* buffer, size_t len) {
+	if (len > mbedtls_ssl_get_max_out_record_payload(&sess->inner)) return 0;
+
+	int ret = mbedtls_ssl_write(&sess->inner, buffer, len);
+	if (ret > 0) return ret;
+	if (ret == MBEDTLS_ERR_SSL_WANT_READ) return 0;
+
+	mbedtls_ssl_free(&sess->inner);
+	free(sess);
+
+	return -1;
+}
+
 __attribute__((visibility("default"))) unsigned char * peer_fingerprint(dtls* sess) {
 	return sess->fingerprint;
 }
@@ -126,6 +139,8 @@ __attribute__((visibility("default"))) dtls* create_session() {
 }
 
 int main() {
+	mbedtls_debug_set_threshold(1);
+
 	unsigned char pem_buffer[2048];
 	size_t pem_len = js_cert_pem(pem_buffer, sizeof(pem_buffer));
 
@@ -140,7 +155,6 @@ int main() {
 	mbedtls_ssl_conf_read_timeout(&conf, 10000);
 	mbedtls_ssl_conf_authmode(&conf, MBEDTLS_SSL_VERIFY_OPTIONAL);
 	mbedtls_ssl_conf_ca_chain(&conf, &cert, NULL);
-	mbedtls_debug_set_threshold(3);
 
 	if (mbedtls_ssl_config_defaults(
 		&conf,

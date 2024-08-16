@@ -2,7 +2,7 @@
 
 export class Wire extends DataView {
 	parent = null;
-	siblings = [];
+	children = [];
 
 	static min_length = 0;
 	static from(val, specialize = true) {
@@ -22,7 +22,10 @@ export class Wire extends DataView {
 		const ret = new this(buffer, byteOffset);
 		if (val instanceof Wire) {
 			ret.parent = val.parent;
-			ret.siblings = val.siblings;
+			if (ret.parent) {
+				const i = ret.parent.children.indexOf(val)
+				ret.parent.children[i] = ret;
+			}
 		}
 
 		return specialize ? ret.specialize() : ret;

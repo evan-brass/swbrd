@@ -4,7 +4,7 @@ import { md5 } from "../switch/md5.js";
 import { Stun, Class, Method } from "../switch/stun.js";
 import { ChannelData } from "../switch/turn.js";
 import { parse } from "../switch/turn.js";
-import { handle, sample } from './hosted.js';
+import { handle } from './hosted.js';
 import { mapped } from "../switch/util.js";
 
 // Server 
