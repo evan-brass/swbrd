@@ -77,6 +77,7 @@ export class Conn extends RTCPeerConnection {
 		// Prepare for renegotiation
 		let negotiation_needed = false; this.addEventListener('negotiationneeded', () => negotiation_needed = true);
 		this.#dc.addEventListener('message', async ({ data }) => { try {
+			if (typeof data != 'string') return;
 			const { candidate } = JSON.parse(data);
 			if (candidate) await this.addIceCandidate(candidate);
 		} catch (e) { console.warn(e); }});
@@ -86,6 +87,7 @@ export class Conn extends RTCPeerConnection {
 			}
 		});
 		let remote_desc = false; this.#dc.addEventListener('message', ({data}) => { try {
+			if (typeof data != 'string') return;
 			const { description } = JSON.parse(data);
 			if (description) remote_desc = description;
 		} catch (e) { console.warn(e); /* Possibly a misbehaving peer */}})

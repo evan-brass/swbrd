@@ -27,6 +27,11 @@ const { instance } = await WebAssembly.instantiateStreaming(fetch(new URL('./dis
 				ip: parse_ipaddr(hostname),
 				port: 4666
 			};
+			if (ind.frame.byteLength + 4 + len > send.maxByteLength) {
+				console.warn('Unable to encapsulate DTLS data into DataIndication - too big', len);
+				return len;
+			}
+
 			const inner = mem8(offset, len);
 			ind.data = inner;
 
@@ -100,4 +105,10 @@ export function pull(ptr) {
 	const ret = instance.exports.pull(ptr, recv_buffer, recv_len);
 	if (ret > 0) return mem8(recv_buffer, ret);
 	return ret;
+}
+
+export function peer_id(ptr) {
+	const offset = instance.exports.peer_fingerprint(ptr);
+	const fingerprint = mem8(offset, 32);
+	return from_bytes(fingerprint);
 }

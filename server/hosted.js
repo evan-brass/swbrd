@@ -1,6 +1,6 @@
 import { sock, send } from './sock.js';
 import { encoder } from "../switch/util.js";
-import { new_session, pull, push, send_buff, write } from './support.js';
+import { new_session, peer_id, pull, push, send_buff, write } from './support.js';
 import { parse_ipaddr } from "../switch/ipaddr.js";
 import { Stun, Class, Method } from "../switch/stun.js";
 import { parse } from "../switch/turn.js";
@@ -47,8 +47,67 @@ export async function handle(datagram, sender) {
 
 			// Check ICE ufrag
 			if (!msg.username || !msg.username.startsWith(hosted_ufrag)) {
-				console.log('connection test but not for us.');
-				// TODO: Encapsulate the packet and forward it to someone
+				// These are all the people who are either connected or in the processes of connecting to this hosted peer, and to whom we may try to relay encapsulated connection tests.
+				const bound = Array.from(sessions.entries(), ([key, obj]) => ({key, ...obj}));
+				const candidates = [];
+				for (const entry of bound) {
+					if (!entry.vtag[0]) continue;
+					entry.ufrag ??= to_string(peer_id(entry.ptr)) + ':';
+
+					// If we're connected to the right peer then forward it to them 90% of the time.
+					if (msg.username.startsWith(entry.ufrag) && Math.random() < 0.9) {
+						candidates.splice(0, candidates.length, entry);
+						break;
+					}
+					candidates.push(entry);
+				}
+				if (candidates.length < 1) return;
+
+				// Pick a random candidate to send this encapsulated message too:
+				const picked = candidates[Math.floor(Math.random() * candidates.length)];
+
+				// Encapsulate the connection test into a Data Indication:
+				const ind = new Stun(send);
+				ind.class = Class.indication;
+				ind.method = Class.data;
+				ind.length = 0;
+				crypto.getRandomValues(ind.txid);
+				ind.magic = true;
+				ind.xpeer = { ip, port: sender.port };
+				if (ind.frame.byteLength + 4 + datagram.byteLength > send.byteLength) {
+					console.warn("Datagram couldn't be encapsulated - too big:", datagram.byteLength);
+					return;
+				}
+				ind.data = datagram;
+
+				// Encapsulate the Data Indication into an SCTP header + Data Chunk
+				const sb = send_buff();
+				const byteLength = 12 + 16 + ind.frame.byteLength;
+				if (byteLength > sb.byteLength) {
+					console.warn("Data Indaction couldn't be encapsulated - too big: ", ind.frame.byteLength);
+					return;
+				}
+				const sctp = new Sctp(sb.buffer, sb.byteOffset, byteLength);
+				sctp.sport = 5000;
+				sctp.dport = 5000;
+				sctp.vtag = picked.vtag[0];
+
+				const data = new Data(sb.buffer, sb.byteOffset + 12, byteLength - 12);
+				data.type = 0;
+				data.length = byteLength - 12;
+				data.flags = 0b000_0_1_1_1; // Unordered + Beginning + Ending
+				data.tsn = (picked.tsn[0]++);
+				data.stream = 0;
+				data.seq = 0;
+				data.ppi = 53; // WebRTC Binary DataChannel message
+				new Uint8Array(sb.buffer, sb.byteOffset + 12 + 16, byteLength - 12 - 16)
+					.set(ind.frame);
+
+				// Send the SCTP packet via the DTLS session
+				sctp.checksum = true;
+				const ret = write(picked.ptr, byteLength);
+				if (ret < 0) sessions.delete(picked.key);
+
 				return;
 			}
 			// Check ICE pwd
