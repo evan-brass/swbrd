@@ -5,6 +5,27 @@ export const defaults = {
 	iceServers: [{urls: 'stun:global.stun.twilio.com'}]
 };
 
+// This library uses two types of messages on the id=0 datachannel (#dc): JSON string and Binary
+// non-json strings are not used but also you can't send them because we don't expose the #dc 
+class MessageJson extends CustomEvent {
+	constructor(data, options = null) {
+		super('message-json', {
+			...options,
+			detail: data
+		});
+		this.data = data;
+	}
+}
+class MessageBinary extends CustomEvent {
+	constructor(data, options = null) {
+		super('message-binary', {
+			...options,
+			detail: data
+		});
+		this.data = data;
+	}
+}
+
 export class Conn extends RTCPeerConnection {
 	#dc = this.createDataChannel('', {negotiated: true, id: 0});
 	#default_address = new Promise(res => this.addEventListener('icecandidate', ({ candidate }) => {
@@ -27,6 +48,19 @@ export class Conn extends RTCPeerConnection {
 			bundlePolicy: 'max-bundle',
 			rtcpMuxPolicy: 'require',
 			peerIdentity: null,
+		});
+
+		this.#dc.binaryType = 'arraybuffer';
+		this.#dc.addEventListener('message', ({ data }) => {
+			if (typeof data == 'string') {
+				try {
+					const json = JSON.parse(data);
+					this.dispatchEvent(new MessageJson(json));
+				} catch { /* do nothing */ };
+			}
+			else if (data instanceof ArrayBuffer || data instanceof Blob) {
+				this.dispatchEvent(new MessageBinary(data))
+			}
 		});
 
 		const polite = BigInt(cert) < peerid;
@@ -76,21 +110,17 @@ export class Conn extends RTCPeerConnection {
 
 		// Prepare for renegotiation
 		let negotiation_needed = false; this.addEventListener('negotiationneeded', () => negotiation_needed = true);
-		this.#dc.addEventListener('message', async ({ data }) => { try {
-			if (typeof data != 'string') return;
-			const { candidate } = JSON.parse(data);
-			if (candidate) await this.addIceCandidate(candidate);
-		} catch (e) { console.warn(e); }});
+		let remote_desc = false;
+		this.addEventListener('message-json', async ({ data: json }) => {
+			if (typeof json != 'object') return;
+			if (json?.description) remote_desc = description;
+			if (json?.candidate) await this.addIceCandidate(json.candidate);
+		});
 		this.addEventListener('icecandidate', ({candidate}) => {
 			if (candidate && this.#dc.readyState == 'open') {
 				this.#dc.send(JSON.stringify({ candidate }));
 			}
 		});
-		let remote_desc = false; this.#dc.addEventListener('message', ({data}) => { try {
-			if (typeof data != 'string') return;
-			const { description } = JSON.parse(data);
-			if (description) remote_desc = description;
-		} catch (e) { console.warn(e); /* Possibly a misbehaving peer */}})
 
 		// First pass of signaling
 		await super.setRemoteDescription({ type: 'offer', sdp: [
