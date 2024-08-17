@@ -69,7 +69,7 @@ export async function handle(datagram, sender) {
 				// Encapsulate the connection test into a Data Indication:
 				const ind = new Stun(send);
 				ind.class = Class.indication;
-				ind.method = Class.data;
+				ind.method = Method.data;
 				ind.length = 0;
 				crypto.getRandomValues(ind.txid);
 				ind.magic = true;
