@@ -63,7 +63,7 @@ export class Cert extends RTCCertificate {
 		const certs = trans.objectStore('certs');
 		const cursor_req = certs.openCursor(key);
 		let cursor;
-		while (cursor = await wrap(cursor_req)) {
+		while ((cursor = await wrap(cursor_req))) {
 			const { cert, id, algorithm: alg } = cursor.value;
 			if (cert.expires - Date.now() < 2 * day_in_ms) {
 				cursor.delete();

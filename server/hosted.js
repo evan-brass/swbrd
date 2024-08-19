@@ -182,7 +182,8 @@ export async function handle(datagram, sender) {
 						sack.arwnd = 6000;
 						sack.gaps = 0;
 						sack.dups = 0;
-						console.log('SCTP data', chunk.flags.toString(2), chunk.stream, chunk.seq, chunk.ppi, Array.from(chunk.buffer))
+						const data = chunk.ppi == 51 ? decoder.decode(chunk.data) : Array.from(chunk.data);
+						console.log('SCTP data', chunk.stream, chunk.seq, chunk.ppi, data);
 					}
 					else if (chunk instanceof Init && (sb.byteLength - byteLength) >= 32) {
 						vtag[0] = chunk.init_vtag;

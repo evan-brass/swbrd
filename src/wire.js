@@ -5,8 +5,10 @@ export class Wire extends DataView {
 	children = [];
 
 	static min_length = 0;
+	get byteLength() { return this.constructor.min_length; }
+
 	static from(val, specialize = true) {
-		let buffer, byteOffset = 0;
+		let buffer, byteOffset = 0, byteLength;
 		if (val instanceof ArrayBuffer) { buffer = val }
 		else { buffer = val.buffer; byteOffset = val.byteOffset; }
 
@@ -42,9 +44,8 @@ export class Wire extends DataView {
 					const siblings = [];
 					for (let offset = this.min_length; this.byteLength - offset >= typ.min_length;) {
 						const item = new typ(this.buffer, this.byteOffset + offset);
-						const align = typ.align ?? 1;
-						const pad = (align - item.byteLength % align) % align;
-						offset += item.byteLength + pad;
+						offset += item.byteLength;
+
 
 						const ret = item.specialize();
 						if (!ret) continue;
