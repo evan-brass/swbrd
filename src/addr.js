@@ -9,6 +9,11 @@ import { query_txt } from './dns.js';
  */
 export class Addr extends URL {
 	#id;
+	// This constructor disables support for using Url(url, base)
+	constructor(url, { id, base } = {}) {
+		super(url, base);
+		this.#id = id;
+	}
 	async resolve_id() {
 		const {username, hostname} = this.#authority();
 		this.#id ??= from_string(username);
@@ -54,10 +59,19 @@ export class Addr extends URL {
 		}
 
 		// Prepare the candidates 
-		const candidates = Array.from(this.searchParams.getAll('candidate'), s => {
-			s = decodeURI(s);
-			try { return JSON.parse(s); } catch { return s }
-		});
+		const candidates = Array.isArray(config?.candidates) ? config?.candidates : [];
+		for (let val of this.searchParams.getAll('candidate')) {
+			val = decodeURIComponent(val);
+			try {
+				// Try to parse as JSON and add an object candidate
+				candidates.push(JSON.parse(val));
+			} catch {
+				// Otherwise leave the candidate as a string
+				candidates.push(val);
+			}
+		}
+
+		// If manual candidates aren't specified then use protocol specific default candidate
 		if (candidates.length < 1) {
 			if (/^udp:/i.test(this.protocol)) {
 				candidates.push({address, port, transport: 'udp'});
