@@ -5,6 +5,7 @@
 		<script type="_module" src="switch/wire.js"></script>
 		<script type="module">
 			import { Addr, Cert, Conn } from './src/index.js';
+			import { listen } from './src/listen.js';
 
 			// -- Step 1: Get your certificates ready --
 			//  - Option 1: Generate fresh certificates
@@ -38,9 +39,18 @@
 			// const a = addr.connect({ cert: certa }); const b = new EventTarget();
 
 			//  - Option 4: Make a connection to a server using a non-vanity address
-			const addr = new Addr('turn://ucCm6JK3s22XuCRiTZVFpWajUq0tIpB7lDn1Sv8dRv3@localhost:3478');
-			const a = addr.connect({ cert: certa });
-			const b = new Addr(`turn://${certa}@localhost:3478`).connect({ cert: certb });
+			// const addr = new Addr('turn://ucCm6JK3s22XuCRiTZVFpWajUq0tIpB7lDn1Sv8dRv3@localhost:3478');
+			// const a = addr.connect({ cert: certa });
+			// const b = new Addr(`turn://${certa}@localhost:3478`).connect({ cert: certb });
+
+			//  - Option 5: Listen on an address and answer incoming connections
+			const server = new Addr('turn:ucCm6JK3s22XuCRiTZVFpWajUq0tIpB7lDn1Sv8dRv3@localhost').connect({cert: certa});
+			while (server.dc.readyState != 'open') await new Promise(res => server.dc.addEventListener('open', res, {once: true}));
+			const b = new Addr(`turn:${certa}@localhost`).connect({cert: certb}); const a = new EventTarget();
+
+			for await (const entry of listen(server.dc)) {
+				console.log(entry);
+			}
 
 
 			// -- Step 3: Log the connection states
