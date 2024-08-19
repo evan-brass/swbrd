@@ -86,7 +86,7 @@ export class Conn extends RTCPeerConnection {
 			let json;
 			try { json = JSON.parse(data); } catch { return }
 			if (typeof json != 'object') return;
-			if (json?.description) remote_desc = description;
+			if (json?.description) remote_desc = json.description;
 			if (json?.candidate) await this.addIceCandidate(json.candidate);
 		});
 		this.addEventListener('icecandidate', ({candidate}) => {

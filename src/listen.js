@@ -1,5 +1,60 @@
 import { Class, Method, Stun } from '../switch/stun.js';
 import { encoder } from './util.js';
+import { Addr } from './addr.js';
+import { from_string } from "./id.js";
+// import { cert as default_cert } from './cert.js';
+
+Addr.prototype.bind = async function(config = null, {
+	pwd,
+	filter = () => true,
+	timeout = 2000,
+	...sub_config
+} = {}) {
+	const conn = this.connect(config);
+	if (!conn) return;
+
+	while (conn.connectionState != 'connected') {
+		await new Promise(res => conn.addEventListener('connectionstatechange', res, {once: true}));
+		if (conn.connectionState == 'closed') return;
+		if (conn.connectionState == 'failed') return;
+	}
+
+	// TODO: Generate an addr for ourself
+
+	const answered = new Map(); // pid => Conn
+
+	return (async function* answering() {
+		for await (const { lufrag: _, rufrag, candidate } of listen(conn.dc, { pwd })) {
+			if (!candidate) continue;
+			const pid = from_string(rufrag);
+			if (!pid) continue;
+			if (answered.has(pid)) continue;
+			if (!filter(pid)) continue;
+
+			const temp = new (this.constructor)(this.href, { id: pid });
+			const answer = temp.connect({
+				...config,
+				...sub_config,
+				ice_pwd: pwd,
+				setup: 'active',
+				candidates: [candidate]
+			});
+
+			answered.set(pid, answer);
+			const timer = setTimeout(() => answer.close(), timeout);
+			answer.addEventListener('connectionstatechange', () => {
+				if (answer.connectionState == 'connected') {
+					clearTimeout(timer);
+				}
+				else if (answer.connectionState == 'closed') {
+					answered.delete(pid);
+				}
+			});
+
+			yield answer;
+		}
+	}).call(this);
+};
 
 export async function* listen(dc, {
 	pwd = 'the/ice/password/constant'

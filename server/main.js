@@ -17,7 +17,7 @@ const long_cred = await crypto.subtle.importKey('raw', md5('guest:none:password'
 
 for await (const [datagram, sender] of sock) {
 	// Drop ~50% of packets to reduce potential amplification attacks
-	if (Math.random() < 0.5) continue;
+	// if (Math.random() < 0.5) continue;
 
 	const ip = parse_ipaddr(sender.hostname);
 	const mip = mapped(ip);

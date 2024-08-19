@@ -44,14 +44,15 @@
 			// const b = new Addr(`turn://${certa}@localhost:3478`).connect({ cert: certb });
 
 			//  - Option 5: Listen on an address and answer incoming connections
-			const server = new Addr('turn:ucCm6JK3s22XuCRiTZVFpWajUq0tIpB7lDn1Sv8dRv3@localhost').connect({cert: certa});
-			while (server.dc.readyState != 'open') await new Promise(res => server.dc.addEventListener('open', res, {once: true}));
-			const b = new Addr(`turn:${certa}@localhost`).connect({cert: certb}); const a = new EventTarget();
-
-			for await (const entry of listen(server.dc)) {
-				console.log(entry);
-			}
-
+			const bind_server = new Addr('turn:ucCm6JK3s22XuCRiTZVFpWajUq0tIpB7lDn1Sv8dRv3@127.0.0.1');
+			const a_listener = await bind_server.bind({cert: certa});
+			if (!a_listener) console.error("Failed to bind through the server.");
+			const b = new Addr(`turn:${certa}@127.0.0.1`).connect({cert: certb}); const a = new EventTarget();
+			(async () => {
+				for await (const conn of a_listener) {
+					console.log('a incoming', conn);
+				}
+			})();
 
 			// -- Step 3: Log the connection states
 			a.addEventListener('connectionstatechange', () => console.log('a', a.connectionState));
