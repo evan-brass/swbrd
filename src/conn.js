@@ -121,12 +121,12 @@ export class Conn extends RTCPeerConnection {
 		await super.setLocalDescription(answer);
 
 		// Switchover into handling renegotiation
-		while (1) {
-			if (['closing', 'closed'].includes(this.#dc.readyState)) { break; }
-			else if (this.#dc.readyState == 'connecting') {
+		while (this.#dc.readyState != 'closed') {
+			if (this.#dc.readyState == 'connecting') {
 				await new Promise(res => this.#dc.addEventListener('open', res, {once: true}));
 			}
 			else if (negotiation_needed) {
+				if (this.#dc.readyState == 'closing') continue;
 				negotiation_needed = false;
 				await super.setLocalDescription();
 				try { this.#dc.send(JSON.stringify({ description: this.localDescription })); } catch {/* noop */}
