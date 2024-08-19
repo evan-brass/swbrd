@@ -48,7 +48,8 @@ export async function handle(datagram, sender) {
 			resp.length = 0;
 
 			// Check ICE ufrag
-			if (!msg.username || !msg.username.startsWith(hosted_ufrag)) {
+			const username = msg.username;
+			if (!username || !username.startsWith(hosted_ufrag)) {
 				// These are all the people who are either connected or in the processes of connecting to this hosted peer, and to whom we may try to relay encapsulated connection tests.
 				const bound = Array.from(sessions.entries(), ([key, obj]) => ({key, ...obj}));
 				const candidates = [];
@@ -57,7 +58,7 @@ export async function handle(datagram, sender) {
 					entry.ufrag ??= to_string(peer_id(entry.ptr)) + ':';
 
 					// If we're connected to the right peer then forward it to them 90% of the time.
-					if (msg.username.startsWith(entry.ufrag) && Math.random() < 0.9) {
+					if (username.startsWith(entry.ufrag) && Math.random() < 0.9) {
 						candidates.splice(0, candidates.length, entry);
 						break;
 					}
@@ -75,7 +76,12 @@ export async function handle(datagram, sender) {
 				ind.length = 0;
 				crypto.getRandomValues(ind.txid);
 				ind.magic = true;
-				ind.xpeer = { ip, port: sender.port };
+
+				// Only reveal the xpeer for conection tests that are intended for the picked peer
+				if (username.startsWith(picked.ufrag)) {
+					ind.xpeer = { ip, port: sender.port };
+				}
+
 				if (ind.frame.byteLength + 4 + datagram.byteLength > send.byteLength) {
 					console.warn("Datagram couldn't be encapsulated - too big:", datagram.byteLength);
 					return;
