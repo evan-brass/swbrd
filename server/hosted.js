@@ -7,7 +7,9 @@ import { parse } from "../switch/turn.js";
 import { mapped } from "../switch/util.js";
 import { id } from "./support.js";
 import { to_string } from "../src/id.js";
-import { Chunk, Cookie, Init, InitAck, Param, Sack, Sctp, Data } from "../switch/sctp.js";
+import { Chunk, Cookie, Init, InitAck, Param, Sack, Sctp, Data, Heartbeat, HeartbeatAck } from "../switch/sctp.js";
+
+const decoder = new TextDecoder('UTF-8', { fatal: false });
 
 const hosted_ufrag = to_string(id) + ':';
 
@@ -163,6 +165,7 @@ export async function handle(datagram, sender) {
 
 				let byteLength = 12;
 				for (const chunk of sctp) {
+					const src_padd = (4 - chunk.length % 4) % 4;
 					if (chunk instanceof Data && (sb.byteLength - byteLength) >= 16) {
 						const sack = new Sack(sb.buffer, sb.byteOffset + byteLength, 16);
 						byteLength += 16;
@@ -201,6 +204,21 @@ export async function handle(datagram, sender) {
 						cookie_ack.type = 11;
 						cookie_ack.flags = 0;
 						cookie_ack.length = 4;
+					}
+					else if (chunk instanceof Sack) {
+						// Reset the TSN back to whatever they last received + 1
+						// We don't retransmit the data, but next time we have new data we'll replace the old TSN.
+						tsn[0] = chunk.cum_tsn + 1;
+					}
+					else if (chunk instanceof Heartbeat && (sb.byteLength - byteLength - src_padd) >= chunk.length) {
+						console.log('heartbeat length', chunk.length);
+						const heart_ack = new HeartbeatAck(sb.buffer, sb.byteOffset + byteLength, chunk.length);
+						byteLength += chunk.length;
+						heart_ack.type = HeartbeatAck.type;
+						heart_ack.length = chunk.length;
+						heart_ack.value.set(chunk.value);
+						// This is the first answer chunk that might not be aligned, hence zero out any used padding
+						new Uint8Array(sb.buffer, heart_ack.byteOffset + heart_ack.byteLength, src_padd).set(0);
 					}
 					else {
 						console.log('ignored SCTP chunk', chunk.type);

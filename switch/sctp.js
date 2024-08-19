@@ -160,6 +160,21 @@ export class Sack extends Chunk {
 }
 chunk_types.set(Sack.type, Sack);
 
+export class Heartbeat extends Chunk {
+	static get type() { return 4; }
+	get value() {
+		return new Uint8Array(this.buffer, this.byteOffset + 4, this.length - 4);
+	}
+}
+chunk_types.set(Heartbeat.type, Heartbeat);
+export class HeartbeatAck extends Chunk {
+	static get type() { return 5; }
+	get value() {
+		return new Uint8Array(this.buffer, this.byteOffset + 4, this.length - 4);
+	}
+}
+chunk_types.set(HeartbeatAck.type, HeartbeatAck);
+
 export class Cookie extends Chunk {
 	static get type() { return 10; }
 }
