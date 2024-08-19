@@ -1,5 +1,4 @@
-const encoder = new TextEncoder();
-const decoder = new TextDecoder('utf-8');
+import { encoder, decoder } from './util.js';
 
 /**
  * Look through the TXT entries of a hostname to find entries that start with a given prefix.
