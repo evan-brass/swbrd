@@ -218,7 +218,6 @@ export async function handle(datagram, sender) {
 						tsn[0] = chunk.cum_tsn + 1;
 					}
 					else if (chunk instanceof Heartbeat && (sb.byteLength - byteLength - src_padd) >= chunk.length) {
-						console.log('heartbeat length', chunk.length);
 						const heart_ack = new HeartbeatAck(sb.buffer, sb.byteOffset + byteLength, chunk.length);
 						byteLength += chunk.length;
 						heart_ack.type = HeartbeatAck.type;
