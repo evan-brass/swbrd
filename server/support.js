@@ -1,4 +1,5 @@
-import { encoder, decoder, Stun, Class, Method } from "../switch/stun.js";
+import { Stun, Class, Method } from "../switch/stun.js";
+import { encoder, decoder } from "../src/util.js";
 import { from_bytes } from '../src/id.js';
 import { sock, send } from "./sock.js";
 import { parse_ipaddr } from "../switch/ipaddr.js";

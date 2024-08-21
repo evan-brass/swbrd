@@ -1,4 +1,5 @@
-import { Stun, Class, Method, encoder } from '../../switch/stun.js';
+import { Stun, Class, Method } from '../../switch/stun.js';
+import { encoder } from '../../src/util.js';
 import { assertEquals } from '@std/assert/mod.ts';
 
 // RFC 5769

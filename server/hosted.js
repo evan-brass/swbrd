@@ -1,15 +1,12 @@
 import { sock, send } from './sock.js';
-import { encoder } from "../switch/util.js";
+import { decoder_lossy, encoder, mapped } from "../src/util.js";
 import { new_session, peer_id, pull, push, send_buff, write } from './support.js';
 import { parse_ipaddr } from "../switch/ipaddr.js";
 import { Stun, Class, Method } from "../switch/stun.js";
 import { parse } from "../switch/turn.js";
-import { mapped } from "../switch/util.js";
 import { id } from "./support.js";
 import { to_string } from "../src/id.js";
 import { Chunk, Cookie, Init, InitAck, Param, Sack, Sctp, Data, Heartbeat, HeartbeatAck } from "../switch/sctp.js";
-
-const decoder = new TextDecoder('UTF-8', { fatal: false });
 
 const hosted_ufrag = to_string(id) + ':';
 
@@ -182,7 +179,7 @@ export async function handle(datagram, sender) {
 						sack.arwnd = 6000;
 						sack.gaps = 0;
 						sack.dups = 0;
-						const data = chunk.ppi == 51 ? decoder.decode(chunk.data) : Array.from(chunk.data);
+						const data = chunk.ppi == 51 ? decoder_lossy.decode(chunk.data) : Array.from(chunk.data);
 						console.log('SCTP data', chunk.stream, chunk.seq, chunk.ppi, data);
 					}
 					else if (chunk instanceof Init && (sb.byteLength - byteLength) >= 32) {

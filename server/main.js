@@ -5,7 +5,7 @@ import { Stun, Class, Method } from "../switch/stun.js";
 import { ChannelData } from "../switch/turn.js";
 import { parse } from "../switch/turn.js";
 import { handle } from './hosted.js';
-import { mapped } from "../switch/util.js";
+import { mapped } from "../src/util.js";
 
 // Server 
 const realm = 'none';
