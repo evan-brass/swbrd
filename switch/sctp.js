@@ -1,4 +1,4 @@
-import { crc32c } from "./crc32.js";
+import { crc32c } from "../src/crc32.js";
 
 const chunk_types = new Map();
 export class Chunk extends DataView {

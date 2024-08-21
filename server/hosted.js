@@ -1,7 +1,7 @@
 import { sock, send } from './sock.js';
 import { decoder_lossy, encoder, mapped } from "../src/util.js";
 import { new_session, peer_id, pull, push, send_buff, write } from './support.js';
-import { parse_ipaddr } from "../switch/ipaddr.js";
+import { parse_ipaddr } from "../src/ipaddr.js";
 import { Stun, Class, Method } from "../switch/stun.js";
 import { parse } from "../switch/turn.js";
 import { id } from "./support.js";

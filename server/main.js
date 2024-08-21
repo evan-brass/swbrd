@@ -1,6 +1,6 @@
 import { sock, send } from './sock.js';
-import { parse_ipaddr } from "../switch/ipaddr.js";
-import { md5 } from "../switch/md5.js";
+import { parse_ipaddr } from "../src/ipaddr.js";
+import { md5 } from "../src/md5.js";
 import { Stun, Class, Method } from "../switch/stun.js";
 import { ChannelData } from "../switch/turn.js";
 import { parse } from "../switch/turn.js";

@@ -1,5 +1,5 @@
 import { assertEquals } from '@std/assert/mod.ts';
-import { get_table, crc32c } from "../../switch/crc32.js";
+import { get_table, crc32c } from "../../src/crc32.js";
 
 Deno.test(function crc32_table() {
 	assertEquals(get_table(0xEDB88320), new Uint32Array([

@@ -1,4 +1,4 @@
-import { crc32 } from "./crc32.js";
+import { crc32 } from "../src/crc32.js";
 import { encoder, decoder } from '../src/util.js';
 
 export const Magic = 0x2112A442;
