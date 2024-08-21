@@ -44,7 +44,7 @@ const { instance } = await WebAssembly.instantiateStreaming(fetch(new URL('./dis
 			return len;
 		},
 		cert_pem(offset, len) {
-			let pem = Deno.env.get('CERT') ?? Deno.readTextFileSync('./cert.pem');
+			let pem = Deno.readTextFileSync('./cert.pem');
 			if (!pem.endsWith('\0')) pem += '\0';
 
 			const { read, written } = encoder.encodeInto(pem, mem8(offset, len));

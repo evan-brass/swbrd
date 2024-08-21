@@ -6,8 +6,8 @@
 		"useTabs": true
 	},
 	"tasks": {
-		"start": "deno run --allow-net --unstable-net --allow-env --allow-read server/main.js",
-		"dev": "deno run --inspect --watch --allow-net --unstable-net --allow-env --allow-read server/main.js",
+		"start": "deno run --allow-net --unstable-net --allow-read server/main.js",
+		"dev": "deno run --inspect --watch --allow-net --unstable-net --allow-read server/main.js",
 		"build": "docker run -v ./server/dist:/build/dist $(docker build -q -f build/Dockerfile .)"
 	}
 }
