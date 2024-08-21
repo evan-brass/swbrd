@@ -1,5 +1,4 @@
 import { crc32c } from "./crc32.js";
-import { encoder, decoder } from "./util.js";
 
 const chunk_types = new Map();
 export class Chunk extends DataView {
@@ -229,62 +228,5 @@ export class Sctp extends DataView {
 
 			yield chunk;
 		}
-	}
-}
-
-const maxByteLength = 400;
-
-export class SctpConn {
-	lvtag = 0;
-	rvtag = 0;
-	tsn = crypto.getRandomValues(new Uint32Array(1))[0];
-	async transform(chunk, controller) {
-		console.log('sctp<-', chunk);
-		if (chunk.byteLength < 12) return;
-
-		const p = new Sctp(chunk.buffer, chunk.byteOffset, chunk.byteLength);
-
-		const response = new Sctp(new ArrayBuffer(12, {maxByteLength}))
-		response.sport = p.dport; response.dport = response.sport;
-
-		console.log(p.sport, p.dport, p.vtag, p.checksum);
-		for (const chunk of p) {
-			if (chunk instanceof Init) {
-				this.rvtag = chunk.init_vtag;
-				this.lvtag = crypto.getRandomValues(new Uint32Array(1))[0];
-				console.log('response len', response.buffer.byteLength);
-				const ack = new InitAck(response.buffer, response.buffer.byteLength);
-				ack.init_vtag = this.lvtag;
-				ack.init_tsn = this.tsn;
-				ack.arwnd = 6000;
-				ack.out_count = 65535;
-				ack.in_count = 65535;
-				const cookie = Param.append(ack);
-				cookie.type = 7;
-				cookie.length = 12;
-				crypto.getRandomValues(cookie.value);
-			}
-			else if (chunk instanceof Cookie) {
-				new CookieAck(response.buffer, response.buffer.byteLength);
-			}
-			else if (chunk instanceof Data) {
-				console.log('sctp data', chunk.ppi, decoder.decode(chunk.data));
-				const sack = new Sack(response.buffer, response.buffer.byteLength);
-				sack.cum_tsn = chunk.tsn;
-				sack.arwnd = 6000;
-			}
-		}
-		// TODO: handle
-
-		// Only enqueue the response SCTP packet if it has at least one chunk
-		if (response.byteLength <= 12) return;
-
-		response.vtag = this.rvtag;
-		response.checksum = true;
-		
-		const ret = new Uint8Array(response.buffer);
-		console.log('sctp->', ret);
-		this.tsn = (this.tsn + ret.byteLength) >>> 0;
-		controller.enqueue(ret);
 	}
 }

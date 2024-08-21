@@ -48,6 +48,6 @@ export class Attr extends Wire {
 		return 4 + this.length + pad;
 	}
 }
-Stun.field('...', Attr);
+Stun.field('...attrs', Attr);
 Attr.field('type', 'u16');
 Attr.field('length', 'u16');
