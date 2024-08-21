@@ -1,6 +1,7 @@
 import { algorithm, from_string } from "./id.js";
 import { Conn } from './conn.js';
 import { query_txt } from './dns.js';
+import { default_turn_credential, default_turn_username } from "./const.js";
 /**
  * Example Addr-esses:
  * const a = new Addr('udp:seed.evan-brass.net'); await a.resolve_id(); const conn = a.connect();
@@ -52,8 +53,8 @@ export class Addr extends URL {
 				iceTransportPolicy: 'relay',
 				iceServers: [{
 					urls: `${proto}:${host}${transport ? '?transport=' + transport : ''}`,
-					username: this.searchParams.get('turn_username') || 'guest',
-					credential: this.searchParams.get('turn_credential') || 'password'
+					username: this.searchParams.get('turn_username') || default_turn_username,
+					credential: this.searchParams.get('turn_credential') || default_turn_credential
 				}]
 			};
 		}

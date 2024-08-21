@@ -6,11 +6,12 @@ import { ChannelData } from "../switch/turn.js";
 import { parse } from "../switch/turn.js";
 import { handle } from './hosted.js';
 import { mapped } from "../src/util.js";
+import { default_ice_port, default_turn_credential, default_turn_username } from "../src/const.js";
 
 // Server 
 const realm = 'none';
 const nonce = 'none';
-const long_cred = await crypto.subtle.importKey('raw', md5('guest:none:password'), {
+const long_cred = await crypto.subtle.importKey('raw', md5(`${default_turn_username}:none:${default_turn_credential}`), {
 	name: 'HMAC',
 	hash: 'SHA-1'
 }, true, ['sign', 'verify']);
@@ -45,7 +46,7 @@ for await (const [datagram, sender] of sock) {
 			const peer_mip = mapped(xpeer.ip);
 
 			// Handle hosted:
-			if (mip.every((v, i) => v == peer_mip[i]) && xpeer.port == 4666) {
+			if (mip.every((v, i) => v == peer_mip[i]) && xpeer.port == default_ice_port) {
 				await handle(data, sender);
 				continue;
 			}
@@ -115,7 +116,7 @@ for await (const [datagram, sender] of sock) {
 		// ChannelBind
 		else if (msg.method == Method.channelBind) {
 			const channel = msg.channel, xpeer = msg.xpeer;
-			if (xpeer && 0x4000 <= channel && channel < 0x5000 && xpeer.port == 4666 && xpeer.ip.every) {
+			if (xpeer && 0x4000 <= channel && channel < 0x5000 && xpeer.port == default_ice_port && xpeer.ip.every) {
 				resp.class = Class.success;
 				await resp.sign(long_cred);
 			}

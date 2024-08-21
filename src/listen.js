@@ -2,6 +2,7 @@ import { Class, Method, Stun } from '../switch/stun.js';
 import { encoder } from './util.js';
 import { Addr } from './addr.js';
 import { from_string } from "./id.js";
+import { default_ice_pwd } from "./const.js";
 // import { cert as default_cert } from './cert.js';
 
 Addr.prototype.bind = async function(config = null, {
@@ -57,7 +58,7 @@ Addr.prototype.bind = async function(config = null, {
 };
 
 export async function* listen(dc, {
-	pwd = 'the/ice/password/constant'
+	pwd = default_ice_pwd
 } = {}) {
 	const cred = await crypto.subtle.importKey('raw', encoder.encode(pwd), {
 		name: 'HMAC',

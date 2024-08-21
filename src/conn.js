@@ -1,4 +1,5 @@
 import { cert as default_cert } from './cert.js';
+import { default_ice_address, default_ice_port, default_ice_pwd } from "./const.js";
 import { to_fingerprint, to_string } from "./id.js";
 
 export const defaults = {
@@ -10,7 +11,7 @@ export class Conn extends RTCPeerConnection {
 	get dc() { return this.#dc; }
 
 	#default_address = new Promise(res => this.addEventListener('icecandidate', ({ candidate }) => {
-		if (candidate === null) return res('255.255.255.255');
+		if (candidate === null) return res(default_ice_address);
 		const {1: address} = /([^ ]+) [^ ]+ typ relay/i.exec(candidate.candidate) ?? {};
 		if (address) return res(address);
 	})).then(address => {
@@ -63,7 +64,7 @@ export class Conn extends RTCPeerConnection {
 			candidate.transport || 'udp',
 			candidate.priority || '42',
 			candidate.address || await this.#default_address,
-			candidate.port || '4666',
+			candidate.port || default_ice_port,
 			'typ', candidate.type || 'relay',
 			// WEIRD: For some reason, Firefox won't pair the candidate unless it has a related address and port (which are supposed to be optional?)
 			'raddr', '0.0.0.0', 'rport', '0',
@@ -74,7 +75,7 @@ export class Conn extends RTCPeerConnection {
 	}
 
 	async #signaling_task(/* Session: */ { cert, peerid, polite, setup, ice_lite, ice_pwd }) {
-		ice_pwd ||= 'the/ice/password/constant';
+		ice_pwd ||= default_ice_pwd;
 		// Read the following line as: "If I am polite, then the remote peer will be active therefore I must be passive": unless overridden, the polite peer is the DTLS server.
 		setup ||= polite ? 'active' : 'passive';
 

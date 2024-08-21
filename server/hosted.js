@@ -7,10 +7,11 @@ import { parse } from "../switch/turn.js";
 import { id } from "./support.js";
 import { to_string } from "../src/id.js";
 import { Chunk, Cookie, Init, InitAck, Param, Sack, Sctp, Data, Heartbeat, HeartbeatAck } from "../switch/sctp.js";
+import { default_ice_port, default_ice_pwd } from "../src/const.js";
 
 const hosted_ufrag = to_string(id) + ':';
 
-const short_cred = await crypto.subtle.importKey('raw', encoder.encode('the/ice/password/constant'), {
+const short_cred = await crypto.subtle.importKey('raw', encoder.encode(default_ice_pwd), {
 	name: 'HMAC',
 	hash: 'SHA-1'
 }, true, ['sign', 'verify']);
@@ -36,7 +37,7 @@ export async function handle(datagram, sender) {
 			ind.class = Class.indication;
 			ind.method = Method.data;
 			ind.length = 0;
-			ind.xpeer = { ip, port: 4666 };
+			ind.xpeer = { ip, port: default_ice_port };
 			
 			const resp = new Stun(hosted_send);
 			resp.magic = true;

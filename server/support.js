@@ -3,6 +3,7 @@ import { encoder, decoder } from "../src/util.js";
 import { from_bytes } from '../src/id.js';
 import { sock, send } from "./sock.js";
 import { parse_ipaddr } from "../src/ipaddr.js";
+import { default_ice_port } from "../src/const.js";
 
 function unimplemented() { throw new Error("Not Implemented."); }
 
@@ -26,7 +27,7 @@ const { instance } = await WebAssembly.instantiateStreaming(fetch(new URL('./dis
 			ind.magic = true;
 			ind.xpeer = {
 				ip: parse_ipaddr(hostname),
-				port: 4666
+				port: default_ice_port
 			};
 			if (ind.frame.byteLength + 4 + len > send.maxByteLength) {
 				console.warn('Unable to encapsulate DTLS data into DataIndication - too big', len);
