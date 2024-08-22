@@ -104,31 +104,53 @@ export class Wire extends DataView {
 	}
 	specialize() { return this; }
 	static field(name, typ) {
-		const offset = this.min_length;
+		const offset = this.minByteLength;
 		let byteLength;
 		let get, set;
 
 		if (name.startsWith('...')) {
 			name = name.slice(3);
-			Object.defineProperty(this.prototype, Symbol.iterator, {
-				value: function*() {
-					const siblings = [];
-					for (let offset = this.min_length; this.byteLength - offset >= typ.min_length;) {
-						const item = new typ(this.buffer, this.byteOffset + offset);
-						offset += item.byteLength;
-
-
-						const ret = item.specialize();
-						if (!ret) continue;
-
-						ret.parent = this;
-						ret.siblings = siblings;
-
-						yield ret;
+			Object.defineProperty(this.prototype, name, {
+				get() {
+					if (this.children.length == 0) {
+						for (let offset = this.minByteLength; this.byteLength - offset >= typ.minByteLength;) {
+							const item = new typ(this.buffer, this.byteOffset + offset);
+							offset += item.byteLength;
+	
+							const ret = item.specialize();
+							if (!ret) continue;
+	
+							ret.parent = this;
+							ret.children.push(ret);
+						}
 					}
+					return this.children;
 				}
 			});
+			Object.defineProperty(this.prototype, 'append', {
+				value: function() {
+					const self_byteLength = this.byteLength;
+					const available = this.maxByteLength - self_byteLength;
+					if (available < typ.minByteLength) return;
+					
+					const byteOffset = this.byteOffset + self_byteLength;
+					this.byteLength += typ.minByteLength;
+					const ret = new typ(this.buffer, { byteOffset, parent: this });
+					this.children.push(ret);
+
+					return ret;
+				}
+			});
+			Object.freeze(this.prototype); // Further fields cannot be added after a ...field
 			return;
+		}
+		else if (typ == '[]') {
+			Object.defineProperty(this.prototype, name, {
+				get: function() {
+					return new Uint8Array(this.buffer, this.byteOffset + this.constructor.minByteLength, this.byteLength - this.constructor.minByteLength);
+				}
+			});
+			Object.freeze(this.prototype); // Further fields cannot be added after a [] field
 		}
 
 		const arr = /^\[([1-9][0-9]*)\]$/.exec(typ);
@@ -144,8 +166,8 @@ export class Wire extends DataView {
 			const le = Boolean(le_s);
 			byteLength = parseInt(bits) / 8;
 			const js_typ = `${bits == '64' ? 'Big' : ''}${sign == 'u' ? 'Ui' : 'I'}nt${bits}`;
-			const getter = DataView.prototype['get' + js_typ];
-			const setter = DataView.prototype['set' + js_typ];
+			const getter = this.prototype['get' + js_typ];
+			const setter = this.prototype['set' + js_typ];
 			get = function() {
 				return getter.call(this, offset, le);
 			};
@@ -159,6 +181,6 @@ export class Wire extends DataView {
 			enumerable: true,
 			get, set,
 		});
-		this.min_length += byteLength;
+		this.minByteLength += byteLength;
 	}
 }
