@@ -25,11 +25,20 @@ export class Wire extends DataView {
 
 	get byteLength() { return this.constructor.minByteLength; }
 	set byteLength(value) {
+		// Check that the value is within [minByteLength, maxByteLength] 
 		if (value < this.constructor.minByteLength || value > this.maxByteLength) throw new Error("Couldn't set the byteLength");
-		// TODO: Check that the value is at least min_length
-		// TODO: Check that the byteLength is not greater then our maxByteLength
-		// TODO: Resize the buffer if needed
-		// TODO: Cascade the byteLength up to the parent if needed.
+
+		const buff_byteLength = super.byteOffset + value;
+
+		// Cascade the value to our parent (if we have one)
+		if (this.parent) {
+			this.parent.byteLength = (super.byteOffset - this.parent.byteOffset) + value;
+		}
+
+		// If we don't have a parent then we need to resize the buffer ourselves
+		else if (buff_byteLength > super.buffer.byteLength) {
+			super.buffer.resize(buff_byteLength);
+		}
 	}
 
 	constructor(buffer, { byteOffset, byteLength, ...values } = {}) {

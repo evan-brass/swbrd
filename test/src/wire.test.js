@@ -32,4 +32,9 @@ Deno.test(function maxByteLengths() {
 	assertEquals(parent.maxByteLength, 100);
 	assertEquals(child1.maxByteLength, 10);
 	assertEquals(child2.maxByteLength, 70);
+
+	// Use child byteLength setter to resize the buffer
+	assertEquals(t1.byteLength, 60);
+	child2.byteLength = 40;
+	assertEquals(t1.byteLength, 70);
 });
