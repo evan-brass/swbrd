@@ -4,8 +4,57 @@ export class Wire extends DataView {
 	parent = null;
 	children = [];
 
-	static min_length = 0;
-	get byteLength() { return this.constructor.min_length; }
+	static minByteLength = 0;
+	get maxByteLength() {
+		if (this.parent) {
+			const i = this.parent.children.indexOf(this) + 1;
+			// If we have a parent and are not the last child, then our maxByteLength can't be greater then the byteOffset of the next item.
+			if (i < this.parent.children.length) { return this.parent.children[i].byteOffset - super.byteOffset; }
+			// If we have parent then our maxBytelength can't exceed the maxByteLength of our parent
+			else { return this.parent.maxByteLength - (super.byteOffset - this.parent.byteOffset); }
+		}
+		else if (super.byteLength + super.byteOffset == super.buffer.byteLength) {
+			// If we have no parent and our byteLength reaches the end of the underlying buffer, then our maxByteLength is determined by the underlying buffer
+			return (super.buffer.maxByteLength ?? super.buffer.byteLength) - super.byteOffset;
+		}
+		else {
+			// Lastly, if our byteLength doesn't reach the end of the buffer, then our maxByteLength is the same as our byteLength
+			return super.byteLength;
+		}
+	}
+
+	get byteLength() { return this.constructor.minByteLength; }
+	set byteLength(value) {
+		if (value < this.constructor.minByteLength || value > this.maxByteLength) throw new Error("Couldn't set the byteLength");
+		// TODO: Check that the value is at least min_length
+		// TODO: Check that the byteLength is not greater then our maxByteLength
+		// TODO: Resize the buffer if needed
+		// TODO: Cascade the byteLength up to the parent if needed.
+	}
+
+	constructor(buffer, { byteOffset, byteLength, ...values } = {}) {
+		if (ArrayBuffer.isView(buffer)) {
+			byteOffset ??= buffer.byteOffset;
+			byteLength ??= buffer.byteLength;
+			buffer = buffer.buffer;
+		}
+
+		// Delete the byteLength if it matches the (current) length of the buffer anyway: The reason for this is to allow for auto resizing of the buffer later on.
+		byteOffset ??= 0;
+		const available = buffer.byteLength - byteOffset;
+		if (available < byteLength) throw new Error("Buffer can't support a wire with the given length and offset.");
+		else if (available == byteLength) byteLength = undefined;
+
+		// Create the DataView
+		super(buffer, byteOffset, byteLength);
+
+		if (available < this.constructor.minByteLength) throw new Error("ByteLength isn't big enough ")
+
+		// Trigger setters using any additional parameters
+		for (const key in values) {
+			this[key] = values[key];
+		}
+	}
 
 	static from(val, specialize = true) {
 		let buffer, byteOffset = 0, byteLength;
@@ -38,7 +87,8 @@ export class Wire extends DataView {
 		let byteLength;
 		let get, set;
 
-		if (name == '...') {
+		if (name.startsWith('...')) {
+			name = name.slice(3);
 			Object.defineProperty(this.prototype, Symbol.iterator, {
 				value: function*() {
 					const siblings = [];
