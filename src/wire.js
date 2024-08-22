@@ -23,7 +23,10 @@ export class Wire extends DataView {
 		}
 	}
 
-	get byteLength() { return this.constructor.minByteLength; }
+	get byteLength() {
+		const last_child = this.children[this.children.length - 1];
+		return (last_child?.byteOffset ?? super.byteOffset) + (last_child?.byteLength ?? this.constructor.minByteLength) - super.byteOffset;
+	}
 	set byteLength(value) {
 		// Check that the value is within [minByteLength, maxByteLength] 
 		if (value < this.constructor.minByteLength || value > this.maxByteLength) throw new Error("Couldn't set the byteLength");
