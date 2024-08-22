@@ -41,12 +41,15 @@ export class Wire extends DataView {
 		}
 	}
 
-	constructor(buffer, { byteOffset, byteLength, ...values } = {}) {
-		if (ArrayBuffer.isView(buffer)) {
-			byteOffset ??= buffer.byteOffset;
-			byteLength ??= buffer.byteLength;
-			buffer = buffer.buffer;
+	constructor(input, { byteOffset, byteLength, ...values } = {}) {
+		let buffer;
+		if (ArrayBuffer.isView(input)) {
+			byteOffset ??= input.byteOffset;
+			byteLength ??= input.byteLength;
+			buffer = input.buffer;
 		}
+		else if (input instanceof ArrayBuffer || input instanceof SharedArrayBuffer) { buffer = input; }
+		else { throw new Error("The first parameter should be a buffer or buffer view."); }
 
 		// Delete the byteLength if it matches the (current) length of the buffer anyway: The reason for this is to allow for auto resizing of the buffer later on.
 		byteOffset ??= 0;
@@ -62,6 +65,15 @@ export class Wire extends DataView {
 		// Trigger setters using any additional parameters
 		for (const key in values) {
 			this[key] = values[key];
+		}
+
+		// Detach the input wire if we are replacing it
+		if (input instanceof Wire) {
+			// TODO: What should happen if you manually provide a parent or children key in values?
+			this.parent ??= input.parent;
+			const i = (input.parent?.children ?? []).indexOf(input);
+			if (i >= 0) input.parent.children[i] = this;
+			input.parent = null;
 		}
 	}
 

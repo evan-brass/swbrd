@@ -37,4 +37,12 @@ Deno.test(function maxByteLengths() {
 	assertEquals(t1.byteLength, 60);
 	child2.byteLength = 40;
 	assertEquals(t1.byteLength, 70);
+
+	// Replace child1 with a new wire
+	const child1_b = new Wire(child1);
+	assertEquals(child1.parent, null);
+	assertEquals(parent.children[0], child1_b);
+	assertEquals(child1_b.parent, parent);
+	assertEquals(child1_b.maxByteLength, 10);
+	assertEquals(child1_b.byteOffset, 20);
 });
