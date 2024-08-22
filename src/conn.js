@@ -10,6 +10,9 @@ export class Conn extends RTCPeerConnection {
 	#dc = this.createDataChannel('', {negotiated: true, id: 0});
 	get dc() { return this.#dc; }
 
+	#cert;
+	get cert() { return this.#cert; }
+
 	#default_address = new Promise(res => this.addEventListener('icecandidate', ({ candidate }) => {
 		if (candidate === null) return res(default_ice_address);
 		const {1: address} = /([^ ]+) [^ ]+ typ relay/i.exec(candidate.candidate) ?? {};
@@ -31,10 +34,11 @@ export class Conn extends RTCPeerConnection {
 			rtcpMuxPolicy: 'require',
 			peerIdentity: null,
 		});
+		this.#cert = cert;
 
 		this.#dc.binaryType = 'arraybuffer';
 
-		const polite = BigInt(cert) < peerid;
+		const polite = BigInt(this.#cert) < peerid;
 		const {
 			setup,
 			ice_lite,
@@ -42,7 +46,7 @@ export class Conn extends RTCPeerConnection {
 		} = config ?? {};
 
 		this.#signaling_task({
-			cert, polite, peerid,
+			polite, peerid,
 			setup, ice_lite, ice_pwd,
 		}).catch(() => this.close());
 	}
@@ -74,7 +78,7 @@ export class Conn extends RTCPeerConnection {
 		return await super.addIceCandidate(candidate);
 	}
 
-	async #signaling_task(/* Session: */ { cert, peerid, polite, setup, ice_lite, ice_pwd }) {
+	async #signaling_task(/* Session: */ { peerid, polite, setup, ice_lite, ice_pwd }) {
 		ice_pwd ||= default_ice_pwd;
 		// Read the following line as: "If I am polite, then the remote peer will be active therefore I must be passive": unless overridden, the polite peer is the DTLS server.
 		setup ||= polite ? 'active' : 'passive';
@@ -117,7 +121,7 @@ export class Conn extends RTCPeerConnection {
 		].join('\n') });
 		const answer = await super.createAnswer();
 		answer.sdp = answer.sdp
-			.replace(/^a=ice-ufrag:.+/im, `a=ice-ufrag:${to_string(cert)}`)
+			.replace(/^a=ice-ufrag:.+/im, `a=ice-ufrag:${to_string(this.#cert)}`)
 			.replace(/^a=ice-pwd:.+/im, `a=ice-pwd:${ice_pwd}`);
 		await super.setLocalDescription(answer);
 
@@ -160,14 +164,13 @@ export class Conn extends RTCPeerConnection {
 
 	// Re-provide defaults when calling setConfiguration
 	setConfiguration(config = null) {
-		const certificates = this.getConfiguration()?.certificates;
 		super.setConfiguration({
 			...defaults,
 			...config,
 			bundlePolicy: 'max-bundle',
 			rtcpMuxPolicy: 'require',
 			peerIdentity: null,
-			certificates,
+			certificates: [this.#cert],
 		});
 	}
 
