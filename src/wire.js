@@ -9,13 +9,13 @@ export class Wire extends DataView {
 		if (this.parent) {
 			const i = this.parent.children.indexOf(this) + 1;
 			// If we have a parent and are not the last child, then our maxByteLength can't be greater then the byteOffset of the next item.
-			if (i < this.parent.children.length) { return this.parent.children[i].byteOffset - super.byteOffset; }
+			if (i < this.parent.children.length) { return this.parent.children[i].byteOffset - this.byteOffset; }
 			// If we have parent then our maxBytelength can't exceed the maxByteLength of our parent
-			else { return this.parent.maxByteLength - (super.byteOffset - this.parent.byteOffset); }
+			else { return this.parent.maxByteLength - (this.byteOffset - this.parent.byteOffset); }
 		}
-		else if (super.byteLength + super.byteOffset == super.buffer.byteLength) {
+		else if (super.byteLength + this.byteOffset == this.buffer.byteLength) {
 			// If we have no parent and our byteLength reaches the end of the underlying buffer, then our maxByteLength is determined by the underlying buffer
-			return (super.buffer.maxByteLength ?? super.buffer.byteLength) - super.byteOffset;
+			return (this.buffer.maxByteLength ?? this.buffer.byteLength) - this.byteOffset;
 		}
 		else {
 			// Lastly, if our byteLength doesn't reach the end of the buffer, then our maxByteLength is the same as our byteLength
