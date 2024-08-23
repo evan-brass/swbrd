@@ -20,6 +20,36 @@ const methods = new Map([
 	[0x009, 'channel bind'],
 ].map(a => [a, a.toReversed()]).flat(1));
 
+const attrs = new Map([
+	// [0x0001, 'old mapped'],
+	[0x0006, 'username'],
+	[0x0008, 'integrity'],
+	[0x0009, 'error'],
+	// [0x000A, 'unknown'],
+	[0x000C, 'channel'],
+	[0x000D, 'lifetime'],
+	[0x0012, 'peer'],
+	[0x0013, 'data'],
+	[0x0014, 'realm'],
+	[0x0015, 'nonce'],
+	[0x0016, 'relayed'],
+	[0x0017, 'requested family'],
+	// [0x0018, 'even port'],
+	// [0x0019, 'requested transport'],
+	// [0x001A, 'dont fragment'],
+	[0x0020, 'mapped'],
+	[0x0022, 'reservation'],
+	[0x0024, 'priority'],
+	[0x0025, 'use candidate'],
+	[0x8000, 'additional requested family'],
+	[0x8003, 'alternate domain'],
+	[0x8022, 'software'],
+	[0x8023, 'alternate server'],
+	[0x8028, 'fingerprint'],
+	[0x8029, 'ice controlled'],
+	[0x802A, 'ice controlling'],
+].map(a => [a, a.toReversed()]).flat(1));
+
 export class Stun extends Wire {
 	get byteLength() { return 20 + this.length; }
 	set byteLength(value) {
@@ -57,11 +87,18 @@ export class Attr extends Wire {
 		const pad = (4 - len % 4) % 4;
 		super.byteLength = value + pad;
 		this.length = value - 4;
-		// TODO: fill the padding with zeros
+		new Uint8Array(this.buffer, this.byteOffset + value, pad).fill(0);
+	}
+	get type() {
+		const typ = this.getUint16(0);
+		return attrs.get(typ) ?? typ;
+	}
+	set type(value) {
+		this.setUint16(0, typeof value == 'string' ? attrs.get(value) : value);
 	}
 }
 Stun.field('...attrs', Attr);
-Attr.field('type', 'u16');
+Attr.minByteLength += 2;
 Attr.field('length', 'u16');
 
 export class TextAttr extends Attr {
@@ -73,14 +110,20 @@ export class TextAttr extends Attr {
 	}
 }
 
+export class U32Attr extends Attr {}
+U32Attr.field('value', 'u32');
+
 Attr.prototype.specialize = function() {
 	switch (this.type) {
-		case 0x0006: /* Username */
-		case 0x0014: /* Realm */
-		case 0x0015: /* Nonce */
-		case 0x8003: /* Alternate Domain */
-		case 0x8022: /* Software */
+		case 'username':
+		case 'realm':
+		case 'nonce':
+		case 'alternate domain':
+		case 'software':
 			return new TextAttr(this);
+		case 'priority':
+		case 'lifetime':
+			return new U32Attr(this);
 		default:
 			return this;
 	}

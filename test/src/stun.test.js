@@ -46,14 +46,15 @@ Deno.test(function vector1() {
 		fingerprint,
 		end
 	] = test.attrs;
-	assertEquals(software?.type, 0x8022);
+	assertEquals(software?.type, 'software');
 	assertEquals(software?.value, 'STUN test client');
-	assertEquals(priority?.type, 0x0024);
-	assertEquals(controlled?.type, 0x8029);
-	assertEquals(username?.type, 0x0006);
+	assertEquals(priority?.type, 'priority');
+	assertEquals(priority?.value, 0x6e0001ff);
+	assertEquals(controlled?.type, 'ice controlled');
+	assertEquals(username?.type, 'username');
 	assertEquals(username?.value, 'evtj:h6vY');
-	assertEquals(integrity?.type, 0x0008);
-	assertEquals(fingerprint?.type, 0x8028);
+	assertEquals(integrity?.type, 'integrity');
+	assertEquals(fingerprint?.type, 'fingerprint');
 	assertEquals(end, undefined);
 	// assertEquals(test.software, 'STUN test client', 'ATTR software');
 	// assertEquals(test.username, 'evtj:h6vY', 'ATTR username');
