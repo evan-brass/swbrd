@@ -128,14 +128,14 @@ export class Wire extends DataView {
 				}
 			});
 			Object.defineProperty(this.prototype, 'append', {
-				value: function() {
+				value: function(constr = typ, values = null) {
 					const self_byteLength = this.byteLength;
 					const available = this.maxByteLength - self_byteLength;
-					if (available < typ.minByteLength) return;
+					if (available < constr.minByteLength) return;
 					
 					const byteOffset = this.byteOffset + self_byteLength;
-					this.byteLength += typ.minByteLength;
-					const ret = new typ(this.buffer, { byteOffset, parent: this });
+					this.byteLength += constr.minByteLength;
+					const ret = new constr(this.buffer, { ...values, byteOffset, parent: this });
 					this.children.push(ret);
 
 					return ret;
