@@ -106,6 +106,21 @@ export class Wire extends DataView {
 		return specialize ? ret.specialize() : ret;
 	}
 	specialize() { return this; }
+
+	static default_append_typ = Wire;
+	append(constr = this.constructor.default_append_typ, values = null) {
+		const self_byteLength = this.byteLength;
+		const available = this.maxByteLength - self_byteLength;
+		if (available < constr.minByteLength) return;
+		
+		const byteOffset = this.byteOffset + self_byteLength;
+		this.byteLength += constr.minByteLength;
+		const ret = new constr(this.buffer, { ...values, byteOffset, parent: this });
+		this.children.push(ret);
+
+		return ret;
+	}
+
 	static field(name, typ) {
 		const offset = this.minByteLength;
 		let byteLength;
@@ -127,20 +142,7 @@ export class Wire extends DataView {
 					return this.children;
 				}
 			});
-			Object.defineProperty(this.prototype, 'append', {
-				value: function(constr = typ, values = null) {
-					const self_byteLength = this.byteLength;
-					const available = this.maxByteLength - self_byteLength;
-					if (available < constr.minByteLength) return;
-					
-					const byteOffset = this.byteOffset + self_byteLength;
-					this.byteLength += constr.minByteLength;
-					const ret = new constr(this.buffer, { ...values, byteOffset, parent: this });
-					this.children.push(ret);
-
-					return ret;
-				}
-			});
+			this.default_append_typ = typ;
 			Object.freeze(this.prototype); // Further fields cannot be added after a ...field
 			return;
 		}
