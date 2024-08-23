@@ -44,7 +44,7 @@ export class Wire extends DataView {
 		}
 	}
 
-	constructor(input, { byteOffset, byteLength, ...values } = {}) {
+	constructor(input, { byteOffset, byteLength, parent, setByteLength, ...values } = {}) {
 		let buffer;
 		if (ArrayBuffer.isView(input)) {
 			byteOffset ??= input.byteOffset;
@@ -57,15 +57,20 @@ export class Wire extends DataView {
 		// Delete the byteLength if it matches the (current) length of the buffer anyway: The reason for this is to allow for auto resizing of the buffer later on.
 		byteOffset ??= 0;
 		const available = buffer.byteLength - byteOffset;
-		if (available < byteLength) throw new Error("Buffer can't support a wire with the given length and offset.");
+		if (!setByteLength && available < byteLength) throw new Error("Buffer can't support a wire with the given length and offset.");
 		else if (available == byteLength) byteLength = undefined;
 
 		// Create the DataView
 		super(buffer, byteOffset, byteLength);
 
-		if (available < this.constructor.minByteLength) throw new Error("ByteLength isn't big enough ")
+		if (!setByteLength && available < this.constructor.minByteLength) throw new Error("ByteLength isn't big enough ")
 
 		// Trigger setters using any additional parameters
+		if (parent) {
+			this.parent = parent;
+			this.parent.children.push(this);
+		}
+		if (typeof setByteLength == 'number') this.byteLength = setByteLength;
 		for (const key in values) {
 			this[key] = values[key];
 		}
@@ -89,9 +94,7 @@ export class Wire extends DataView {
 		if (available < constr.minByteLength) return;
 		
 		const byteOffset = this.byteOffset + self_byteLength;
-		this.byteLength += constr.minByteLength;
-		const ret = new constr(this.buffer, { ...values, byteOffset, parent: this });
-		this.children.push(ret);
+		const ret = new constr(this.buffer, { setByteLength: constr.minByteLength, ...values, byteOffset, parent: this });
 
 		return ret;
 	}
@@ -109,7 +112,6 @@ export class Wire extends DataView {
 						for (let offset = this.constructor.minByteLength; this.byteLength - offset >= typ.minByteLength;) {
 							const item = new typ(this.buffer, {byteOffset: this.byteOffset + offset, parent: this});
 							offset += item.byteLength;
-							this.children.push(item);
 	
 							item.specialize();
 						}
