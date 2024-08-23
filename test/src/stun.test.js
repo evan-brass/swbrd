@@ -56,6 +56,8 @@ Deno.test(function vector1() {
 	assertEquals(username.value, 'evtj:h6vY');
 	assertEquals(integrity?.type, 'integrity');
 	assertEquals(fingerprint?.type, 'fingerprint');
+	assertEquals(fingerprint.actual, 0xe57a3bcf);
+	assertEquals(fingerprint.expected(), fingerprint.actual);
 	assertEquals(end, undefined);
 	// assertEquals(test.software, 'STUN test client', 'ATTR software');
 	// assertEquals(test.username, 'evtj:h6vY', 'ATTR username');

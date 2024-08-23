@@ -1,5 +1,6 @@
 import { Wire } from './wire.js';
 import { decoder, encoder } from "./util.js";
+import { crc32 } from "./crc32.js";
 
 export const MAGIC_COOKIE = 0x2112A442;
 
@@ -96,6 +97,13 @@ export class Attr extends Wire {
 	set type(value) {
 		this.setUint16(0, typeof value == 'string' ? attrs.get(value) : value);
 	}
+	get prefix() {
+		// TODO: This copy sucks.
+		const copy = new Uint8Array(this.buffer, this.parent.byteOffset, this.byteOffset - this.parent.byteOffset).slice();
+		const length_at = copy.byteLength - Stun.minByteLength + this.byteLength;
+		new DataView(copy.buffer, copy.byteOffset).setUint16(2, length_at);
+		return copy;
+	}
 }
 Stun.field('...attrs', Attr);
 Attr.minByteLength += 2;
@@ -116,6 +124,13 @@ U32Attr.field('value', 'u32');
 export class U64Attr extends Attr {}
 U64Attr.field('value', 'u64');
 
+export class FingerprintAttr extends Attr {
+	expected() {
+		return (crc32(this.prefix) ^ 0x5354554e) >>> 0;
+	}
+}
+FingerprintAttr.field('actual', 'u32');
+
 Attr.prototype.specialize = function() {
 	switch (this.type) {
 		case 'username':
@@ -130,6 +145,8 @@ Attr.prototype.specialize = function() {
 		case 'ice controlled':
 		case 'ice controlling':
 			return this.byteLength >= U64Attr.minByteLength ? new U64Attr(this) : this;
+		case 'fingerprint':
+			return this.byteLength >= FingerprintAttr.minByteLength ? new FingerprintAttr(this) : this;
 		default:
 			return this;
 	}
