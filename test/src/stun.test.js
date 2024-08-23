@@ -1,8 +1,10 @@
 import { assertEquals } from '@std/assert/mod.ts';
 import { Stun, MAGIC_COOKIE } from "../../src/stun.js";
+import { encoder } from '../../src/util.js';
 
 // RFC 5769
-Deno.test(function vector1() {
+Deno.test(async function vector1() {
+	const key = await crypto.subtle.importKey('raw', encoder.encode('VOkJxbRl1RmTxUk/WvJxBt'), { name: 'HMAC', hash: 'SHA-1' }, true, ['verify']);
 	const test = new Stun(
 		new Uint8Array([
 			0x00, 0x01, 0x00, 0x58,
@@ -55,13 +57,9 @@ Deno.test(function vector1() {
 	assertEquals(username?.type, 'username');
 	assertEquals(username.value, 'evtj:h6vY');
 	assertEquals(integrity?.type, 'integrity');
+	assertEquals(await integrity.verify(key), true);
 	assertEquals(fingerprint?.type, 'fingerprint');
 	assertEquals(fingerprint.actual, 0xe57a3bcf);
 	assertEquals(fingerprint.expected(), fingerprint.actual);
 	assertEquals(end, undefined);
-	// assertEquals(test.software, 'STUN test client', 'ATTR software');
-	// assertEquals(test.username, 'evtj:h6vY', 'ATTR username');
-	// const key = await crypto.subtle.importKey('raw', encoder.encode('VOkJxbRl1RmTxUk/WvJxBt'), { name: 'HMAC', hash: 'SHA-1' }, true, ['verify']);
-	// assertEquals(await test.verify(key), true, 'ATTR integrity');
-	// assertEquals(test.fingerprint, true, 'STUN fingerprint attribute');
 });

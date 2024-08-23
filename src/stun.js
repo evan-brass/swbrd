@@ -131,6 +131,18 @@ export class FingerprintAttr extends Attr {
 }
 FingerprintAttr.field('actual', 'u32');
 
+export class Sha1Integrity extends Attr {
+	async verify(key) {
+		if (key?.algorithm?.hash?.name != 'SHA-1') return false;
+		return await crypto.subtle.verify('HMAC', key, this.actual, this.prefix);
+	}
+	async sign(key) {
+		if (key?.algorithm?.hash?.name != 'SHA-1') throw new Error("The key should be an HMAC key using the SHA-1 algorithm.");
+		this.actual.set(new Uint8Array(await crypto.subtle.sign('HMAC', key, this.prefix)));
+	}
+}
+Sha1Integrity.field('actual', '[20]');
+
 Attr.prototype.specialize = function() {
 	switch (this.type) {
 		case 'username':
@@ -147,6 +159,8 @@ Attr.prototype.specialize = function() {
 			return this.byteLength >= U64Attr.minByteLength ? new U64Attr(this) : this;
 		case 'fingerprint':
 			return this.byteLength >= FingerprintAttr.minByteLength ? new FingerprintAttr(this) : this;
+		case 'integrity':
+			return this.byteLength >= Sha1Integrity.minByteLength ? new Sha1Integrity(this) : this;
 		default:
 			return this;
 	}
