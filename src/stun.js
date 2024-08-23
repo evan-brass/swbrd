@@ -113,6 +113,9 @@ export class TextAttr extends Attr {
 export class U32Attr extends Attr {}
 U32Attr.field('value', 'u32');
 
+export class U64Attr extends Attr {}
+U64Attr.field('value', 'u64');
+
 Attr.prototype.specialize = function() {
 	switch (this.type) {
 		case 'username':
@@ -123,7 +126,10 @@ Attr.prototype.specialize = function() {
 			return new TextAttr(this);
 		case 'priority':
 		case 'lifetime':
-			return new U32Attr(this);
+			return this.byteLength >= U32Attr.minByteLength ? new U32Attr(this) : this;
+		case 'ice controlled':
+		case 'ice controlling':
+			return this.byteLength >= U64Attr.minByteLength ? new U64Attr(this) : this;
 		default:
 			return this;
 	}
