@@ -1,4 +1,4 @@
-import { assertEquals } from '@std/assert/mod.ts';
+import { assertEquals } from '@std/assert';
 import { Stun, MAGIC_COOKIE, TextAttr, U32Attr, U64Attr, Sha1Integrity, FingerprintAttr } from "../../src/stun.js";
 import { encoder } from '../../src/util.js';
 

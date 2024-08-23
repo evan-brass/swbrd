@@ -1,5 +1,5 @@
 import { parse_ipaddr } from "../../src/ipaddr.js";
-import { assertEquals } from '@std/assert/mod.ts';
+import { assertEquals } from '@std/assert';
 
 Deno.test(function loopbacks() {
 	// IPv4 Loopback

@@ -1,4 +1,4 @@
-import { assertEquals } from '@std/assert/mod.ts';
+import { assertEquals } from '@std/assert';
 import { get_table, crc32c } from "../../src/crc32.js";
 
 Deno.test(function crc32_table() {

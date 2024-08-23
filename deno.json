@@ -1,6 +1,6 @@
 {
 	"imports": {
-		"@std/": "https://deno.land/std@0.218.0/"
+		"@std/assert": "jsr:@std/assert@^1.0.2"
 	},
 	"fmt": {
 		"useTabs": true

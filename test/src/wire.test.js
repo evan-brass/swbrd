@@ -1,4 +1,4 @@
-import { assertEquals } from '@std/assert/mod.ts';
+import { assertEquals } from '@std/assert';
 import { Wire } from "../../src/wire.js";
 
 Deno.test(function maxByteLengths() {

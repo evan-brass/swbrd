@@ -1,6 +1,6 @@
 import { Stun, Class, Method } from '../../switch/stun.js';
 import { encoder } from '../../src/util.js';
-import { assertEquals } from '@std/assert/mod.ts';
+import { assertEquals } from '@std/assert';
 
 // RFC 5769
 Deno.test(async function vector1() {
