@@ -80,31 +80,6 @@ export class Wire extends DataView {
 		}
 	}
 
-	static from(val, specialize = true) {
-		let buffer, byteOffset = 0, byteLength;
-		if (val instanceof ArrayBuffer) { buffer = val }
-		else { buffer = val.buffer; byteOffset = val.byteOffset; }
-
-		if (typeof val.byteLength == 'number' && val.byteLength < buffer.byteLength) {
-			if (val.byteLength < this.min_length) return val;
-		}
-		const needed = byteOffset + this.min_length;
-		if (buffer.byteLength < needed) {
-			if (buffer.resizable && buffer.maxByteLength >= needed) buffer.resize(needed);
-			else { return val }
-		}
-
-		const ret = new this(buffer, byteOffset);
-		if (val instanceof Wire) {
-			ret.parent = val.parent;
-			if (ret.parent) {
-				const i = ret.parent.children.indexOf(val)
-				ret.parent.children[i] = ret;
-			}
-		}
-
-		return specialize ? ret.specialize() : ret;
-	}
 	specialize() { return this; }
 
 	static default_append_typ = Wire;

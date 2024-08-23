@@ -85,7 +85,7 @@ export class Attr extends Wire {
 		return 4 + len + pad;
 	}
 	set byteLength(value) {
-		const pad = (4 - len % 4) % 4;
+		const pad = (4 - value % 4) % 4;
 		super.byteLength = value + pad;
 		this.length = value - 4;
 		new Uint8Array(this.buffer, this.byteOffset + value, pad).fill(0);
