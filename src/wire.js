@@ -115,7 +115,6 @@ export class Wire extends DataView {
 			name = name.slice(3);
 			Object.defineProperty(this.prototype, name, {
 				get() {
-					debugger;
 					if (this.children.length == 0) {
 						for (let offset = this.constructor.minByteLength; this.byteLength - offset >= typ.minByteLength;) {
 							const item = new typ(this.buffer, {byteOffset: this.byteOffset + offset, parent: this});
