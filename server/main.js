@@ -11,7 +11,7 @@ import { default_ice_port, default_turn_credential, default_turn_username } from
 // Server 
 const realm = 'none';
 const nonce = 'none';
-const long_cred = await crypto.subtle.importKey('raw', md5(`${default_turn_username}:none:${default_turn_credential}`), {
+const long_cred = await crypto.subtle.importKey('raw', md5(`${default_turn_username}:${realm}:${default_turn_credential}`), {
 	name: 'HMAC',
 	hash: 'SHA-1'
 }, true, ['sign', 'verify']);

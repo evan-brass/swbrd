@@ -1,4 +1,4 @@
-import { assertEquals, assertNotEquals } from '@std/assert/mod.ts';
+import { assertEquals } from '@std/assert/mod.ts';
 import { Stun, MAGIC_COOKIE } from "../../src/stun.js";
 
 // RFC 5769
