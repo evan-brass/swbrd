@@ -32,6 +32,20 @@ export class Addr extends URL {
 		const address = http.hostname.replaceAll(/[\[\]]/g, '')
 		return { username: decodeURIComponent(http.username), password: decodeURIComponent(http.password), hostname: http.hostname, host, port, address };
 	}
+	temp_adjustment() {
+		const turn_res = /^(turns?)(?:\+(tcp|udp))?:/i.exec(this.protocol);
+		if (!turn_res) return null;
+		const {1: proto, 2: transport} = turn_res;
+		const { host } = this.#authority();
+		return {
+			iceTransportPolicy: 'relay',
+			iceServers: [{
+				urls: `${proto}:${host}${transport ? '?transport=' + transport : ''}`,
+				username: this.searchParams.get('turn_username') || default_turn_username,
+				credential: this.searchParams.get('turn_credential') || default_turn_credential
+			}]
+		};
+	}
 	connect(config = null) {
 		const {address, port, username, password: ice_pwd} = this.#authority();
 		this.#id ??= from_string(username);
@@ -45,19 +59,7 @@ export class Addr extends URL {
 		}
 
 		// Adjust the config if needed
-		let adjustment = null, turn_res;
-		if ((turn_res = /^(turns?)(?:\+(tcp|udp))?:/i.exec(this.protocol))) {
-			const {1: proto, 2: transport} = turn_res;
-			const {host} = this.#authority();
-			adjustment = {
-				iceTransportPolicy: 'relay',
-				iceServers: [{
-					urls: `${proto}:${host}${transport ? '?transport=' + transport : ''}`,
-					username: this.searchParams.get('turn_username') || default_turn_username,
-					credential: this.searchParams.get('turn_credential') || default_turn_credential
-				}]
-			};
-		}
+		const adjustment = this.temp_adjustment();
 
 		// Prepare the candidates 
 		const candidates = Array.isArray(config?.candidates) ? config?.candidates : [];
