@@ -51,12 +51,6 @@ export class Addr extends URL {
 		this.#id ??= from_string(username);
 		if (!this.#id) return;
 		const setup = this.searchParams.get('setup') ?? 'passive';
-		let ice_lite = this.searchParams.get('ice_lite');
-
-		// Configure connection parameters
-		if (/^udp:/i.test(this.protocol)) {
-			ice_lite ??= true;
-		}
 
 		// Adjust the config if needed
 		const adjustment = this.temp_adjustment();
@@ -87,7 +81,6 @@ export class Addr extends URL {
 		// Create the connection
 		const ret = new Conn(this.#id, {
 			setup,
-			ice_lite,
 			ice_pwd,
 			...config,
 			...adjustment
@@ -112,7 +105,6 @@ export class Addr extends URL {
 				// Remove the adjustment
 				ret.setConfiguration({
 					setup,
-					ice_lite,
 					ice_pwd,
 					...config
 				});
