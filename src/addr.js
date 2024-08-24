@@ -16,27 +16,31 @@ export class Addr extends URL {
 		this.#id = id;
 	}
 	async resolve_id() {
-		const {username, hostname} = this.#authority();
+		const {username, hostname} = this.authority;
 		this.#id ??= from_string(username);
 		for await (const txt of query_txt(hostname, {prefix: `swbrd(${algorithm})=`})) {
 			this.#id ??= from_string(txt);
 		}
 		return this.#id;
 	}
-	#authority() {
-		// Use two URLS to unhide default ports: new URL('https://test.com:443').port == '' and new URL('http://test.com:80').port == ''
-		const http = new URL(this.href.replace(/^[^:]+:/, 'http:'));
-		const https = new URL(this.href.replace(/^[^:]+:/, 'https:'));
-		const host = (http.host.length < https.host.length) ? https.host : http.host;
-		const port = parseInt(http.port || https.port || 3478);
-		const address = http.hostname.replaceAll(/[\[\]]/g, '')
-		return { username: decodeURIComponent(http.username), password: decodeURIComponent(http.password), hostname: http.hostname, host, port, address };
+	#authority;
+	get authority() {
+		if (this.#authority?.href != this.href) {
+			// Use two URLS to unhide default ports: new URL('https://test.com:443').port == '' and new URL('http://test.com:80').port == ''
+			const http = new URL(this.href.replace(/^[^:]+:/, 'http:'));
+			const https = new URL(this.href.replace(/^[^:]+:/, 'https:'));
+			const host = (http.host.length < https.host.length) ? https.host : http.host;
+			const port = parseInt(http.port || https.port || 3478);
+			const address = http.hostname.replaceAll(/[\[\]]/g, '')
+			this.#authority = { href: this.href, username: decodeURIComponent(http.username), password: decodeURIComponent(http.password), hostname: http.hostname, host, port, address };
+		}
+		return this.#authority;
 	}
 	temp_adjustment() {
 		const turn_res = /^(turns?)(?:\+(tcp|udp))?:/i.exec(this.protocol);
 		if (!turn_res) return null;
 		const {1: proto, 2: transport} = turn_res;
-		const { host } = this.#authority();
+		const { host } = this.authority;
 		return {
 			iceTransportPolicy: 'relay',
 			iceServers: [{
@@ -47,7 +51,7 @@ export class Addr extends URL {
 		};
 	}
 	connect(config = null) {
-		const {address, port, username, password: ice_pwd} = this.#authority();
+		const {address, port, username, password: ice_pwd} = this.authority;
 		this.#id ??= from_string(username);
 		if (!this.#id) return;
 		const setup = this.searchParams.get('setup') ?? 'passive';
