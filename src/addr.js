@@ -10,11 +10,7 @@ import { default_turn_credential, default_turn_username } from "./const.js";
  */
 export class Addr extends URL {
 	#id;
-	// This constructor disables support for using Url(url, base)
-	constructor(url, { id, base } = {}) {
-		super(url, base);
-		this.#id = id;
-	}
+
 	async resolve_id() {
 		const {username, hostname} = this.authority;
 		this.#id ??= from_string(username);
