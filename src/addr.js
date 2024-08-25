@@ -110,11 +110,7 @@ export class Addr extends URL {
 				if (ret.connectionState == 'closed') return;
 				
 				// Remove the adjustment
-				ret.setConfiguration({
-					setup,
-					ice_pwd,
-					...config
-				});
+				ret.setConfiguration(config);
 				
 				// Restart ICE so that the configuration can take effect
 				ret.restartIce();
