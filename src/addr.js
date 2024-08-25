@@ -53,49 +53,46 @@ export class Addr extends URL {
 			}]
 		};
 	}
+	*candidates() {
+		// Yield candidate search params
+		for (let val of this.searchParams.getAll('candidate')) {
+			val = decodeURIComponent(val);
+			let json;
+			// Try to parse the candidate as JSON
+			try { json = JSON.parse(val); } catch {/* Do Nothing */}
+			if (typeof json == 'object') { yield json; }
+			
+			// Yield the candidate as a string
+			else { yield val; }
+		}
+
+		// Yield protocol specific candidate
+		if (/^udp:/i.test(this.protocol)) {
+			yield {address, port};
+		}
+		else if (/^(turns?)(?:\+(tcp|udp))?:/i.test(this.protocol)) {
+			yield {};
+		}
+	}
 	connect(config = null) {
-		const {address, port, username, password: ice_pwd} = this.authority;
-		this.#id ??= from_string(username);
-		if (!this.#id) return;
-		const setup = this.searchParams.get('setup') ?? 'passive';
+		if (!this.id) return;
 
 		// Adjust the config if needed
 		const adjustment = this.temp_adjustment();
 
-		// Prepare the candidates 
-		const candidates = Array.isArray(config?.candidates) ? config?.candidates : [];
-		for (let val of this.searchParams.getAll('candidate')) {
-			val = decodeURIComponent(val);
-			try {
-				// Try to parse as JSON and add an object candidate
-				candidates.push(JSON.parse(val));
-			} catch {
-				// Otherwise leave the candidate as a string
-				candidates.push(val);
-			}
-		}
-
-		// If manual candidates aren't specified then use protocol specific default candidate
-		if (candidates.length < 1) {
-			if (/^udp:/i.test(this.protocol)) {
-				candidates.push({address, port, transport: 'udp'});
-			}
-			else if (/^(turns?)(?:\+(tcp|udp))?:/i.test(this.protocol)) {
-				candidates.push({});
-			}
-		}
+		const {password: ice_pwd} = this.authority;
+		const setup = this.searchParams.get('setup') ?? 'passive';
 
 		// Create the connection
-		const ret = new Conn(this.#id, {
-			setup,
-			ice_pwd,
+		const ret = new Conn(this.id, {
+			ice_pwd, setup,
 			...config,
 			...adjustment
 		});
 
 		// Spawn the task to signal the connection
 		(async () => {
-			for (const candidate of candidates) {
+			for (const candidate of this.candidates()) {
 				await ret.addIceCandidate(candidate);
 			}
 
