@@ -10,10 +10,17 @@ import { default_turn_credential, default_turn_username } from "./const.js";
  */
 export class Addr extends URL {
 	#id;
+	get id() {
+		if (!this.#id) {
+			const { username } = this.authority;
+			this.#id = from_string(username);
+		}
+		return this.#id;
+	}
 
 	async resolve_id() {
-		const {username, hostname} = this.authority;
-		this.#id ??= from_string(username);
+		if (this.id) return this.#id;
+		const {hostname} = this.authority;
 		for await (const txt of query_txt(hostname, {prefix: `swbrd(${algorithm})=`})) {
 			this.#id ??= from_string(txt);
 		}
