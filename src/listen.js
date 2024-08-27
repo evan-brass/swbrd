@@ -2,110 +2,176 @@ import { Class, Method, Stun } from '../switch/stun.js';
 import { encoder } from './util.js';
 import { Addr } from './addr.js';
 import { from_string } from "./id.js";
-import { default_ice_pwd } from "./const.js";
+import { default_ice_pwd, default_turn_credential, default_turn_username } from "./const.js";
+import { Conn } from "./conn.js";
 // import { cert as default_cert } from './cert.js';
 
-Addr.prototype.bind = async function(config = null, {
-	pwd,
-	filter = () => true,
-	timeout = 2000,
-	...sub_config
-} = {}) {
-	const conn = this.connect(config);
-	if (!conn) return;
+const global_answered = new Map();
 
-	while (conn.connectionState != 'connected') {
-		await new Promise(res => conn.addEventListener('connectionstatechange', res, {once: true}));
-		if (conn.connectionState == 'closed') return;
-		if (conn.connectionState == 'failed') return;
+export class Listener extends Conn {
+	#adjustment;
+	
+	#proto;
+	#host;
+	#turn_username;
+	#turn_credential;
+
+	config;
+	timeout = 5000;
+
+	#ice_pwd = default_ice_pwd;
+	#cred;
+	get ice_pwd() { return this.#ice_pwd; }
+	set ice_pwd(value) {
+		if (typeof value == 'number') {
+			value = btoa(
+				String.fromCharCode(
+					...crypto.getRandomValues(new Uint8Array(value))
+				)
+			).replace(/=/g, '');
+		}
+		this.#ice_pwd = value;
+		this.#cred = undefined;
 	}
 
-	// TODO: Generate an addr for ourself
+	answered = global_answered;
 
-	const answered = new Map(); // pid => Conn
-
-	return (async function* answering() {
-		for await (const { lufrag: _, rufrag, candidate } of listen(conn.dc, { pwd })) {
-			if (!candidate) continue;
-			const pid = from_string(rufrag);
-			if (!pid) continue;
-			if (answered.has(pid)) continue;
-			if (!filter(pid)) continue;
-
-			const temp = new (this.constructor)(this.href, { id: pid });
-			const answer = temp.connect({
-				...config,
-				...sub_config,
-				ice_pwd: pwd,
-				setup: 'active',
-				candidates: [candidate]
-			});
-
-			answered.set(pid, answer);
-			const timer = setTimeout(() => answer.close(), timeout);
-			answer.addEventListener('connectionstatechange', () => {
-				if (answer.connectionState == 'connected') {
-					clearTimeout(timer);
-				}
-				else if (answer.connectionState == 'closed') {
-					answered.delete(pid);
-				}
-			});
-
-			yield answer;
+	get addr() {
+		const search = new URLSearchParams();
+		if (this.#turn_username != default_turn_username) {
+			search.set('turn_username', encodeURIComponent(this.#turn_username));
 		}
-	}).call(this);
-};
+		if (this.#turn_credential != default_turn_credential) {
+			search.set('turn_credential', encodeURIComponent(this.#turn_credential));
+		}
+		const password = this.ice_pwd == default_ice_pwd ? '' : ':' + encodeURIComponent(
+			this.ice_pwd
+		);
 
-export async function* listen(dc, {
-	pwd = default_ice_pwd
-} = {}) {
-	const cred = await crypto.subtle.importKey('raw', encoder.encode(pwd), {
-		name: 'HMAC',
-		hash: 'SHA-1'
-	}, true, ['sign', 'verify']);
+		return new Addr(`${this.#proto}${this.cert}${password}@${this.#host}${search.size ? '?' : ''}${search}`);
+	}
 
-	while (dc.readyState != 'closed') {
-		let data = await new Promise(res => {
-			dc.addEventListener('message', ({ data }) => res(data), {once: true});
-			dc.addEventListener('close', () => res(), {once: true});
+	constructor(arg, config = null) {
+		const bind_addr = arg instanceof Addr ? arg : new Addr(String(arg));
+		const adjustment = bind_addr.temp_adjustment();
+
+		super(bind_addr.id, {
+			...config,
+			...adjustment,
+			setup: bind_addr.searchParams.get('setup') ?? 'passive',
+			ice_pwd: bind_addr.authority.password,
 		});
-		if (data instanceof Blob) {
-			try { data = await data.arrayBuffer(); } catch { continue; }
-		}
-		else if (!(data instanceof ArrayBuffer)) continue;
-	
-		// Read the data as a TURN Data Indication
-		if (data.byteLength < 20) continue;
-		const ind = new Stun(data);
-		if (ind.class != Class.indication || ind.method != Method.data) continue;
-		const xpeer = ind.xpeer, inner = ind.data;
-		if (!inner) continue;
-	
-		// Read the contents of the indication as an ICE Connection Test
-		if (inner.byteLength < 20) continue;
-		const test = new Stun(inner.buffer, inner.byteOffset, inner.byteLength);
-		if (test.class != Class.request || test.method != Method.binding) continue;
-		const username = test.username, priority = test.priority;
-		if (!username) continue;
-		const [lufrag, rufrag] = username.split(':');
-	
-		if (!await test.verify(cred)) continue;
 
-		const ret = { lufrag, rufrag };
+		this.#adjustment = adjustment;
 
-		if (xpeer) {
-			ret.candidate = {
+		// These are the pieces of the address we care about when answering connections
+		this.#proto = bind_addr.protocol;
+		this.#host = bind_addr.authority.host;
+		this.#turn_username = bind_addr.searchParams.get('turn_username') ?? default_turn_username;
+		this.#turn_credential = bind_addr.searchParams.get('turn_credential') ?? default_turn_credential;
+
+		this.config = config;
+
+		// Asyncronously add ICE canidates
+		(async () => {
+			for (const candidate of bind_addr.candidates()) {
+				await this.addIceCandidate(candidate);
+			}
+		})();
+	}
+
+	async *[Symbol.asyncIterator](raw_tests = false) {
+		while (this.dc.readyState != 'closed') {
+			let data = await new Promise(res => {
+				this.dc.addEventListener('message', ({ data }) => res(data), {once: true});
+				this.dc.addEventListener('close', () => res(), {once: true});
+			});
+			if (data instanceof Blob) {
+				try { data = await data.arrayBuffer(); } catch { continue; }
+			}
+			else if (!(data instanceof ArrayBuffer)) continue;
+
+			// Read the data as a TURN Data Indication
+			if (data.byteLength < 20) continue;
+			const ind = new Stun(data);
+			if (ind.class != Class.indication || ind.method != Method.data) continue;
+			const xpeer = ind.xpeer, inner = ind.data;
+			if (!inner) continue;
+
+			// Read the contents of the indication as an ICE Connection Test
+			if (inner.byteLength < 20) continue;
+			const test = new Stun(inner.buffer, inner.byteOffset, inner.byteLength);
+			if (test.class != Class.request || test.method != Method.binding) continue;
+			const username = test.username, priority = test.priority;
+			if (!username) continue;
+			const [lufrag, rufrag] = username.split(':');
+			const [lid, rid] = [lufrag, rufrag].map(from_string);
+
+			// Verify the HMAC Signature on the request against our ice_pwd
+			if (!this.#cred) {
+				this.#cred = await crypto.subtle.importKey('raw', encoder.encode(this.#ice_pwd), {
+					name: 'HMAC',
+					hash: 'SHA-1'
+				}, true, ['sign', 'verify']);
+			}
+			if (!await test.verify(this.#cred)) continue;
+
+			const candidate = xpeer ? {
 				address: xpeer.ip instanceof Uint8Array ? xpeer.ip.join('.') : Array.from(
 					xpeer.ip,
 					v => v.toString(16)
 				).join(':'),
 				port: xpeer.port,
 				priority,
+				type: 'relay',
 				usernameFragment: rufrag,
-			};
-		}
+			} : false;
 
-		yield ret;
+			// TODO: Remove raw_tests and replace with two different iterator functions.
+			if (raw_tests) { yield { lid, rid, candidate }; continue; }
+
+			if (!candidate) continue;
+			if (BigInt(this.cert) != lid) continue;
+			if (this.answered.has(rid)) {
+				// MAYBE: Possibly add the candidate as an additional candidate? If we don't already have this candidate? Or would that be a bad?
+				continue;
+			}
+
+			// Create the answering connection:
+			const answer = new Conn(rid, {
+				...this.config,
+				...this.#adjustment,
+				ice_pwd: this.ice_pwd,
+				setup: 'active',
+			});
+			this.answered.set(rid, answer);
+
+			// Start a timer that closes the answer if it doesn't connect
+			const timer = setTimeout(() => answer.close(), this.timeout);
+			answer.addEventListener('connectionstatechange', () => {
+				if (answer.connectionState == 'connected') {
+					clearTimeout(timer);
+
+					// Remove the adjustment and restartICE:
+				}
+				else if (answer.connectionState == 'closed') {
+					this.answered.delete(rid);
+				}
+			});
+
+			// Spawn a task to add the candidate + reset the config:
+			// This is essentially the same thing that .connect() does.
+			(async () => {
+				await answer.addIceCandidate(candidate);
+
+				while (answer.dc.readyState != 'open') await new Promise(res => answer.dc.addEventListener('open', res, {once: true}));
+
+				// Remove the adjustment
+				answer.setConfiguration(this.config);
+				answer.restartIce();
+			})();
+
+			yield answer;
+		}
 	}
 }

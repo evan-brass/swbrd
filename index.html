@@ -2,19 +2,66 @@
 <html>
 	<head><meta charset="UTF-8"><title>Switchboard</title></head>
 	<body>
-		<script type="_module" src="switch/wire.js"></script>
+		<main>
+			<video id="selfcam"></video>
+		</main>
 		<script type="module">
 			import { Addr, Cert, Conn } from './src/index.js';
-			import { listen } from './src/listen.js';
+			import { cert } from './src/cert.js';
+			import { Listener } from './src/listen.js';
 
 			// -- Step 1: Get your certificates ready --
 			//  - Option 1: Generate fresh certificates
-			// const certa = await Cert.generate();
-			// const certb = await Cert.generate();
+			const certa = await Cert.generate();
+			const certb = await Cert.generate();
 
 			//  - Option 2: Reuse/generate your certificates from IndexedDB
-			const certa = await Cert.load('testa');
-			const certb = await Cert.load('testb');
+			// const certa = await Cert.load('testa');
+			// const certb = await Cert.load('testb');
+
+			// Test a cert: false connection to my server
+			// const conn = new Addr('turn:RxLSBa3c1ZUuY2FHqKoPDuee91GDA3vDZk36rPk6W73@stun.evan-brass.net').connect({
+			// 	cert: false, dont_mung: true
+			// });
+			// conn.addEventListener('connectionstatechange', () => console.log('cert:false connected', conn.cert));
+
+
+			// Create outgoing connections to any addr search params.
+			// for (const val of new URL(location).searchParams.getAll('addr')) {
+			// 	const conn = new Addr(decodeURIComponent(val)).connect({cert: false});
+			// 	console.log('outgoing', conn);
+			// }
+
+			const a = new Listener('turn:RxLSBa3c1ZUuY2FHqKoPDuee91GDA3vDZk36rPk6W73@stun.evan-brass.net', {cert: certa});
+			// Generate a random password using 5 bytes of entropy:
+			a.ice_pwd = 16;
+
+			console.log("a's address is", a.addr);
+
+			const b = a.addr.connect({cert: certb});
+
+			(async () => {
+				for await (const conn of a) {
+					console.log('a incoming', conn);
+				}
+			})();
+
+			// Make a connection to my server:
+			// const swbrd_addr = new Addr('turn:RxLSBa3c1ZUuY2FHqKoPDuee91GDA3vDZk36rPk6W73@stun.evan-brass.net');
+			// const swbrd_addr = new Addr('turn:stun.evan-brass.net');
+			// await swbrd_addr.resolve_id(); // Cloudflare DNS over HTTPS server
+
+			// const swbrd = swbrd_addr.connect();
+
+			// const ice_pwd = btoa(String.fromCharCode(...crypto.getRandomValues(new Uint8Array(16)))).replace(/=/g, '');
+			// console.log(`turn:${cert}:${encodeURIComponent(ice_pwd)}@stun.evan-brass.net`);
+
+			// console.log(`turn:${cert}@stun.evan-brass.net`);
+
+			// for await (const test of listen(swbrd.dc)) {
+			// 	console.log('connection test', test);
+			// }
+
 
 
 			// -- Step 2: Create connections using your certificates
@@ -43,16 +90,6 @@
 			// const a = addr.connect({ cert: certa });
 			// const b = new Addr(`turn://${certa}@localhost:3478`).connect({ cert: certb });
 
-			//  - Option 5: Listen on an address and answer incoming connections
-			const bind_server = new Addr('turn:ucCm6JK3s22XuCRiTZVFpWajUq0tIpB7lDn1Sv8dRv3@127.0.0.1');
-			const a_listener = await bind_server.bind({cert: certa});
-			if (!a_listener) console.error("Failed to bind through the server.");
-			const b = new Addr(`turn:${certa}@127.0.0.1`).connect({cert: certb}); const a = new EventTarget();
-			(async () => {
-				for await (const conn of a_listener) {
-					console.log('a incoming', conn);
-				}
-			})();
 
 			// -- Step 3: Log the connection states
 			a.addEventListener('connectionstatechange', () => console.log('a', a.connectionState));
