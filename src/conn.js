@@ -1,5 +1,7 @@
 import { cert as default_cert } from './cert.js';
 import { default_ice_address, default_ice_port, default_ice_pwd } from "./const.js";
+import { algorithm } from "./id.js";
+import { from_bytes } from "./id.js";
 import { to_fingerprint, to_string } from "./id.js";
 
 export const defaults = {
@@ -13,6 +15,14 @@ export class Conn extends RTCPeerConnection {
 	#cert;
 	get cert() { return this.#cert; }
 
+	#pid;
+	get pid() { return this.#pid; }
+
+	get polite() {
+		if (!this.#cert) throw new Error("Connection failed: cert was overridden, but other parameters required politeness prior to generating the local answer. Perhaps you needed to also override the setup.");
+		return (BigInt(this.cert) < this.pid);
+	}
+
 	#default_address = new Promise(res => this.addEventListener('icecandidate', ({ candidate }) => {
 		if (candidate === null) return res(default_ice_address);
 		const {1: address} = /([^ ]+) [^ ]+ typ relay/i.exec(candidate.candidate) ?? {};
@@ -21,33 +31,30 @@ export class Conn extends RTCPeerConnection {
 		this.#default_address = address;
 		return address;
 	});
-	// TODO: Allow cert to be optional - In some cases it's possible (and desirable) to not use pregenerated certificates. This means we won't know our local pid until after createOffer which means we can't determine politeness until then which also means we can't use politeness to determine any parameters (currently just the setup parameter if it hasn't already been set).  In this scenario you are probably talking to an ICE Lite + DTLS server with optional client cert verification, which means that you (if it behaves well) don't need to mung your ICE credentials.
-	constructor(peerid, config = null) {
-		peerid = BigInt(peerid);
+	
+	constructor(peerid, {
+		setup, ice_lite, ice_pwd,
+		dont_mung = false,
+		...config
+	} = {}) {
 		const cert = config?.cert ?? default_cert;
 
 		super({
 			...defaults,
 			...config,
-			certificates: [cert],
+			certificates: cert ? [cert] : [],
 			bundlePolicy: 'max-bundle',
 			rtcpMuxPolicy: 'require',
 			peerIdentity: null,
 		});
+		this.#pid = BigInt(peerid);
 		this.#cert = cert;
 
 		this.#dc.binaryType = 'arraybuffer';
 
-		const polite = BigInt(this.#cert) < peerid;
-		const {
-			setup,
-			ice_lite,
-			ice_pwd,
-		} = config ?? {};
-
 		this.#signaling_task({
-			polite, peerid,
 			setup, ice_lite, ice_pwd,
+			dont_mung
 		}).catch(() => this.close());
 	}
 
@@ -78,11 +85,7 @@ export class Conn extends RTCPeerConnection {
 		return await super.addIceCandidate(candidate);
 	}
 
-	async #signaling_task(/* Session: */ { peerid, polite, setup, ice_lite, ice_pwd }) {
-		ice_pwd ||= default_ice_pwd;
-		// Read the following line as: "If I am polite, then the remote peer will be active therefore I must be passive": unless overridden, the polite peer is the DTLS server.
-		setup ||= polite ? 'active' : 'passive';
-
+	async #signaling_task(/* Session: */ { setup, ice_lite, ice_pwd, dont_mung }) {
 		// Prepare for renegotiation
 		let negotiation_needed = false; this.addEventListener('negotiationneeded', () => negotiation_needed = true);
 		let remote_desc = false;
@@ -107,22 +110,34 @@ export class Conn extends RTCPeerConnection {
 			's=-',
 			't=0 0',
 			'a=group:BUNDLE dc',
-			`a=fingerprint:${to_fingerprint(peerid)}`,
-			`a=ice-ufrag:${to_string(peerid)}`,
-			`a=ice-pwd:${ice_pwd}`,
+			`a=fingerprint:${to_fingerprint(this.pid)}`,
+			`a=ice-ufrag:${to_string(this.pid)}`,
+			`a=ice-pwd:${ice_pwd || default_ice_pwd}`,
 			'a=ice-options:trickle',
 			...(ice_lite != undefined ? ['a=ice-lite'] : []),
 			'm=application 42 UDP/DTLS/SCTP webrtc-datachannel',
 			'c=IN IP4 0.0.0.0',
 			'a=mid:dc',
-			`a=setup:${setup}`,
+			// Read the following line as: "If I am polite, then the remote peer will be active therefore I must be passive": unless overridden, the polite peer is the DTLS server.
+			`a=setup:${setup || (this.polite ? 'active' : 'passive')}`,
 			'a=sctp-port:5000',
 			''
 		].join('\n') });
 		const answer = await super.createAnswer();
-		answer.sdp = answer.sdp
-			.replace(/^a=ice-ufrag:.+/im, `a=ice-ufrag:${to_string(this.#cert)}`)
-			.replace(/^a=ice-pwd:.+/im, `a=ice-pwd:${ice_pwd}`);
+
+		// If no cert was provided on creation then pull our fingerprint and turn it into an ID
+		for (const {1: alg, 2: fingerprint} of answer.sdp.matchAll(/^a=fingerprint:([^ ]+) ([0-9a-f]{2}(:[0-9a-f]{2})+)/img)) {
+			if (this.#cert) break;
+			if (alg.toLowerCase() != algorithm) continue;
+			this.#cert = from_bytes(fingerprint.split(':'));
+		}
+
+		// Mung our answer
+		if (!dont_mung) {
+			answer.sdp = answer.sdp
+				.replace(/^a=ice-ufrag:.+/im, `a=ice-ufrag:${to_string(this.#cert)}`)
+				.replace(/^a=ice-pwd:.+/im, `a=ice-pwd:${ice_pwd || default_ice_pwd}`);
+		}
 		await super.setLocalDescription(answer);
 
 		// Switchover into handling renegotiation
@@ -139,7 +154,7 @@ export class Conn extends RTCPeerConnection {
 			else if (remote_desc) {
 				const desc = remote_desc; remote_desc = false;
 				// Ignore incoming offers if we have a local offer and are also impolite
-				if (desc?.type == 'offer' && this.signalingState == 'have-local-offer' && !polite) continue;
+				if (desc?.type == 'offer' && this.signalingState == 'have-local-offer' && !this.polite) continue;
 
 				await super.setRemoteDescription(desc);
 
@@ -170,7 +185,7 @@ export class Conn extends RTCPeerConnection {
 			bundlePolicy: 'max-bundle',
 			rtcpMuxPolicy: 'require',
 			peerIdentity: null,
-			certificates: [this.#cert],
+			certificates: this.#cert instanceof RTCCertificate ? [this.#cert] : [],
 		});
 	}
 
