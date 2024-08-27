@@ -48,8 +48,8 @@ export class Addr extends URL {
 			iceTransportPolicy: 'relay',
 			iceServers: [{
 				urls: `${proto}:${host}${transport ? '?transport=' + transport : ''}`,
-				username: this.searchParams.get('turn_username') || default_turn_username,
-				credential: this.searchParams.get('turn_credential') || default_turn_credential
+				username: decodeURIComponent(this.searchParams.get('turn_username') || default_turn_username),
+				credential: decodeURIComponent(this.searchParams.get('turn_credential') || default_turn_credential)
 			}]
 		};
 	}
@@ -81,7 +81,7 @@ export class Addr extends URL {
 		const adjustment = this.temp_adjustment();
 
 		const {password: ice_pwd} = this.authority;
-		const setup = this.searchParams.get('setup') ?? 'passive';
+		const setup = decodeURIComponent(this.searchParams.get('setup') ?? 'passive');
 
 		// Create the connection
 		const ret = new Conn(this.id, {
