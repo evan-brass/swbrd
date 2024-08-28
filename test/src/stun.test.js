@@ -98,7 +98,7 @@ Deno.test(async function vector1_encode() {
 	assertEquals(test.length, 40);
 	const username = 'evtj:h6vY';
 	const username_attr = test.append(TextAttr, {
-		setByteLength: TextAttr.minByteLength + username.length,
+		setByteLength: TextAttr.minByteLength + username.length, // Using .length only works if each character of the string is 1 byte
 		type: 'username',
 		value: username
 	});
@@ -120,3 +120,65 @@ Deno.test(async function vector1_encode() {
 
 	assertEquals(new Uint8Array(buffer), vector1);
 })
+
+const vector2 = new Uint8Array([
+	0x01, 0x01, 0x00, 0x3c,
+	0x21, 0x12, 0xa4, 0x42,
+	0xb7, 0xe7, 0xa7, 0x01,
+	0xbc, 0x34, 0xd6, 0x86,
+	0xfa, 0x87, 0xdf, 0xae,
+	0x80, 0x22, 0x00, 0x0b,
+	0x74, 0x65, 0x73, 0x74,
+	0x20, 0x76, 0x65, 0x63,
+	0x74, 0x6f, 0x72, 0x20,
+	0x00, 0x20, 0x00, 0x08,
+	0x00, 0x01, 0xa1, 0x47,
+	0xe1, 0x12, 0xa6, 0x43,
+	0x00, 0x08, 0x00, 0x14,
+	0x2b, 0x91, 0xf5, 0x99,
+	0xfd, 0x9e, 0x90, 0xc3,
+	0x8c, 0x74, 0x89, 0xf9,
+	0x2a, 0xf9, 0xba, 0x53,
+	0xf0, 0x6b, 0xe7, 0xd7,
+	0x80, 0x28, 0x00, 0x04,
+	0xc0, 0x7d, 0x4c, 0x96,
+]);
+const vector2_key = vector1_key; // Uses the same key as vector1
+
+Deno.test(async function vector2_decode() {
+	const test = new Stun(vector2);
+	assertEquals(test.class, 'success');
+	assertEquals(test.method, 'binding');
+	assertEquals(test.cookie, MAGIC_COOKIE);
+	assertEquals(test.txid, new Uint8Array([
+		0xb7, 0xe7, 0xa7, 0x01,
+		0xbc, 0x34, 0xd6, 0x86,
+		0xfa, 0x87, 0xdf, 0xae
+	]));
+
+	const [
+		software,
+		mapped,
+		integrity,
+		fingerprint,
+		end
+	] = test.attrs;
+	assertEquals(software?.type, 'software');
+	assertEquals(software.value, 'test vector');
+	assertEquals(mapped?.type, 'mapped');
+	// TODO: Mapped Address parsing
+	assertEquals(integrity?.type, 'integrity');
+	assertEquals(await integrity.verify(vector2_key), true);
+	assertEquals(fingerprint?.type, 'fingerprint');
+	assertEquals(fingerprint.expected(), fingerprint.actual);
+	assertEquals(end, undefined);
+
+	// assertEquals(test.class, Class.success, 'STUN class');
+	// assertEquals(test.method, Method.binding, 'STUN method');
+	// assertEquals(test.software, 'test vector', 'ATTR software');
+	// assertEquals(test.xmapped.ip, Uint8Array.from([192, 0, 2, 1]), 'ATTR xmapped hostname');
+	// assertEquals(test.xmapped.port, 32853, 'ATTR xmapped port');
+	// const key = await crypto.subtle.importKey('raw', encoder.encode('VOkJxbRl1RmTxUk/WvJxBt'), { name: 'HMAC', hash: 'SHA-1' }, true, ['verify']);
+	// assertEquals(await test.verify(key), true, 'ATTR integrity');
+	// assertEquals(test.fingerprint, true, 'ATTR fingerprint');
+});
