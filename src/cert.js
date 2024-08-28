@@ -5,8 +5,8 @@ const year_in_ms = 365 * day_in_ms;
 
 export class Cert extends RTCCertificate {
 	id;
-	static async generate(params = { name: 'ECDSA', namedCurve: 'P-256', expires: Date.now() + year_in_ms }) {
-		const ret = await RTCPeerConnection.generateCertificate(params);
+	static async generate(keygenAlgorithm = { name: 'ECDSA', namedCurve: 'P-256', expires: Date.now() + year_in_ms }) {
+		const ret = await RTCPeerConnection.generateCertificate(keygenAlgorithm);
 		Object.setPrototypeOf(ret, this.prototype);
 
 		let fingerprint;
@@ -42,7 +42,7 @@ export class Cert extends RTCCertificate {
 
 		return ret;
 	}
-	static async load(key = import.meta.url) {
+	static async load(key = import.meta.url, keygenAlgorithm) {
 		function wrap(req) {
 			return new Promise((res, rej) => {
 				req.onsuccess = () => res(req.result);
@@ -57,7 +57,7 @@ export class Cert extends RTCCertificate {
 		const db = await wrap(openreq);
 
 		// Generate a replacement in case the existing certificate has expired / doesn't match the algorithm / etc.
-		const candidate = await this.generate();
+		const candidate = await this.generate(keygenAlgorithm);
 
 		const trans = db.transaction('certs', 'readwrite');
 		const certs = trans.objectStore('certs');
