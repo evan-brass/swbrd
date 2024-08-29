@@ -1,6 +1,7 @@
 import { Wire } from './wire.js';
 import { decoder, encoder } from "./util.js";
 import { crc32 } from "./crc32.js";
+import { Ip4, Ip6 } from "./ipaddr.js";
 
 export const MAGIC_COOKIE = 0x2112A442;
 
@@ -143,6 +144,59 @@ export class Sha1Integrity extends Attr {
 }
 Sha1Integrity.field('actual', '[20]');
 
+// Addr doesn't support the old, non-xored version, and it doesn't support non-magic cookied packets.
+export class Addr extends Attr {
+	get port() {
+		return this.xport ^ this.parent.getUint16(4);
+	}
+	set port(val) {
+		this.setUint8(Attr.minByteLength, 0); // Zero the padding byte when you set the port (not ideal, but whatevs)
+		this.xport = val ^ this.parent.getUint16(4);
+	}
+}
+Addr.minByteLength += 1; // Padding
+Addr.field('family', 'u8');
+Addr.field('xport', 'u16');
+
+export class Addr4 extends Addr {
+	get ip() {
+		return new Ip4(...Array.from({length: 4}, (_, i) => this.getUint8(Addr.minByteLength + i) ^ this.parent.getUint8(4 + i)));
+	}
+	set ip(val) {
+		if (val.length != 4) throw new Error("Need exactly 4 bytes");
+		this.family = 0x01; // Set the family when you set the ip
+		val.forEach((v, i) => {
+			this.setUint8(Addr.minByteLength + i, this.parent.getUint8(4 + i) ^ v);
+		});
+	}
+}
+Addr4.minByteLength += 4;
+
+export class Addr6 extends Addr {
+	get ip() {
+		return new Ip6(...Array.from({length: 8}, (_, i) => this.getUint16(Addr.minByteLength + 2*i) ^ this.parent.getUint16(4 + 2*i)));
+	}
+	set ip(val) {
+		if (val.length != 8) throw new Error("Need exactly 8 u16");
+		this.family = 0x02; // Set the family when you set the ip
+		val.forEach((v, i) => {
+			this.setUint16(Addr.minByteLength + 2*i, this.parent.getUint16(4 + 2*i) ^ v);
+		});
+	}
+}
+Addr6.minByteLength += 16;
+
+Addr.prototype.specialize = function() {
+	switch (this.family) {
+		case 0x01:
+			return this.byteLength >= Addr4.minByteLength ? new Addr4(this) : this;
+		case 0x02:
+			return this.byteLength >= Addr6.minByteLength ? new Addr6(this) : this;
+		default:
+			return this;
+	}
+};
+
 Attr.prototype.specialize = function() {
 	switch (this.type) {
 		case 'username':
@@ -161,6 +215,11 @@ Attr.prototype.specialize = function() {
 			return this.byteLength >= FingerprintAttr.minByteLength ? new FingerprintAttr(this) : this;
 		case 'integrity':
 			return this.byteLength >= Sha1Integrity.minByteLength ? new Sha1Integrity(this) : this;
+		case 'mapped':
+		case 'peer':
+		case 'relayed':
+		case 'alternate server':
+			return this.byteLength >= Addr.minByteLength ? new Addr(this).specialize() : this
 		default:
 			return this;
 	}

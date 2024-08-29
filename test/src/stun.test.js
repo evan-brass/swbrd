@@ -1,6 +1,7 @@
 import { assertEquals } from '@std/assert';
-import { Stun, MAGIC_COOKIE, TextAttr, U32Attr, U64Attr, Sha1Integrity, FingerprintAttr } from "../../src/stun.js";
+import { Stun, MAGIC_COOKIE, TextAttr, U32Attr, U64Attr, Sha1Integrity, FingerprintAttr, Addr4 } from "../../src/stun.js";
 import { encoder } from '../../src/util.js';
+import { Ip4 } from "../../src/ipaddr.js";
 
 // RFC 5769
 const vector1 = new Uint8Array([
@@ -66,7 +67,6 @@ Deno.test(async function vector1_decode() {
 
 Deno.test(async function vector1_encode() {
 	const buffer = new ArrayBuffer(0, {maxByteLength: vector1.byteLength});
-	crypto.getRandomValues(new Uint8Array(buffer));
 
 	const test = new Stun(buffer, {
 		setByteLength: Stun.minByteLength,
@@ -166,19 +166,63 @@ Deno.test(async function vector2_decode() {
 	assertEquals(software?.type, 'software');
 	assertEquals(software.value, 'test vector');
 	assertEquals(mapped?.type, 'mapped');
-	// TODO: Mapped Address parsing
+	assertEquals(mapped.family, 0x01);
+	assertEquals(mapped.port, 32853);
+	assertEquals(mapped.ip, new Ip4(192, 0, 2, 1));
 	assertEquals(integrity?.type, 'integrity');
 	assertEquals(await integrity.verify(vector2_key), true);
 	assertEquals(fingerprint?.type, 'fingerprint');
 	assertEquals(fingerprint.expected(), fingerprint.actual);
 	assertEquals(end, undefined);
+});
 
-	// assertEquals(test.class, Class.success, 'STUN class');
-	// assertEquals(test.method, Method.binding, 'STUN method');
-	// assertEquals(test.software, 'test vector', 'ATTR software');
-	// assertEquals(test.xmapped.ip, Uint8Array.from([192, 0, 2, 1]), 'ATTR xmapped hostname');
-	// assertEquals(test.xmapped.port, 32853, 'ATTR xmapped port');
-	// const key = await crypto.subtle.importKey('raw', encoder.encode('VOkJxbRl1RmTxUk/WvJxBt'), { name: 'HMAC', hash: 'SHA-1' }, true, ['verify']);
-	// assertEquals(await test.verify(key), true, 'ATTR integrity');
-	// assertEquals(test.fingerprint, true, 'ATTR fingerprint');
+Deno.test(async function vector2_encode() {
+	// vector1_encode tested growing the buffer, so in vector2_encode we test using a fullsized buffer filled with random data:
+	const buffer = new ArrayBuffer(vector2.byteLength);
+	crypto.getRandomValues(new Uint8Array(buffer));
+
+	const test = new Stun(buffer, {
+		setByteLength: Stun.minByteLength,
+		class: 'success',
+		method: 'binding',
+		cookie: MAGIC_COOKIE,
+	});
+	test.txid.set([
+		0xb7, 0xe7, 0xa7, 0x01,
+		0xbc, 0x34, 0xd6, 0x86,
+		0xfa, 0x87, 0xdf, 0xae
+	]);
+	assertEquals(test.length, 0);
+
+	const software = 'test vector';
+	const software_attr = test.append(TextAttr, {
+		setByteLength: TextAttr.minByteLength + software.length,
+		type: 'software',
+		value: software
+	});
+	assertEquals(test.length, 16);
+
+	// Replace the padding with spaces
+	new Uint8Array(buffer, software_attr.byteOffset + 4 + software.length, 1).fill(0x20);
+
+	test.append(Addr4, {
+		type: 'mapped',
+		ip: [192, 0, 2, 1],
+		port: 32853
+	});
+	assertEquals(test.length, 28);
+
+	const integrity = test.append(Sha1Integrity, {
+		type: 'integrity'
+	});
+	assertEquals(test.length, 52);
+	await integrity.sign(vector2_key);
+
+	const fingerprint = test.append(FingerprintAttr, {
+		type: 'fingerprint'
+	});
+	assertEquals(test.length, 60);
+	fingerprint.actual = fingerprint.expected();
+
+	assertEquals(new Uint8Array(buffer), vector2);
 });
