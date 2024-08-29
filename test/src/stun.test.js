@@ -1,7 +1,7 @@
 import { assertEquals } from '@std/assert';
-import { Stun, MAGIC_COOKIE, TextAttr, U32Attr, U64Attr, Sha1Integrity, FingerprintAttr, Addr4 } from "../../src/stun.js";
+import { Stun, MAGIC_COOKIE, TextAttr, U32Attr, U64Attr, Sha1Integrity, FingerprintAttr, Addr4, Addr6 } from "../../src/stun.js";
 import { encoder } from '../../src/util.js';
-import { Ip4 } from "../../src/ipaddr.js";
+import { Ip4, Ip6 } from "../../src/ipaddr.js";
 
 // RFC 5769
 const vector1 = new Uint8Array([
@@ -225,4 +225,111 @@ Deno.test(async function vector2_encode() {
 	fingerprint.actual = fingerprint.expected();
 
 	assertEquals(new Uint8Array(buffer), vector2);
+});
+
+const vector3 = new Uint8Array([
+	0x01, 0x01, 0x00, 0x48, 
+	0x21, 0x12, 0xa4, 0x42,
+	0xb7, 0xe7, 0xa7, 0x01,
+	0xbc, 0x34, 0xd6, 0x86,
+	0xfa, 0x87, 0xdf, 0xae,
+	0x80, 0x22, 0x00, 0x0b,
+	0x74, 0x65, 0x73, 0x74,
+	0x20, 0x76, 0x65, 0x63,
+	0x74, 0x6f, 0x72, 0x20,
+	0x00, 0x20, 0x00, 0x14,
+	0x00, 0x02, 0xa1, 0x47,
+	0x01, 0x13, 0xa9, 0xfa,
+	0xa5, 0xd3, 0xf1, 0x79,
+	0xbc, 0x25, 0xf4, 0xb5,
+	0xbe, 0xd2, 0xb9, 0xd9,
+	0x00, 0x08, 0x00, 0x14,
+	0xa3, 0x82, 0x95, 0x4e,
+	0x4b, 0xe6, 0x7b, 0xf1,
+	0x17, 0x84, 0xc9, 0x7c,
+	0x82, 0x92, 0xc2, 0x75,
+	0xbf, 0xe3, 0xed, 0x41,
+	0x80, 0x28, 0x00, 0x04,
+	0xc8, 0xfb, 0x0b, 0x4c,
+]);
+const vector3_key = vector2_key;
+
+Deno.test(async function vector3_decode() {
+	const test = new Stun(vector3);
+	assertEquals(test.class, 'success');
+	assertEquals(test.method, 'binding');
+	assertEquals(test.cookie, MAGIC_COOKIE);
+	assertEquals(test.txid, new Uint8Array([
+		0xb7, 0xe7, 0xa7, 0x01,
+		0xbc, 0x34, 0xd6, 0x86,
+		0xfa, 0x87, 0xdf, 0xae
+	]));
+
+	const [
+		software,
+		mapped,
+		integrity,
+		fingerprint,
+		end
+	] = test.attrs;
+	assertEquals(software?.type, 'software');
+	assertEquals(software.value, 'test vector');
+	assertEquals(mapped?.type, 'mapped');
+	assertEquals(mapped.family, 0x02);
+	assertEquals(mapped.port, 32853);
+	assertEquals(mapped.ip, new Ip6(0x2001, 0xdb8, 0x1234, 0x5678, 0x11, 0x2233, 0x4455, 0x6677));
+	assertEquals(integrity?.type, 'integrity');
+	assertEquals(await integrity.verify(vector3_key), true);
+	assertEquals(fingerprint?.type, 'fingerprint');
+	assertEquals(fingerprint.expected(), fingerprint.actual);
+	assertEquals(end, undefined);
+});
+
+Deno.test(async function vector3_encode() {
+	const buffer = new ArrayBuffer(vector3.byteLength);
+
+	const test = new Stun(buffer, {
+		setByteLength: Stun.minByteLength,
+		class: 'success',
+		method: 'binding',
+		cookie: MAGIC_COOKIE,
+	});
+	test.txid.set([
+		0xb7, 0xe7, 0xa7, 0x01,
+		0xbc, 0x34, 0xd6, 0x86,
+		0xfa, 0x87, 0xdf, 0xae
+	]);
+	assertEquals(test.length, 0);
+
+	const software = 'test vector';
+	const software_attr = test.append(TextAttr, {
+		setByteLength: TextAttr.minByteLength + software.length,
+		type: 'software',
+		value: software
+	});
+	assertEquals(test.length, 16);
+
+	// Replace the padding with spaces
+	new Uint8Array(buffer, software_attr.byteOffset + 4 + software.length, 1).fill(0x20);
+
+	test.append(Addr6, {
+		type: 'mapped',
+		ip: [0x2001, 0xdb8, 0x1234, 0x5678, 0x11, 0x2233, 0x4455, 0x6677],
+		port: 32853
+	});
+	assertEquals(test.length, 40);
+
+	const integrity = test.append(Sha1Integrity, {
+		type: 'integrity'
+	});
+	assertEquals(test.length, 64);
+	await integrity.sign(vector2_key);
+
+	const fingerprint = test.append(FingerprintAttr, {
+		type: 'fingerprint'
+	});
+	assertEquals(test.length, 72);
+	fingerprint.actual = fingerprint.expected();
+
+	assertEquals(new Uint8Array(buffer), vector3);
 });

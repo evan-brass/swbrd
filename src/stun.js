@@ -37,13 +37,14 @@ const attrs = new Map([
 	[0x0016, 'relayed'],
 	[0x0017, 'requested family'],
 	// [0x0018, 'even port'],
-	// [0x0019, 'requested transport'],
+	[0x0019, 'requested transport'],
 	// [0x001A, 'dont fragment'],
 	[0x0020, 'mapped'],
 	[0x0022, 'reservation'],
 	[0x0024, 'priority'],
 	[0x0025, 'use candidate'],
 	[0x8000, 'additional requested family'],
+	[0x8001, 'address error'],
 	[0x8003, 'alternate domain'],
 	[0x8022, 'software'],
 	[0x8023, 'alternate server'],
@@ -98,6 +99,7 @@ export class Attr extends Wire {
 	set type(value) {
 		this.setUint16(0, typeof value == 'string' ? attrs.get(value) : value);
 	}
+	get comprehension_required() { return this.getUint16(0) < 0x8000; }
 	get prefix() {
 		// TODO: This copy sucks.
 		const copy = new Uint8Array(this.buffer, this.parent.byteOffset, this.byteOffset - this.parent.byteOffset).slice();
