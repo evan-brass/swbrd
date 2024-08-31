@@ -23,6 +23,7 @@ export class Wire extends DataView {
 		}
 	}
 
+	get raw_byteLength() { return super.byteLength; }
 	get byteLength() {
 		const last_child = this.children[this.children.length - 1];
 		return (last_child?.byteOffset ?? super.byteOffset) + (last_child?.byteLength ?? this.constructor.minByteLength) - super.byteOffset;
@@ -130,6 +131,7 @@ export class Wire extends DataView {
 				}
 			});
 			Object.freeze(this.prototype); // Further fields cannot be added after a [] field
+			return;
 		}
 
 		const arr = /^\[([1-9][0-9]*)\]$/.exec(typ);

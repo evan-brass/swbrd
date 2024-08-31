@@ -2,7 +2,7 @@ const mapped_prefix = [0, 0, 0, 0, 0, 0xffff];
 
 export class Ip4 extends Uint8Array {
 	constructor(...vals) { super(4); this.set(vals); }
-	[Symbol.toString]() { return this.join('.'); }
+	[Symbol.toPrimitive]() { return this.join('.'); }
 	mapped() { return new Ip6(
 		...mapped_prefix,
 		this[0] << 8 | this[1],
@@ -13,7 +13,7 @@ export class Ip4 extends Uint8Array {
 
 export class Ip6 extends Uint16Array {
 	constructor(...vals) { super(8); this.set(vals); }
-	[Symbol.toString]() { return Array.from(this, n => n.toString(16)).join(':'); }
+	[Symbol.toPrimitive]() { return Array.from(this, n => n.toString(16)).join(':'); }
 	mapped() { return this; }
 	canonical() {
 		if (mapped_prefix.every((v, i) => this[i] == v)) {

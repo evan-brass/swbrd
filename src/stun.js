@@ -1,5 +1,5 @@
 import { Wire } from './wire.js';
-import { decoder, encoder } from "./util.js";
+import { decoder_lossy, encoder } from "./util.js";
 import { crc32 } from "./crc32.js";
 import { Ip4, Ip6 } from "./ipaddr.js";
 
@@ -64,8 +64,8 @@ export class Stun extends Wire {
 		return classes.get(this.type & 0x0110);
 	}
 	set class(value) {
-		if (typeof value != 'string' || !classes.has(value)) throw new Error("Unknown class");
-		this.type = (this.type & !0x0110) | classes.get(value);
+		if (typeof value == 'string') value = classes.get(value);
+		this.type = (this.type & ~0x0110) | value;
 	}
 	get method() {
 		return methods.get(this.type & ~0x0110);
@@ -107,6 +107,9 @@ export class Attr extends Wire {
 		new DataView(copy.buffer, copy.byteOffset).setUint16(2, length_at);
 		return copy;
 	}
+	get value() {
+		return new Uint8Array(this.buffer, this.byteOffset + Attr.minByteLength, this.length);
+	}
 }
 Stun.field('...attrs', Attr);
 Attr.minByteLength += 2;
@@ -114,10 +117,10 @@ Attr.field('length', 'u16');
 
 export class TextAttr extends Attr {
 	get value() {
-		return decoder.decode(new Uint8Array(this.buffer, this.byteOffset + 4, this.length));
+		return decoder_lossy.decode(super.value);
 	}
 	set value(value) {
-		encoder.encodeInto(value, new Uint8Array(this.buffer, this.byteOffset + 4, this.length));
+		encoder.encodeInto(value, super.value);
 	}
 }
 
