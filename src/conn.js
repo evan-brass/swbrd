@@ -1,5 +1,5 @@
 import { cert as default_cert } from './cert.js';
-import { default_ice_address, default_ice_port, default_ice_pwd } from "./const.js";
+import { default_ice_address, default_ice_pwd } from "./const.js";
 import { algorithm } from "./id.js";
 import { from_bytes } from "./id.js";
 import { to_fingerprint, to_string } from "./id.js";
@@ -22,15 +22,6 @@ export class Conn extends RTCPeerConnection {
 		if (!this.#cert) throw new Error("Connection failed: cert was overridden, but other parameters required politeness prior to generating the local answer. Perhaps you needed to also override the setup.");
 		return (BigInt(this.cert) < this.pid);
 	}
-
-	#default_address = new Promise(res => this.addEventListener('icecandidate', ({ candidate }) => {
-		if (candidate === null) return res(default_ice_address);
-		const {1: address} = /([^ ]+) [^ ]+ typ relay/i.exec(candidate.candidate) ?? {};
-		if (address) return res(address);
-	})).then(address => {
-		this.#default_address = address;
-		return address;
-	});
 	
 	constructor(peerid, {
 		setup, ice_lite, ice_pwd,
@@ -74,8 +65,8 @@ export class Conn extends RTCPeerConnection {
 			candidate.component || '1',
 			candidate.transport || 'udp',
 			candidate.priority || '42',
-			candidate.address || await this.#default_address,
-			candidate.port || default_ice_port,
+			candidate.address || default_ice_address,
+			candidate.port || crypto.getRandomValues(new Uint16Array(1))[0],
 			'typ', candidate.type || 'relay',
 			// WEIRD: For some reason, Firefox won't pair the candidate unless it has a related address and port (which are supposed to be optional?)
 			'raddr', '0.0.0.0', 'rport', '0',
