@@ -73,12 +73,12 @@ Deno.test(async function vector1_encode() {
 		class: 'request',
 		method: 'binding',
 		cookie: MAGIC_COOKIE,
+		txid: [
+			0xb7, 0xe7, 0xa7, 0x01,
+			0xbc, 0x34, 0xd6, 0x86,
+			0xfa, 0x87, 0xdf, 0xae
+		]
 	});
-	test.txid.set([
-		0xb7, 0xe7, 0xa7, 0x01,
-		0xbc, 0x34, 0xd6, 0x86,
-		0xfa, 0x87, 0xdf, 0xae
-	]);
 	const software = 'STUN test client';
 	test.append(TextAttr, {
 		setByteLength: TextAttr.minByteLength + software.length,
@@ -182,16 +182,16 @@ Deno.test(async function vector2_encode() {
 	crypto.getRandomValues(new Uint8Array(buffer));
 
 	const test = new Stun(buffer, {
-		setByteLength: Stun.minByteLength,
+		length: 0,
 		class: 'success',
 		method: 'binding',
 		cookie: MAGIC_COOKIE,
+		txid: [
+			0xb7, 0xe7, 0xa7, 0x01,
+			0xbc, 0x34, 0xd6, 0x86,
+			0xfa, 0x87, 0xdf, 0xae
+		]
 	});
-	test.txid.set([
-		0xb7, 0xe7, 0xa7, 0x01,
-		0xbc, 0x34, 0xd6, 0x86,
-		0xfa, 0x87, 0xdf, 0xae
-	]);
 	assertEquals(test.length, 0);
 
 	const software = 'test vector';
@@ -289,16 +289,15 @@ Deno.test(async function vector3_encode() {
 	const buffer = new ArrayBuffer(vector3.byteLength);
 
 	const test = new Stun(buffer, {
-		setByteLength: Stun.minByteLength,
 		class: 'success',
 		method: 'binding',
 		cookie: MAGIC_COOKIE,
+		txid: [
+			0xb7, 0xe7, 0xa7, 0x01,
+			0xbc, 0x34, 0xd6, 0x86,
+			0xfa, 0x87, 0xdf, 0xae
+		]
 	});
-	test.txid.set([
-		0xb7, 0xe7, 0xa7, 0x01,
-		0xbc, 0x34, 0xd6, 0x86,
-		0xfa, 0x87, 0xdf, 0xae
-	]);
 	assertEquals(test.length, 0);
 
 	const software = 'test vector';

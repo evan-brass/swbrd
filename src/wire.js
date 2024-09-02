@@ -141,6 +141,9 @@ export class Wire extends DataView {
 			get = function() {
 				return new Uint8Array(this.buffer, this.byteOffset + offset, byteLength);
 			};
+			set = function(value) {
+				get.call(this).set(value);
+			};
 		}
 		else if (num) {
 			const { 1: sign, 2: bits, 3: le_s } = num;
