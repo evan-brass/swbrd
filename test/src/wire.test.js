@@ -29,9 +29,9 @@ Deno.test(function maxByteLengths() {
 	const parent = new Wire(t1, { children: [child1, child2] });
 	child1.parent = child2.parent = parent;
 
-	assertEquals(child1.byteLength, 0);
-	assertEquals(child2.byteLength, 0);
-	assertEquals(parent.byteLength, 30);
+	assertEquals(child1.byteLength, 40);
+	assertEquals(child2.byteLength, 30);
+	assertEquals(parent.byteLength, 60);
 
 	assertEquals(parent.maxByteLength, 100);
 	assertEquals(child1.maxByteLength, 10);

@@ -26,7 +26,7 @@ export class Wire extends DataView {
 	get raw_byteLength() { return super.byteLength; }
 	get byteLength() {
 		const last_child = this.children[this.children.length - 1];
-		return (last_child?.byteOffset ?? super.byteOffset) + (last_child?.byteLength ?? this.constructor.minByteLength) - super.byteOffset;
+		return (last_child?.byteOffset ?? super.byteOffset) + (last_child?.byteLength ?? super.byteLength) - super.byteOffset;
 	}
 	set byteLength(value) {
 		// Check that the value is within [minByteLength, maxByteLength] 
