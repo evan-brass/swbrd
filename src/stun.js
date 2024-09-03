@@ -110,6 +110,9 @@ export class Attr extends Wire {
 	get value() {
 		return new Uint8Array(this.buffer, this.byteOffset + Attr.minByteLength, this.length);
 	}
+	set value(value) {
+		this.value.set(value);
+	}
 }
 Stun.field('...attrs', Attr);
 Attr.minByteLength += 2;
@@ -123,6 +126,22 @@ export class TextAttr extends Attr {
 		encoder.encodeInto(value, super.value);
 	}
 }
+
+// STUN's error code format is silly
+export class ErrorCode extends Attr {
+	get code() {
+		return (this.getUint8(Attr.minByteLength + 2) & 0b111) * 100 +
+		(this.getUint8(Attr.minByteLength + 3) % 100)
+	}
+	set code(value) {
+		if (value < 0) throw new Error("Invalid")
+		this.setUint8(Attr.minByteLength + 1, 0); // Padding byte between family and error class
+		this.setUint8(Attr.minByteLength + 2, Math.trunc(value / 100) & 0b111);
+		this.setUint8(Attr.minByteLength + 3, Math.trunc(value) % 100)
+	}
+}
+ErrorCode.field('family', 'u8');
+ErrorCode.minByteLength += 3;
 
 export class U32Attr extends Attr {}
 U32Attr.field('value', 'u32');
