@@ -101,11 +101,13 @@ export class Attr extends Wire {
 	}
 	get comprehension_required() { return this.getUint16(0) < 0x8000; }
 	get prefix() {
-		// TODO: This copy sucks.
-		const copy = new Uint8Array(this.buffer, this.parent.byteOffset, this.byteOffset - this.parent.byteOffset).slice();
-		const length_at = copy.byteLength - Stun.minByteLength + this.byteLength;
-		new DataView(copy.buffer, copy.byteOffset).setUint16(2, length_at);
-		return copy;
+		let ret = new Uint8Array(this.buffer, this.parent.byteOffset, this.byteOffset - this.parent.byteOffset);
+		const length_at = ret.byteLength - Stun.minByteLength + this.byteLength;
+		if (this.parent.getUint16(2) != length_at) {
+			ret = ret.slice();
+			new DataView(ret.buffer, ret.byteOffset, ret.byteLength).setUint16(2, length_at);
+		}
+		return ret;
 	}
 	get value() {
 		return new Uint8Array(this.buffer, this.byteOffset + Attr.minByteLength, this.length);
