@@ -55,23 +55,27 @@ export class Addr extends URL {
 	}
 	*candidates() {
 		// Yield candidate search params
-		for (let val of this.searchParams.getAll('candidate')) {
+		const candidates = Array.from(this.searchParams.getAll('candidate'), val => {
 			val = decodeURIComponent(val);
 			let json;
-			// Try to parse the candidate as JSON
-			try { json = JSON.parse(val); } catch {/* Do Nothing */}
-			if (typeof json == 'object') { yield json; }
-			
-			// Yield the candidate as a string
-			else { yield val; }
-		}
+			try { json = JSON.parse(val); } catch {/* */}
+			if (typeof json == 'object') { return json; }
+			return { candidate: 'candidate:' + val };
+		});
+
+		yield* candidates;
+
+		if (candidates.length > 0) return;
 
 		// Yield protocol specific candidate
 		if (/^udp:/i.test(this.protocol)) {
+			const {address, port} = this.authority;
 			yield {address, port};
 		}
 		else if (/^(turns?)(?:\+(tcp|udp))?:/i.test(this.protocol)) {
-			yield {};
+			const [port] = crypto.getRandomValues(new Uint16Array(1));
+			yield {address: '255.255.255.255', port};
+			yield {address: '::ffff:ffff:ffff', port};
 		}
 	}
 	connect(config = null) {

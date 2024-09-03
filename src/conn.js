@@ -1,5 +1,5 @@
 import { cert as default_cert } from './cert.js';
-import { default_ice_address, default_ice_pwd } from "./const.js";
+import { default_ice_pwd } from "./const.js";
 import { algorithm } from "./id.js";
 import { from_bytes } from "./id.js";
 import { to_fingerprint, to_string } from "./id.js";
@@ -55,6 +55,10 @@ export class Conn extends RTCPeerConnection {
 		if (typeof candidate != 'object') {
 			candidate = { candidate: candidate };
 		}
+		else if (Array.isArray(candidate)) {
+			const [address, port, type] = candidate;
+			candidate = {address, port, type};
+		}
 
 		// Can't add ICE candidates while the remote description is null:
 		while (super.remoteDescription === null) await new Promise(res => this.addEventListener('signalingstatechange', res, {once: true}));
@@ -65,8 +69,8 @@ export class Conn extends RTCPeerConnection {
 			candidate.component || '1',
 			candidate.transport || 'udp',
 			candidate.priority || '42',
-			candidate.address || default_ice_address,
-			candidate.port || crypto.getRandomValues(new Uint16Array(1))[0],
+			candidate.address || candidate.a,
+			candidate.port || candidate.p,
 			'typ', candidate.type || 'relay',
 			// WEIRD: For some reason, Firefox won't pair the candidate unless it has a related address and port (which are supposed to be optional?)
 			'raddr', '0.0.0.0', 'rport', '0',
