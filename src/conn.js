@@ -25,7 +25,7 @@ export class Conn extends RTCPeerConnection {
 	
 	constructor(peerid, {
 		setup, ice_lite, ice_pwd,
-		dont_mung = false,
+		mung = true,
 		...config
 	} = {}) {
 		const cert = config?.cert ?? default_cert;
@@ -45,7 +45,7 @@ export class Conn extends RTCPeerConnection {
 
 		this.#signaling_task({
 			setup, ice_lite, ice_pwd,
-			dont_mung
+			mung
 		}).catch(e => { console.error(e); this.close(); });
 	}
 
@@ -80,7 +80,7 @@ export class Conn extends RTCPeerConnection {
 		return await super.addIceCandidate(candidate);
 	}
 
-	async #signaling_task(/* Session: */ { setup, ice_lite, ice_pwd, dont_mung }) {
+	async #signaling_task(/* Session: */ { setup, ice_lite, ice_pwd, mung }) {
 		// Prepare for renegotiation
 		let negotiation_needed = false; this.addEventListener('negotiationneeded', () => negotiation_needed = true);
 		let remote_desc = false;
@@ -118,22 +118,29 @@ export class Conn extends RTCPeerConnection {
 			'a=sctp-port:5000',
 			''
 		].join('\n') });
-		const answer = await super.createAnswer();
 
-		// If no cert was provided on creation then pull our fingerprint and turn it into an ID
-		for (const {1: alg, 2: fingerprint} of answer.sdp.matchAll(/^a=fingerprint:([^ ]+) ([0-9a-f]{2}(:[0-9a-f]{2})+)/img)) {
-			if (this.#cert) break;
-			if (alg.toLowerCase() != algorithm) continue;
-			this.#cert = from_bytes(fingerprint.split(':'));
-		}
+		let answer;
+		// Depending on mung, we may need the cert earlier or later. This function is a noop if the cert was provided.
+		const need_cert = () => {
+			this.#cert ||= from_bytes(
+				Array.from(
+					(answer ?? this.localDescription).sdp.matchAll(/^a=fingerprint:([^ ]+) ([0-9a-f]{2}(:[0-9a-f]{2})+)/img),
+					({1: alg, 2: value}) => ({alg, value})
+				).find(v => v.alg.toLowerCase() == algorithm)
+				.value.split(':')
+			);
+		};
 
 		// Mung our answer
-		if (!dont_mung) {
+		if (mung) {
+			answer = await super.createAnswer();
+			need_cert();
 			answer.sdp = answer.sdp
 				.replace(/^a=ice-ufrag:.+/im, `a=ice-ufrag:${to_string(this.#cert)}`)
 				.replace(/^a=ice-pwd:.+/im, `a=ice-pwd:${ice_pwd || default_ice_pwd}`);
 		}
 		await super.setLocalDescription(answer);
+		need_cert();
 
 		// Switchover into handling renegotiation
 		while (this.#dc.readyState != 'closed') {
