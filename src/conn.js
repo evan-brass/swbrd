@@ -55,7 +55,7 @@ export class Conn extends RTCPeerConnection {
 		this.#signaling_task({
 			setup, ice_lite, ice_pwd,
 			dont_mung
-		}).catch(() => this.close());
+		}).catch(e => { console.error(e); this.close(); });
 	}
 
 	async addIceCandidate(candidate) {
@@ -148,6 +148,20 @@ export class Conn extends RTCPeerConnection {
 			else if (negotiation_needed) {
 				if (this.#dc.readyState == 'closing') continue;
 				negotiation_needed = false;
+
+				/**
+				 * HACK: Needed because Firefox doesn't preserve munged ICE credentials.
+				 * This causes Firefox to unknowingly trigger an ICE restart and then
+				 * when the answer contains new ICE credentials, it throws an error saying
+				 * it didn't ask for an ICE restart (even though it actually did).
+				 * 
+				 * If they fix this, then this can be removed.
+				 * ISSUE: https://bugzilla.mozilla.org/show_bug.cgi?id=1916752
+				 */
+				if (mung) {
+					super.restartIce();
+					mung = false;
+				}
 				await super.setLocalDescription();
 				try { this.#dc.send(JSON.stringify({ description: this.localDescription })); } catch {/* noop */}
 			}
