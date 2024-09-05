@@ -16,6 +16,7 @@ import { Ip4, Ip6 } from '../src/ipaddr.js';
 import { md5 } from '../src/md5.js';
 import { default_turn_username, default_turn_credential, default_ice_pwd } from "../src/const.js";
 import { encoder } from "../src/util.js";
+import './wrapper.js';
 
 const realm = 'none';
 const nonce = 'none';

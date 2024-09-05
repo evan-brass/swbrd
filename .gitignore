@@ -1,3 +1,4 @@
 dist
 *.pem
 *.pem.env
+server/wrapper
