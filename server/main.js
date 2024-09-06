@@ -16,11 +16,12 @@ import { Ip4, Ip6 } from '../src/ipaddr.js';
 import { md5 } from '../src/md5.js';
 import { default_turn_username, default_turn_credential, default_ice_pwd } from "../src/const.js";
 import { encoder } from "../src/util.js";
-import './wrapper.js';
+import { id } from './wrapper.js';
+import { to_string } from "../src/id.js";
 
 const realm = 'none';
 const nonce = 'none';
-const broadcast = new Ip4(255, 255, 255, 255);
+const broadcast = new Ip6(0, 0, 0, 0, 0, 0xffff, 0xffff, 0xffff);
 
 // TODO: Replace async crypto sign with sync mbedtls hmac implementation:
 const turn_key = await crypto.subtle.importKey('raw', md5(`${default_turn_username}:${realm}:${default_turn_credential}`), {
@@ -37,8 +38,8 @@ const send = new ArrayBuffer(2048);
 const hostname = '::ffff:127.0.0.1';
 // const hostname = '::';
 
-const bindings = new Map(); // lufrag -> {ssl_config, port} or ip+port
-const peers = new Map(); // ip+port -> {ssl_context, sctp state, etc.}
+const our_lufrag = to_string(id);
+const dtls_sessions = new Map(); // key -> DTLS pointer
 
 const sock = Deno.listenDatagram({transport: 'udp', hostname, port: 3478});
 console.log('listening on', sock.addr);
@@ -48,32 +49,105 @@ for await (const [datagram, sender] of sock) {
 	const req = new Turn(datagram).specialize();
 	if (req.byteLength > datagram.byteLength) continue;
 
+	// 4 different representations of the same information
 	const ip = parse_ipaddr(sender.hostname);
+	const mapped = ip.mapped();
+	const conn_id = new Uint16Array([sender.port, ...mapped]);
+	const key = String.fromCharCode(...new Uint8Array(conn_id.buffer));
 
 	let res, receiver = {
 		transport: 'udp',
-		hostname: String(ip.mapped()),
+		hostname: String(mapped),
 		port: sender.port
 	};
 	let in_integrity, in_fingerprint;
 
+	async function answer_ice(stun, dest) {
+		// Check if there's any errors:
+		const ice_controlled = stun.attrs.find(a => a.type == 'ice controlled');
+		let integrity = stun.attrs.find(a => a.type == 'integrity');
+		
+		const answer = dest.append(Stun, {
+			method: 'binding',
+			cookie: stun.cookie,
+			txid: stun.txid
+		});
+
+		// ICE authentication
+		if (!integrity || !await integrity.verify(ice_key)) {
+			answer.class = 'error';
+			answer.append(ErrorCode, {
+				type: 'error',
+				family: 0x00,
+				code: 403
+			});
+			integrity = false;
+		}
+
+		// ICE role conflict
+		else if (ice_controlled) {
+			answer.class = 'error';
+			answer.append(ErrorCode, {
+				type: 'error',
+				family: 0x00,
+				code: 487
+			});
+		}
+
+		// Successful binding
+		else {
+			answer.class = 'success';
+			answer.append(Addr6, {
+				type: 'mapped',
+				ip: mapped,
+				port: sender.port
+			});
+
+			// TODO: If there were multiple 
+			dtls_sessions.set(key, {});
+		}
+
+		// Sign the response
+		if (integrity) {
+			await answer.append(Sha1Integrity, {
+				type: 'integrity'
+			}).sign(ice_key);
+		}
+		// Fingerprint the response
+		const print = answer.append(FingerprintAttr, {
+			type: 'fingerprint'
+		});
+		print.actual = print.expected();
+	}
+	// function answer_dtls() {}
+
 	handlers:
 	// TURN Channel Data messages
 	if (req instanceof Data) {
-		break handlers;
+		if (req.data.byteLength >= Stun.minByteLength && req.data[0] < 3) {
+			const stun = new Stun(req.data);
+			if (stun.class != 'request' || stun.method != 'binding') break handlers;
+			res = new Data(send, {
+				channel: req.channel,
+				length: 0,
+			});
+			await answer_ice(stun, res);
+		}
+		else if (req.data.byteLength > 1 && 20 <= req.data[0] && req.data[0] < 64) {
+			// TODO: Handle DTLS
+		}
+		else { break handlers; }
 	}
 
 	// STUN Send Indication
 	else if (req instanceof Stun && req.class == 'indication' && req.method == 'send') {
 		const peer = req.attrs.find(a => a.type == 'peer');
 		const data = req.attrs.find(a => a.type == 'data');
-		if (!(peer instanceof Addr4 || peer instanceof Addr6) || !data) break handlers;
+		if (!(peer instanceof Addr6) || !data) break handlers;
 		const {ip: pip, port} = peer;
-		if (pip instanceof Ip4 && ip instanceof Ip6) break handlers;
 
 		// Hosted
-		const pip_canon = pip.canonical();
-		if (pip_canon instanceof Ip4 && pip_canon.every((v, i) => v == broadcast[i])) {
+		if (pip.every((v, i) => v == broadcast[i])) {
 			if (data.value.byteLength >= Stun.minByteLength && data.value[0] < 3) {
 				const stun = new Stun(data.value);
 				if (stun.class != 'request' || stun.method != 'binding') break handlers;
@@ -81,8 +155,36 @@ for await (const [datagram, sender] of sock) {
 				const username = stun.attrs.find(a => a.type == 'username');
 				const integrity = stun.attrs.find(a => a.type == 'integrity');
 				if (!username || !integrity) break handlers;
+
 				const [lufrag, rufrag] = username.value.split(':');
 				console.log(lufrag, rufrag);
+
+				if (lufrag == our_lufrag) {
+					// Wrap our answer in a data indication:
+					res = new Stun(send, {
+						length: 0,
+						method: 'data',
+						class: 'indication',
+						cookie: req.cookie,
+						txid: req.txid
+					});
+					res.append(Addr6, {
+						type: 'peer',
+						ip: pip,
+						port
+					});
+					const data = res.append(Attr, {
+						type: 'data',
+						length: 0
+					});
+					await answer_ice(stun, data);
+				}
+				else {
+					// TODO: Encapsulate the connection test into SCTP and send over DTLS, routing by lufrag
+				}
+			}
+			else if (data.length > 1 && 20 <= data.value[0] && data.value[0] < 64) {
+				// TODO: Handle DTLS
 			}
 			break handlers;
 		}
@@ -90,7 +192,7 @@ for await (const [datagram, sender] of sock) {
 		// Forward the packet
 		receiver = {
 			transport: 'udp',
-			hostname: String(pip.mapped()),
+			hostname: String(pip),
 			port
 		};
 
@@ -101,9 +203,9 @@ for await (const [datagram, sender] of sock) {
 			cookie: req.cookie,
 			txid: req.txid
 		});
-		res.append(ip instanceof Ip4 ? Addr4 : Addr6, {
+		res.append(Addr6, {
 			type: 'peer',
-			ip,
+			ip: ip.mapped(),
 			port: sender.port
 		});
 		res.append(Attr, {
@@ -193,9 +295,9 @@ for await (const [datagram, sender] of sock) {
 			ip,
 			port: sender.port
 		});
-		res.append(ip instanceof Ip4 ? Addr4 : Addr6, {
+		res.append(Addr6, {
 			type: 'relayed',
-			ip,
+			ip: ip.mapped(),
 			port: sender.port
 		});
 		res.append(U32Attr, {
@@ -235,8 +337,18 @@ for await (const [datagram, sender] of sock) {
 
 	// TURN Channel Bind
 	else if (req.method == 'channel bind') {
-		// TODO: Only bind the channel if it is aimed at our hosted address and we already have a DTLS session for the peer.
-		continue;
+		const peer = req.attrs.find(a => a.type == 'peer');
+		if (!dtls_sessions.has())
+		if (!(peer instanceof Addr6)) break handlers;
+		if (!peer.ip.every((v, i) => broadcast[i] == v)) break handlers;
+
+		res = new Stun(send, {
+			length: 0,
+			method: req.method,
+			class: 'success',
+			cookie: req.cookie,
+			txid: req.txid
+		});
 	}
 
 	// Not implemented
@@ -272,6 +384,6 @@ for await (const [datagram, sender] of sock) {
 		}
 
 		try { await sock.send(new Uint8Array(res.buffer, res.byteOffset, res.byteLength), receiver); }
-		catch (e) { console.error(e); }
+		catch (e) { console.error(receiver, e); }
 	}
 }

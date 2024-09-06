@@ -73,10 +73,11 @@ export class Conn extends RTCPeerConnection {
 			candidate.port || candidate.p,
 			'typ', candidate.type || 'relay',
 			// WEIRD: For some reason, Firefox won't pair the candidate unless it has a related address and port (which are supposed to be optional?)
-			'raddr', '0.0.0.0', 'rport', '0',
-			'ufrag', candidate.usernameFragment,
+			'raddr', '::', 'rport', '0',
+			// 'ufrag', candidate.usernameFragment,
 		].join(' ');
 		candidate.sdpMid ??= 'dc';
+		console.log('addIceCandidate', this.signalingState, candidate);
 		return await super.addIceCandidate(candidate);
 	}
 

@@ -2,6 +2,7 @@ import { algorithm, from_string } from "./id.js";
 import { Conn } from './conn.js';
 import { query_txt } from './dns.js';
 import { default_turn_credential, default_turn_username } from "./const.js";
+import { Ip6 } from "./ipaddr.js";
 /**
  * Example Addr-esses:
  * const a = new Addr('udp:seed.evan-brass.net'); await a.resolve_id(); const conn = a.connect();
@@ -54,6 +55,7 @@ export class Addr extends URL {
 		};
 	}
 	*candidates() {
+
 		// Yield candidate search params
 		const candidates = Array.from(this.searchParams.getAll('candidate'), val => {
 			val = decodeURIComponent(val);
@@ -68,14 +70,25 @@ export class Addr extends URL {
 		if (candidates.length > 0) return;
 
 		// Yield protocol specific candidate
+		const {username, address, port} = this.authority;
+		const usernameFragment = decodeURIComponent(username);
+		
+		// HACK: Current hypothesis is that Firefox ignores the first ICE candidate. I'm struggling to believe that that is true, but here we are.
+		// TODO: Maybe feature detect Firefox and then do something?
+		// yield {
+		// 	address: String(crypto.getRandomValues(new Ip6())), port: 4666,
+		// 	usernameFragment
+		// };
+
 		if (/^udp:/i.test(this.protocol)) {
-			const {address, port} = this.authority;
-			yield {address, port};
+			yield {address, port, usernameFragment};
 		}
 		else if (/^(turns?)(?:\+(tcp|udp))?:/i.test(this.protocol)) {
 			const [port] = crypto.getRandomValues(new Uint16Array(1));
-			yield {address: '255.255.255.255', port};
-			yield {address: '::ffff:ffff:ffff', port};
+			yield {
+				address: '::ffff:255.255.255.255', port,
+				usernameFragment
+			};
 		}
 	}
 	connect(config = null) {

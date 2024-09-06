@@ -5,6 +5,10 @@ export class Data extends Wire {
 	get byteLength() {
 		return this.constructor.minByteLength + this.length;
 	}
+	set byteLength(value) {
+		super.byteLength = value;
+		this.length = value - 4;
+	}
 }
 Data.field('channel', 'u16');
 Data.field('length', 'u16');
