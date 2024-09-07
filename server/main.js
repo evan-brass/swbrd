@@ -16,8 +16,8 @@ import { Ip4, Ip6 } from '../src/ipaddr.js';
 import { md5 } from '../src/md5.js';
 import { default_turn_username, default_turn_credential, default_ice_pwd } from "../src/const.js";
 import { encoder } from "../src/util.js";
-import { id } from './wrapper.js';
-import { to_string } from "../src/id.js";
+import { Dtls, id } from './dtls.js';
+import { to_string } from '../src/id.js';
 
 const realm = 'none';
 const nonce = 'none';
@@ -39,7 +39,7 @@ const hostname = '::ffff:127.0.0.1';
 // const hostname = '::';
 
 const our_lufrag = to_string(id);
-const dtls_sessions = new Map(); // key -> DTLS pointer
+const contexts = new Map();
 
 const sock = Deno.listenDatagram({transport: 'udp', hostname, port: 3478});
 console.log('listening on', sock.addr);
@@ -102,9 +102,6 @@ for await (const [datagram, sender] of sock) {
 				ip: mapped,
 				port: sender.port
 			});
-
-			// TODO: If there were multiple 
-			dtls_sessions.set(key, {});
 		}
 
 		// Sign the response
@@ -119,7 +116,6 @@ for await (const [datagram, sender] of sock) {
 		});
 		print.actual = print.expected();
 	}
-	// function answer_dtls() {}
 
 	handlers:
 	// TURN Channel Data messages
@@ -134,7 +130,24 @@ for await (const [datagram, sender] of sock) {
 			await answer_ice(stun, res);
 		}
 		else if (req.data.byteLength > 1 && 20 <= req.data[0] && req.data[0] < 64) {
-			// TODO: Handle DTLS
+			if (!contexts.has(key)) contexts.set(key, new Dtls());
+			const ctx = contexts.get(key);
+			try {
+				for (const {read, write} of ctx.push(req.data)) {
+					if (read) console.log('sctp', read);
+					if (write) {
+						res = new Data(send, {
+							channel: req.channel,
+							setByteLength: Data.minByteLength + write.byteLength,
+							data: write
+						});
+						break handlers;
+					}
+				}
+			} catch(e) {
+				console.error(e);
+				contexts.delete(key);
+			}
 		}
 		else { break handlers; }
 	}
@@ -182,9 +195,6 @@ for await (const [datagram, sender] of sock) {
 				else {
 					// TODO: Encapsulate the connection test into SCTP and send over DTLS, routing by lufrag
 				}
-			}
-			else if (data.length > 1 && 20 <= data.value[0] && data.value[0] < 64) {
-				// TODO: Handle DTLS
 			}
 			break handlers;
 		}
@@ -338,7 +348,6 @@ for await (const [datagram, sender] of sock) {
 	// TURN Channel Bind
 	else if (req.method == 'channel bind') {
 		const peer = req.attrs.find(a => a.type == 'peer');
-		if (!dtls_sessions.has())
 		if (!(peer instanceof Addr6)) break handlers;
 		if (!peer.ip.every((v, i) => broadcast[i] == v)) break handlers;
 

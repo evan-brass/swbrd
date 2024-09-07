@@ -6,7 +6,6 @@
 		"useTabs": true
 	},
 	"tasks": {
-		"start": "deno run --allow-net --allow-ffi --unstable-net --unstable-ffi --allow-read server/main.js",
-		"build": "cc -O3 -lmbedcrypto -lmbedtls -lmbedx509 -shared -o server/wrapper c_src/wrapper.c"
+		"start": "deno run --allow-net --allow-ffi --unstable-net --unstable-ffi --allow-read server/main.js"
 	}
 }

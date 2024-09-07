@@ -76,12 +76,12 @@ export class Addr extends URL {
 		
 		// HACK: Current hypothesis is that Firefox ignores the first ICE candidate. That's probably not true, but I haven't root caused it yet.
 		if (is_firefox) {
-			const address = String(crypto.getRandomValues(new Ip6()));
-			const [port] = crypto.getRandomValues(new Uint16Array(1));
-			yield {
-				address, port,
-				usernameFragment
-			};
+			// const address = String(crypto.getRandomValues(new Ip6()));
+			// const [port] = crypto.getRandomValues(new Uint16Array(1));
+			// yield {
+			// 	address, port,
+			// 	usernameFragment
+			// };
 		}
 
 		if (/^udp:/i.test(this.protocol)) {
