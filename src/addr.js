@@ -3,6 +3,7 @@ import { Conn } from './conn.js';
 import { query_txt } from './dns.js';
 import { default_turn_credential, default_turn_username } from "./const.js";
 import { Ip6 } from "./ipaddr.js";
+import { is_firefox } from "./util.js";
 /**
  * Example Addr-esses:
  * const a = new Addr('udp:seed.evan-brass.net'); await a.resolve_id(); const conn = a.connect();
@@ -73,12 +74,15 @@ export class Addr extends URL {
 		const {username, address, port} = this.authority;
 		const usernameFragment = decodeURIComponent(username);
 		
-		// HACK: Current hypothesis is that Firefox ignores the first ICE candidate. I'm struggling to believe that that is true, but here we are.
-		// TODO: Maybe feature detect Firefox and then do something?
-		// yield {
-		// 	address: String(crypto.getRandomValues(new Ip6())), port: 4666,
-		// 	usernameFragment
-		// };
+		// HACK: Current hypothesis is that Firefox ignores the first ICE candidate. That's probably not true, but I haven't root caused it yet.
+		if (is_firefox) {
+			const address = String(crypto.getRandomValues(new Ip6()));
+			const [port] = crypto.getRandomValues(new Uint16Array(1));
+			yield {
+				address, port,
+				usernameFragment
+			};
+		}
 
 		if (/^udp:/i.test(this.protocol)) {
 			yield {address, port, usernameFragment};

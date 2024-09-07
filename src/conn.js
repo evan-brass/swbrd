@@ -3,6 +3,7 @@ import { default_ice_pwd } from "./const.js";
 import { algorithm } from "./id.js";
 import { from_bytes } from "./id.js";
 import { to_fingerprint, to_string } from "./id.js";
+import { is_firefox } from './util.js';
 
 export const defaults = {
 	iceServers: [{urls: 'stun:global.stun.twilio.com'}]
@@ -161,7 +162,7 @@ export class Conn extends RTCPeerConnection {
 				 * If they fix this, then this can be removed.
 				 * ISSUE: https://bugzilla.mozilla.org/show_bug.cgi?id=1916752
 				 */
-				if (mung) {
+				if (mung && is_firefox) {
 					super.restartIce();
 					mung = false;
 				}
