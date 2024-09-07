@@ -23,7 +23,26 @@ typedef struct config {
 	mbedtls_ssl_cookie_ctx cookies;
 } config;
 
-__attribute__((visibility("default"))) config* create_config(const unsigned char* pem, size_t pem_len, unsigned char fingerprint[32]) {
+typedef struct context {
+	unsigned char fingerprint[32];
+	unsigned char conn_id[18];
+	mbedtls_ssl_context context;
+} context;
+
+__attribute__((visibility("default"))) context* create_context(config* config, unsigned char conn_id[18]) {
+	context* ret = (context*) malloc(sizeof(context));
+	memset(ret->fingerprint, 0, sizeof(ret->fingerprint));
+	memcpy(ret->conn_id, conn_id, sizeof(conn_id));
+	mbedtls_ssl_init(&ret->context);
+	mbedtls_ssl_set_mtu(&ret->context, 1000);
+}
+
+__attribute__((visibility("default"))) config* create_config(
+	const unsigned char* pem,
+	size_t pem_len,
+	unsigned char fingerprint[32],
+	
+) {
 	config* ret = (config*) malloc(sizeof(config));
 	if (!ret) exit(1);
 
