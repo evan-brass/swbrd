@@ -102,45 +102,40 @@ export class Wire extends DataView {
 
 	static field(name, typ) {
 		const offset = this.minByteLength;
-		let byteLength;
-		let get, set;
+		let byteLength = 0;
+		let get, set, freeze = false;
 
+		const arr = /^\[([1-9][0-9]*)?\]$/.exec(typ);
+		const num = /^([ui])(8|16|32|64)(_le)?$/i.exec(typ);
 		if (name.startsWith('...')) {
 			name = name.slice(3);
-			Object.defineProperty(this.prototype, name, {
-				get() {
-					if (this.children.length == 0) {
-						for (let offset = this.constructor.minByteLength; this.byteLength - offset >= typ.minByteLength;) {
-							const item = new typ(this.buffer, {byteOffset: this.byteOffset + offset, parent: this});
-							offset += item.byteLength;
-	
-							item.specialize();
-						}
-					}
-					return this.children;
-				}
-			});
-			this.default_append_typ = typ;
-			Object.freeze(this.prototype); // Further fields cannot be added after a ...field
-			return;
-		}
-		else if (typ == '[]') {
-			Object.defineProperty(this.prototype, name, {
-				get: function() {
-					return new Uint8Array(this.buffer, this.byteOffset + this.constructor.minByteLength, this.byteLength - this.constructor.minByteLength);
-				}
-			});
-			Object.freeze(this.prototype); // Further fields cannot be added after a [] field
-			return;
-		}
+			get = function () {
+				if (this.children.length == 0) {
+					for (let offset = this.constructor.minByteLength; this.byteLength - offset >= typ.minByteLength;) {
+						const item = new typ(this.buffer, {byteOffset: this.byteOffset + offset, parent: this});
+						offset += item.byteLength;
 
-		const arr = /^\[([1-9][0-9]*)\]$/.exec(typ);
-		const num = /^([ui])(8|16|32|64)(_le)?$/i.exec(typ);
-		if (arr) {
-			byteLength = parseInt(arr[1]);
-			get = function() {
-				return new Uint8Array(this.buffer, this.byteOffset + offset, byteLength);
+						item.specialize();
+					}
+				}
+				return this.children;
 			};
+			this.default_append_typ = typ;
+			freeze = true;
+		}
+		else if (arr) {
+			if (arr[1]) {
+				byteLength = parseInt(arr[1]);
+				get = function() {
+					return new Uint8Array(this.buffer, this.byteOffset + offset, byteLength);
+				};
+			}
+			else {
+				get = function() {
+					return new Uint8Array(this.buffer, this.byteOffset + offset, this.byteLength - offset);
+				}
+				freeze = true;
+			}
 			set = function(value) {
 				get.call(this).set(value);
 			};
@@ -166,5 +161,6 @@ export class Wire extends DataView {
 			get, set,
 		});
 		this.minByteLength += byteLength;
+		if (freeze) Object.freeze(this.prototype);
 	}
 }
