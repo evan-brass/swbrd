@@ -6,6 +6,6 @@
 		"useTabs": true
 	},
 	"tasks": {
-		"start": "deno run --allow-net --allow-ffi --unstable-net --unstable-ffi --allow-read server/main.js"
+		"start": "deno run --unstable-ffi --unstable-net -A server/main.js"
 	}
 }

@@ -166,6 +166,9 @@ export class Dtls {
 			return;
 		}
 	}
+	write(buffer) {
+		check_err(openssl.SSL_write(this.#ssl, buffer, buffer.byteLength));
+	}
 }
 
 // Create BIO methods that wrap ReadableStreamDefaultReader and WritableStreamDefaultWriter

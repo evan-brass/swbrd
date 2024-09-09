@@ -26,7 +26,7 @@ export class Wire extends DataView {
 	get raw_byteLength() { return super.byteLength; }
 	get byteLength() {
 		const last_child = this.children[this.children.length - 1];
-		return (last_child?.byteOffset ?? super.byteOffset) + (last_child?.byteLength ?? super.byteLength) - super.byteOffset;
+		return (last_child?.byteOffset ?? super.byteOffset) + (last_child?.byteLength ?? this.constructor.minByteLength) - super.byteOffset;
 	}
 	set byteLength(value) {
 		// Check that the value is within [minByteLength, maxByteLength] 
@@ -49,7 +49,7 @@ export class Wire extends DataView {
 		let buffer;
 		if (ArrayBuffer.isView(input)) {
 			byteOffset ??= input.byteOffset;
-			byteLength ??= input.byteLength;
+			byteLength ??= input?.raw_byteLength ?? input.byteLength;
 			buffer = input.buffer;
 		}
 		else if (input instanceof ArrayBuffer || input instanceof SharedArrayBuffer) { buffer = input; }
@@ -90,7 +90,7 @@ export class Wire extends DataView {
 
 	static default_append_typ = Wire;
 	append(constr = this.constructor.default_append_typ, values = null) {
-		const self_byteLength = this.byteLength;
+		const self_byteLength = this.children.length ? this.byteLength : this.constructor.minByteLength;
 		const available = this.maxByteLength - self_byteLength;
 		if (available < constr.minByteLength) return;
 		
