@@ -19,6 +19,7 @@ import { decoder_lossy, encoder } from "../src/util.js";
 import { Dtls, id } from './dtls.js';
 import { to_string } from '../src/id.js';
 import { CookieAckChunk, CookieChunk, DataChunk, HeartbeatAckChunk, HeartbeatChunk, InitAckChunk, InitChunk, Param, SackChunk, Sctp } from '../src/sctp.js';
+import { sock, send } from './sock.js';
 
 const realm = 'none';
 const nonce = 'none';
@@ -34,15 +35,9 @@ const ice_key = await crypto.subtle.importKey('raw', encoder.encode(default_ice_
 	hash: 'SHA-1'
 }, true, ['sign', 'verify']);
 
-const send = new ArrayBuffer(2048);
-
-const hostname = '::ffff:127.0.0.1';
-// const hostname = '::';
-
 const our_lufrag = to_string(id);
 const contexts = new Map();
 
-const sock = Deno.listenDatagram({transport: 'udp', hostname, port: 3478});
 console.log('listening on', sock.addr);
 for await (const [datagram, sender] of sock) {
 	if (datagram.byteLength < Turn.minByteLength) continue;
