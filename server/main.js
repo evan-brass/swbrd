@@ -200,7 +200,6 @@ for await (const [datagram, sender] of sock) {
 							data: write
 						});
 						const frame = new Uint8Array(temp.buffer, temp.byteOffset, temp.byteLength);
-						console.log('out dtls')
 
 						try { await sock.send(frame, receiver); }
 						catch (e) { console.error(receiver, e); }

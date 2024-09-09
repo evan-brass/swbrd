@@ -33,6 +33,15 @@ let ctx; {
 	check_err(openssl.SSL_CTX_check_private_key(ctx));
 }
 
+// TODO: Read the peer certificate hash it, and store a mapping to its
+// export const connected = new Map(); // id -> dtls context
+const verifier = new Deno.UnsafeCallback(
+	{ parameters: ['i32', 'pointer'], result: 'i32' },
+	function verify(_preverify_ok, _store_ctx) { return 1; }
+);
+openssl.SSL_CTX_set_verify(ctx, 0b11, verifier.pointer);
+openssl.SSL_CTX_set_verify_depth(ctx, 0);
+
 export class Dtls {
 	#in;
 	#out;
@@ -67,7 +76,6 @@ export class Dtls {
 			}
 			const want = openssl.SSL_want(this.#ssl);
 			if (want == SSL_READING || want == SSL_NOTHING) break;
-			console.log('SSL_want', want);
 			check_err(openssl.SSL_get_error(this.#ssl, result));
 			return;
 		}
