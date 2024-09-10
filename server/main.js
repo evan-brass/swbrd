@@ -16,10 +16,9 @@ import { Ip4, Ip6 } from '../src/ipaddr.js';
 import { md5 } from '../src/md5.js';
 import { default_turn_username, default_turn_credential, default_ice_pwd } from "../src/const.js";
 import { encoder } from "../src/util.js";
-import { id } from './dtls.js';
+import { id, Dtls } from './dtls.js';
 import { to_string } from '../src/id.js';
 import { sock, send } from './sock.js';
-import { handle as handle_dtls } from './dtls.js';
 
 const realm = 'none';
 const nonce = 'none';
@@ -126,7 +125,9 @@ for await (const [datagram, sender] of sock) {
 			await answer_ice(stun, res);
 		}
 		else if (req.data.byteLength > 1 && 20 <= req.data[0] && req.data[0] < 64) {
-			await handle_dtls(new Uint16Array([...mapped, sender.port, req.channel]), req.data);
+			const dtls = Dtls.get(new Uint16Array([...mapped, sender.port, req.channel]));
+			dtls.push(req.data);
+			await dtls.handle();
 		}
 		else { break handlers; }
 	}
@@ -150,16 +151,18 @@ for await (const [datagram, sender] of sock) {
 
 				const [lufrag, rufrag] = username.value.split(':');
 				console.log(lufrag, rufrag);
+				
+				// Wrap our answer in a data indication:
+				res = new Stun(send, {
+					length: 0,
+					method: 'data',
+					class: 'indication',
+					cookie: req.cookie,
+					txid: req.txid
+				});
 
+				// Handle connections to our hosted peer
 				if (lufrag == our_lufrag) {
-					// Wrap our answer in a data indication:
-					res = new Stun(send, {
-						length: 0,
-						method: 'data',
-						class: 'indication',
-						cookie: req.cookie,
-						txid: req.txid
-					});
 					res.append(Addr6, {
 						type: 'peer',
 						ip: pip,
@@ -171,8 +174,26 @@ for await (const [datagram, sender] of sock) {
 					});
 					await answer_ice(stun, data);
 				}
+
+				// Handle connection tests to other peers
 				else {
-					// TODO: Encapsulate the connection test into SCTP and send over DTLS, routing by lufrag
+					const dtls = Dtls.get_ufrag(lufrag);
+					if (!dtls) break handlers;
+
+					res.append(Addr6, {
+						type: 'peer',
+						ip: mapped,
+						port: sender.port
+					});
+					res.append(Attr, {
+						setByteLength: data.byteLength,
+						type: 'data',
+						value: data.value
+					});
+					dtls.send(new Uint8Array(res.buffer, res.byteOffset, res.byteLength));
+					await dtls.handle();
+
+					res = false;
 				}
 			}
 			break handlers;

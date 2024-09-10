@@ -36,6 +36,7 @@ export const {symbols: openssl} = Deno.dlopen(libpath, {
 	SSL_read: { parameters: ['pointer', 'buffer', 'i32'], result: 'i32' },
 	SSL_want: { parameters: ['pointer'], result: 'i32' },
 	SSL_is_init_finished: { parameters: ['pointer'], result: 'i32' },
+	SSL_get0_peer_certificate: { parameters: ['pointer'], result: 'pointer' },
 
 	ERR_get_error: { parameters: [], result: 'u32' },
 	ERR_error_string_n: { parameters: ['u32', 'buffer', 'isize'], result: 'void' },

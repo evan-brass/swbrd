@@ -1,5 +1,5 @@
-import { from_bytes } from '../src/id.js';
-import { decoder_lossy } from '../src/util.js';
+import { from_bytes, to_string } from '../src/id.js';
+import { decoder_lossy, encoder } from '../src/util.js';
 import {
 	openssl,
 	check_err,
@@ -12,6 +12,7 @@ import { Data } from '../src/turn.js';
 import { Ip6 } from '../src/ipaddr.js';
 
 // Load the certificate and private key
+const evp_sha256 = check_err(openssl.EVP_sha256());
 let pkey, cert, id; {
 	const pem = Deno.readFileSync('./cert.pem');
 	const bio = check_err(openssl.BIO_new_mem_buf(pem, pem.byteLength));
@@ -20,7 +21,6 @@ let pkey, cert, id; {
 	openssl.BIO_free(bio);
 	
 	const fingerprint = new Uint8Array(32);
-	const evp_sha256 = check_err(openssl.EVP_sha256());
 	check_err(openssl.X509_digest(cert, evp_sha256, fingerprint, null));
 
 	id = from_bytes(fingerprint);
@@ -47,90 +47,27 @@ const verifier = new Deno.UnsafeCallback(
 openssl.SSL_CTX_set_verify(ctx, 0b11, verifier.pointer);
 openssl.SSL_CTX_set_verify_depth(ctx, 0);
 
+// Handle Timeouts:
+const timeout = new Deno.UnsafeCallback(
+	{parameters: ['pointer', 'u32'], result: 'i32'},
+	function timeout(ssl, timer_us) {
+		console.log('timer cb', ssl, timer_us);
+	}
+)
+
 export const connections = new Map(); // ids -> dtls;
 
 const contexts = new Map(); // key (string version of ip+port+channel) -> { ptr, sctp_state, ip+port+channel }
-export async function handle(sender, data) {
-	const context = Dtls.get(sender);
 
-	try {
-		if (data) context.push(data);
-
-		for await (const read of context) {
-			if (read && read.byteLength >= Sctp.minByteLength) {
-				const sctp = new Sctp(read);
-				context.sctp_state ??= new Uint32Array(2); // [vtag, tsn]
-				const resp = new Sctp(send, {
-					sport: sctp.dport,
-					dport: sctp.sport,
-				});
-				for (const chunk of sctp.chunks) {
-					if (chunk instanceof DataChunk) {
-						resp.append(SackChunk, {
-							flags: 0,
-							cumtsn: chunk.tsn,
-							rwnd: 6000,
-							gaps: 0,
-							dups: 0
-						});
-						const data = chunk.ppid == 51 ? decoder_lossy.decode(chunk.data) : Array.from(chunk.data);
-						console.log('SCTP data', chunk.stream, chunk.seq, chunk.ppid, data);
-					}
-					else if (chunk instanceof InitChunk) {
-						const [vtag, init_tsn] = crypto.getRandomValues(new Uint32Array(2));
-						context.sctp_state.set([chunk.vtag, init_tsn]);
-						const ack = resp.append(InitAckChunk, {
-							flags: 0,
-							vtag,
-							rwnd: 6000,
-							in: chunk.out,
-							out: chunk.in,
-							tsn: init_tsn
-						});
-						if (!ack) continue;
-						ack.append(Param, {
-							setByteLength: Param.minByteLength + 8,
-							type: 7
-						});
-					}
-					else if (chunk instanceof CookieChunk) {
-						resp.append(CookieAckChunk, {
-							flags: 0
-						});
-					}
-					else if (chunk instanceof SackChunk) {
-						// Reset the TSN to whatever they last received + 1
-						// We don't retransmit data, but next time we have new data we'll overwrite the old TSN
-						context.sctp_state[1] = chunk.cumtsn + 1;
-					}
-					else if (chunk instanceof HeartbeatChunk) {
-						resp.append(HeartbeatAckChunk, {
-							setByteLength: chunk.byteLength,
-							info: chunk.info
-						});
-					}
-					else {
-						console.log('Unhandled SCTP chunk type:', chunk.type);
-					}
-				}
-				resp.vtag = context.sctp_state[0];
-				resp.checksum = resp.expected_checksum;
-				if (resp.children.length) {
-					// console.log('out sctp', new Uint8Array(resp.buffer, resp.byteOffset, resp.byteLength));
-					context.write(new Uint8Array(resp.buffer, resp.byteOffset, resp.byteLength));
-				}
-			}
-		}
-	} catch (e) {
-		console.error(e);
-		context.delete();
-	}
-}
+const peers = new Map(); // ids -> dtls;
 
 export class Dtls {
 	static key(sender) { return String.fromCharCode(...new Uint8Array(sender.buffer, sender.byteOffset, sender.byteLength)); }
 	static get(sender) {
 		return contexts.get(this.key(sender)) ?? new this(sender);
+	}
+	static get_ufrag(ufrag) {
+		return peers.get(ufrag);
 	}
 
 	sender;
@@ -153,6 +90,7 @@ export class Dtls {
 	}
 	delete() {
 		contexts.delete(Dtls.key(this.sender));
+		if (this.ids) peers.delete(this.ids);
 		openssl.SSL_free(this.#ssl);
 	}
 	push(buffer) {
@@ -161,7 +99,96 @@ export class Dtls {
 	write(buffer) {
 		check_err(openssl.SSL_write(this.#ssl, buffer, buffer.byteLength));
 	}
-	async *[Symbol.asyncIterator]() {
+	send(data) {
+		const ppid = typeof data == 'string' ? 51 : 53;
+		const bytes = typeof data == 'string' ? encoder.encode(data) : new Uint8Array(data.buffer, data.byteOffset, data.byteLength).slice();
+
+		const sctp = new Sctp(send, {
+			sport: 500, dport: 5000,
+			vtag: this.sctp_state[0]
+		});
+
+		sctp.append(DataChunk, {
+			setByteLength: DataChunk.minByteLength + bytes.byteLength,
+			flags: 0b000_0_1_1_1,
+			tsn: (this.sctp_state[1]++),
+			stream: 0,
+			seq: 0,
+			ppid,
+			data: bytes
+		});
+
+		if (sctp.children.length) {
+			sctp.checksum = sctp.expected_checksum;
+			const encoded = new Uint8Array(sctp.buffer, sctp.byteOffset, sctp.byteLength);
+			this.write(encoded);
+		}
+	}
+	#handle_sctp(buffer) {
+		if (buffer.byteLength >= Sctp.minByteLength) {
+			const sctp = new Sctp(buffer);
+			const resp = new Sctp(send, {
+				sport: sctp.dport,
+				dport: sctp.sport,
+			});
+			for (const chunk of sctp.chunks) {
+				if (chunk instanceof DataChunk) {
+					resp.append(SackChunk, {
+						flags: 0,
+						cumtsn: chunk.tsn,
+						rwnd: 6000,
+						gaps: 0,
+						dups: 0
+					});
+					const data = chunk.ppid == 51 ? decoder_lossy.decode(chunk.data) : Array.from(chunk.data);
+					console.log('SCTP data', chunk.stream, chunk.seq, chunk.ppid, data);
+				}
+				else if (chunk instanceof InitChunk) {
+					const [vtag, init_tsn] = crypto.getRandomValues(new Uint32Array(2));
+					this.sctp_state.set([chunk.vtag, init_tsn]);
+					const ack = resp.append(InitAckChunk, {
+						flags: 0,
+						vtag,
+						rwnd: 6000,
+						in: chunk.out,
+						out: chunk.in,
+						tsn: init_tsn
+					});
+					if (!ack) continue;
+					ack.append(Param, {
+						setByteLength: Param.minByteLength + 8,
+						type: 7
+					});
+				}
+				else if (chunk instanceof CookieChunk) {
+					resp.append(CookieAckChunk, {
+						flags: 0
+					});
+				}
+				else if (chunk instanceof SackChunk) {
+					// Reset the TSN to whatever they last received + 1
+					// We don't retransmit data, but next time we have new data we'll overwrite the old TSN
+					this.sctp_state[1] = chunk.cumtsn + 1;
+				}
+				else if (chunk instanceof HeartbeatChunk) {
+					resp.append(HeartbeatAckChunk, {
+						setByteLength: chunk.byteLength,
+						info: chunk.info
+					});
+				}
+				else {
+					console.log('Unhandled SCTP chunk type:', chunk.type);
+				}
+			}
+			resp.vtag = this.sctp_state[0];
+			resp.checksum = resp.expected_checksum;
+			if (resp.children.length) {
+				// console.log('out sctp', new Uint8Array(resp.buffer, resp.byteOffset, resp.byteLength));
+				this.write(new Uint8Array(resp.buffer, resp.byteOffset, resp.byteLength));
+			}
+		}
+	}
+	async handle() {
 		const buff = new Uint8Array(1200);
 		while (1) {
 			let result;
@@ -171,8 +198,19 @@ export class Dtls {
 				result = openssl.SSL_get_error(this.#ssl, result);
 			}
 			else {
+				if (!this.ids) {
+					const fingerprint = new Uint8Array(32);
+					const cert = openssl.SSL_get0_peer_certificate(this.#ssl);
+					if (!cert) return; // TODO: Close the connection
+					check_err(openssl.X509_digest(cert, evp_sha256, fingerprint, null));
+					this.ids = to_string(from_bytes(fingerprint));
+					const existing = peers.get(this.ids);
+					if (existing) existing.delete();
+					peers.set(this.ids, this);
+					console.log('num peers', peers.size);
+				}
 				result = openssl.SSL_read(this.#ssl, buff, buff.byteLength);
-				if (result > 0) yield buff.subarray(0, result);
+				if (result > 0) this.#handle_sctp(buff.subarray(0, result));
 			}
 
 			while (openssl.BIO_ctrl(this.#out, BIO_CTRL_PENDING, 0, null) > 0) {
