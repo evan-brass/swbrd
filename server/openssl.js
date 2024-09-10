@@ -21,6 +21,7 @@ export const {symbols: openssl} = Deno.dlopen(libpath, {
 	SSL_CTX_set_verify_depth: { parameters: ['pointer' /* ctx */, 'i32' /* depth */], result: 'void' },
 
 	SSL_new: { parameters: ['pointer'/* ctx */], result: 'pointer' },
+	SSL_free: { parameters: ['pointer'/* ctx */], result: 'void' },
 	SSL_set_ssl_method: { parameters: ['pointer', 'pointer'], result: 'i32' },
 	SSL_handle_events: { parameters: ['pointer'], result: 'i32' },
 	SSL_get_rbio: { parameters: ['pointer'], result: 'pointer' },

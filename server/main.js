@@ -15,11 +15,11 @@ import { parse_ipaddr } from "../src/ipaddr.js";
 import { Ip4, Ip6 } from '../src/ipaddr.js';
 import { md5 } from '../src/md5.js';
 import { default_turn_username, default_turn_credential, default_ice_pwd } from "../src/const.js";
-import { decoder_lossy, encoder } from "../src/util.js";
-import { Dtls, id } from './dtls.js';
+import { encoder } from "../src/util.js";
+import { id } from './dtls.js';
 import { to_string } from '../src/id.js';
-import { CookieAckChunk, CookieChunk, DataChunk, HeartbeatAckChunk, HeartbeatChunk, InitAckChunk, InitChunk, Param, SackChunk, Sctp } from '../src/sctp.js';
 import { sock, send } from './sock.js';
+import { handle as handle_dtls } from './dtls.js';
 
 const realm = 'none';
 const nonce = 'none';
@@ -36,7 +36,7 @@ const ice_key = await crypto.subtle.importKey('raw', encoder.encode(default_ice_
 }, true, ['sign', 'verify']);
 
 const our_lufrag = to_string(id);
-const contexts = new Map();
+// const contexts = new Map();
 
 console.log('listening on', sock.addr);
 for await (const [datagram, sender] of sock) {
@@ -48,8 +48,8 @@ for await (const [datagram, sender] of sock) {
 	// 4 different representations of the same information
 	const ip = parse_ipaddr(sender.hostname);
 	const mapped = ip.mapped();
-	const conn_id = new Uint16Array([sender.port, ...mapped]);
-	const key = String.fromCharCode(...new Uint8Array(conn_id.buffer));
+	// const conn_id = new Uint16Array([sender.port, ...mapped]);
+	// const key = String.fromCharCode(...new Uint8Array(conn_id.buffer));
 
 	let res, receiver = {
 		transport: 'udp',
@@ -126,89 +126,7 @@ for await (const [datagram, sender] of sock) {
 			await answer_ice(stun, res);
 		}
 		else if (req.data.byteLength > 1 && 20 <= req.data[0] && req.data[0] < 64) {
-			if (!contexts.has(key)) contexts.set(key, new Dtls());
-			const ctx = contexts.get(key);
-			try {
-				for (const {read, write} of ctx.push(req.data)) {
-					if (read && read.byteLength >= Sctp.minByteLength) {
-						const sctp = new Sctp(read);
-						ctx.sctp_state ??= new Uint32Array(2); // [vtag, tsn]
-						const resp = new Sctp(send, {
-							sport: sctp.dport,
-							dport: sctp.sport,
-						});
-						for (const chunk of sctp.chunks) {
-							if (chunk instanceof DataChunk) {
-								resp.append(SackChunk, {
-									flags: 0,
-									cumtsn: chunk.tsn,
-									rwnd: 6000,
-									gaps: 0,
-									dups: 0
-								});
-								const data = chunk.ppid == 51 ? decoder_lossy.decode(chunk.data) : Array.from(chunk.data);
-								console.log('SCTP data', chunk.stream, chunk.seq, chunk.ppid, data);
-							}
-							else if (chunk instanceof InitChunk) {
-								const [vtag, init_tsn] = crypto.getRandomValues(new Uint32Array(2));
-								ctx.sctp_state.set([chunk.vtag, init_tsn]);
-								const ack = resp.append(InitAckChunk, {
-									flags: 0,
-									vtag,
-									rwnd: 6000,
-									in: chunk.out,
-									out: chunk.in,
-									tsn: init_tsn
-								});
-								if (!ack) continue;
-								ack.append(Param, {
-									setByteLength: Param.minByteLength + 8,
-									type: 7
-								});
-							}
-							else if (chunk instanceof CookieChunk) {
-								resp.append(CookieAckChunk, {
-									flags: 0
-								});
-							}
-							else if (chunk instanceof SackChunk) {
-								// Reset the TSN to whatever they last received + 1
-								// We don't retransmit data, but next time we have new data we'll overwrite the old TSN
-								ctx.sctp_state[1] = chunk.cumtsn + 1;
-							}
-							else if (chunk instanceof HeartbeatChunk) {
-								resp.append(HeartbeatAckChunk, {
-									setByteLength: chunk.byteLength,
-									info: chunk.info
-								});
-							}
-							else {
-								console.log('Unhandled SCTP chunk type:', chunk.type);
-							}
-						}
-						resp.vtag = ctx.sctp_state[0];
-						resp.checksum = resp.expected_checksum;
-						if (resp.children.length) {
-							// console.log('out sctp', new Uint8Array(resp.buffer, resp.byteOffset, resp.byteLength));
-							ctx.write(new Uint8Array(resp.buffer, resp.byteOffset, resp.byteLength));
-						}
-					}
-					if (write) {
-						const temp = new Data(send, {
-							channel: req.channel,
-							setByteLength: Data.minByteLength + write.byteLength,
-							data: write
-						});
-						const frame = new Uint8Array(temp.buffer, temp.byteOffset, temp.byteLength);
-
-						try { await sock.send(frame, receiver); }
-						catch (e) { console.error(receiver, e); }
-					}
-				}
-			} catch(e) {
-				console.error(e);
-				contexts.delete(key);
-			}
+			await handle_dtls(new Uint16Array([...mapped, sender.port, req.channel]), req.data);
 		}
 		else { break handlers; }
 	}
