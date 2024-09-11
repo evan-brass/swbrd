@@ -219,7 +219,7 @@ for await (const [datagram, sender] of sock) {
 			port: sender.port
 		});
 		res.append(Attr, {
-			setByteLength: data.byteLength,
+			setByteLength: Attr.minByteLength + data.length,
 			type: 'data',
 			value: data.value
 		});
