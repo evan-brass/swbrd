@@ -183,7 +183,6 @@ export class Dtls {
 			resp.vtag = this.sctp_state[0];
 			resp.checksum = resp.expected_checksum;
 			if (resp.children.length) {
-				// console.log('out sctp', new Uint8Array(resp.buffer, resp.byteOffset, resp.byteLength));
 				this.write(new Uint8Array(resp.buffer, resp.byteOffset, resp.byteLength));
 			}
 		}

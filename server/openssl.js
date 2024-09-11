@@ -9,6 +9,7 @@ export const {symbols: openssl} = Deno.dlopen(libpath, {
 	DTLS_method: { parameters: [], result: 'pointer' },
 	DTLS_server_method: { parameters: [], result: 'pointer' },
 	DTLS_client_method: { parameters: [], result: 'pointer' },
+	DTLS_set_timer_cb: { parameters: ['pointer', 'function'], result: 'pointer' },
 
 	EVP_sha256: { parameters: [], result: 'pointer' },
 
