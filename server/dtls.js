@@ -57,28 +57,34 @@ const timeout = new Deno.UnsafeCallback(
 
 export const connections = new Map(); // ids -> dtls;
 
-const contexts = new Map(); // key (string version of ip+port+channel) -> { ptr, sctp_state, ip+port+channel }
-
-const peers = new Map(); // ids -> dtls;
-
 export class Dtls {
-	static key(sender) { return String.fromCharCode(...new Uint8Array(sender.buffer, sender.byteOffset, sender.byteLength)); }
-	static get(sender) {
-		return contexts.get(this.key(sender)) ?? new this(sender);
+	static connections = new Map(); // String(Dtls.key(Ip6, port, channel)) -> dtls
+	static peers = new Map(); // pid -> dtls
+
+	ip;
+	port;
+	channel;
+
+	static key(ip, port, channel) { return `[${ip}]:${port}:${channel}`; }
+	static get(ip, port, channel) {
+		const key = this.key(ip, port, channel);
+		return this.connections.get(key) ?? new this(ip, port, channel);
 	}
 	static get_ufrag(ufrag) {
-		return peers.get(ufrag);
+		return this.peers.get(ufrag);
 	}
 
-	sender;
 	ids;
-	sctp_state = crypto.getRandomValues(new Uint32Array(2));
+	sctp_state = crypto.getRandomValues(new Uint32Array(2)); // [vtag, tsn]
 
 	#in;
 	#out;
 	#ssl;
-	constructor(sender) {
-		this.sender = sender;
+	constructor(ip, port, channel) {
+		this.ip = ip;
+		this.port = port;
+		this.channel = channel;
+
 		this.#in = openssl.BIO_new(openssl.BIO_s_mem());
 		this.#out = openssl.BIO_new(openssl.BIO_s_mem());
 		this.#ssl = openssl.SSL_new(ctx);
@@ -86,17 +92,20 @@ export class Dtls {
 		openssl.SSL_set_accept_state(this.#ssl);
 		openssl.SSL_set_bio(this.#ssl, this.#in, this.#out);
 
-		contexts.set(Dtls.key(this.sender), this);
+		Dtls.connections.set(Dtls.key(this.ip, this.port, this.channel), this);
 	}
 	delete() {
-		contexts.delete(Dtls.key(this.sender));
-		if (this.ids) peers.delete(this.ids);
+		Dtls.connections.delete(Dtls.key(this.ip, this.port, this.channel));
+		if (this.ids) Dtls.peers.delete(this.ids);
 		openssl.SSL_free(this.#ssl);
+		this.#ssl = null;
 	}
 	push(buffer) {
+		if (!this.#ssl) return;
 		check_err(openssl.BIO_write(this.#in, buffer, buffer.byteLength));
 	}
 	write(buffer) {
+		if (!this.#ssl) return;
 		check_err(openssl.SSL_write(this.#ssl, buffer, buffer.byteLength));
 	}
 	send(data) {
@@ -203,10 +212,9 @@ export class Dtls {
 					if (!cert) return; // TODO: Close the connection
 					check_err(openssl.X509_digest(cert, evp_sha256, fingerprint, null));
 					this.ids = to_string(from_bytes(fingerprint));
-					const existing = peers.get(this.ids);
+					const existing = Dtls.peers.get(this.ids);
 					if (existing) existing.delete();
-					peers.set(this.ids, this);
-					console.log('num peers', peers.size);
+					Dtls.peers.set(this.ids, this);
 				}
 				result = openssl.SSL_read(this.#ssl, buff, buff.byteLength);
 				if (result > 0) this.#handle_sctp(buff.subarray(0, result));
@@ -218,15 +226,15 @@ export class Dtls {
 				
 				const msg = new Data(send, {
 					setByteLength: Data.minByteLength + n,
-					channel: this.sender[9],
+					channel: this.channel,
 					data: buff.subarray(0, n)
 				});
 
 				try {
 					await sock.send(new Uint8Array(send, 0, msg.byteLength), {
 						transport: 'udp',
-						hostname: String(new Ip6(...this.sender.subarray(0, 8))),
-						port: this.sender[8]
+						hostname: String(this.ip),
+						port: this.port
 					});
 				} catch (e) {
 					console.error(e);

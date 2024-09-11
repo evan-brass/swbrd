@@ -125,7 +125,7 @@ for await (const [datagram, sender] of sock) {
 			await answer_ice(stun, res);
 		}
 		else if (req.data.byteLength > 1 && 20 <= req.data[0] && req.data[0] < 64) {
-			const dtls = Dtls.get(new Uint16Array([...mapped, sender.port, req.channel]));
+			const dtls = Dtls.get(mapped, sender.port, req.channel);
 			dtls.push(req.data);
 			await dtls.handle();
 		}
@@ -150,7 +150,7 @@ for await (const [datagram, sender] of sock) {
 				if (!username || !integrity) break handlers;
 
 				const [lufrag, rufrag] = username.value.split(':');
-				console.log(lufrag, rufrag);
+				console.log(lufrag, '<-', rufrag);
 				
 				// Wrap our answer in a data indication:
 				res = new Stun(send, {
