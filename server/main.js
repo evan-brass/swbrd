@@ -206,6 +206,14 @@ for await (const [datagram, sender] of sock) {
 			port
 		};
 
+		// if (data.value[0] >= 20) {
+		// 	console.log('relay', receiver.port, '<-', sender.port, Array.from(data.value));
+		// 	await sock.send(data.value, {
+		// 		hostname: '::ffff:127.0.0.1',
+		// 		port: 4666
+		// 	});
+		// }
+
 		res = new Stun(send, {
 			length: 0,
 			method: 'data',
@@ -215,7 +223,7 @@ for await (const [datagram, sender] of sock) {
 		});
 		res.append(Addr6, {
 			type: 'peer',
-			ip: ip.mapped(),
+			ip: mapped,
 			port: sender.port
 		});
 		res.append(Attr, {
