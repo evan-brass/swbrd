@@ -85,6 +85,27 @@ const _transAud = b.addTransceiver('audio');
 a.restartIce();
 </script>
 <script type="module">
+	import { Listener } from './src/listen.js';
+	import { Cert } from './src/cert.js';
+
+	const certa = await Cert.load('testa');
+	const certb = await Cert.load('testb');
+
+	const listener = new Listener('turn:ucCm6JK3s22XuCRiTZVFpWajUq0tIpB7lDn1Sv8dRv3@local.evan-brass.net', {cert: certa});
+	listener.ice_pwd = 16; // Generate a random password using 16 random bytes
+	console.log('your address', listener.addr);
+
+	// Once the listener is open, make a connection from b
+	listener.dc.addEventListener('open', () => {
+		listener.addr.connect({cert: certb});
+	});
+
+	// Log incoming connections to a
+	for await (const incoming of listener) {
+		console.log('incoming connection', incoming);
+	}
+</script>
+<script type="_module">
 import { Addr } from './src/addr.js';
 
 const test = new Addr('turn:ucCm6JK3s22XuCRiTZVFpWajUq0tIpB7lDn1Sv8dRv3@local.evan-brass.net').connect({mung: false});

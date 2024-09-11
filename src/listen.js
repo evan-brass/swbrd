@@ -1,10 +1,11 @@
-import { Class, Method, Stun } from '../switch/stun.js';
+// import { Class, Method, Stun } from '../switch/stun.js';
 import { encoder } from './util.js';
 import { Addr } from './addr.js';
 import { from_string } from "./id.js";
 import { default_ice_pwd, default_turn_credential, default_turn_username } from "./const.js";
 import { Conn } from "./conn.js";
 // import { cert as default_cert } from './cert.js';
+import { Sha1Integrity, Stun, TextAttr, U32Attr } from './stun.js';
 
 const global_answered = new Map();
 
@@ -17,7 +18,7 @@ export class Listener extends Conn {
 	#turn_credential;
 
 	config;
-	timeout = 5000;
+	timeout = 100_000;
 
 	#ice_pwd = default_ice_pwd;
 	#cred;
@@ -94,17 +95,20 @@ export class Listener extends Conn {
 			// Read the data as a TURN Data Indication
 			if (data.byteLength < 20) continue;
 			const ind = new Stun(data);
-			if (ind.class != Class.indication || ind.method != Method.data) continue;
-			const xpeer = ind.xpeer, inner = ind.data;
+			if (ind.class != 'indication' || ind.method != 'data') continue;
+			const xpeer = ind.attrs.find(a => a.type == 'peer');
+			const inner = ind.attrs.find(a => a.type == 'data')?.value;
 			if (!inner) continue;
 
 			// Read the contents of the indication as an ICE Connection Test
 			if (inner.byteLength < 20) continue;
-			const test = new Stun(inner.buffer, inner.byteOffset, inner.byteLength);
-			if (test.class != Class.request || test.method != Method.binding) continue;
-			const username = test.username, priority = test.priority;
-			if (!username) continue;
-			const [lufrag, rufrag] = username.split(':');
+			const test = new Stun(inner);
+			if (test.class != 'request' || test.method != 'binding') continue;
+			const username = test.attrs.find(a => a.type == 'username');
+			const priority = test.attrs.find(a => a.type == 'priority');
+			const integrity = test.attrs.find(a => a.type == 'integrity');
+			if (!(username instanceof TextAttr && integrity instanceof Sha1Integrity && priority instanceof U32Attr)) continue;
+			const [lufrag, rufrag] = username.value.split(':');
 			const [lid, rid] = [lufrag, rufrag].map(from_string);
 
 			// Verify the HMAC Signature on the request against our ice_pwd
@@ -114,15 +118,12 @@ export class Listener extends Conn {
 					hash: 'SHA-1'
 				}, true, ['sign', 'verify']);
 			}
-			if (!await test.verify(this.#cred)) continue;
+			if (!await integrity.verify(this.#cred)) continue;
 
 			const candidate = xpeer ? {
-				address: xpeer.ip instanceof Uint8Array ? xpeer.ip.join('.') : Array.from(
-					xpeer.ip,
-					v => v.toString(16)
-				).join(':'),
+				address: String(xpeer.ip),
 				port: xpeer.port,
-				priority,
+				priority: priority.value,
 				type: 'relay',
 				usernameFragment: rufrag,
 			} : false;
@@ -132,6 +133,7 @@ export class Listener extends Conn {
 
 			if (!candidate) continue;
 			if (BigInt(this.cert) != lid) continue;
+			if (typeof rid != 'bigint') continue;
 			if (this.answered.has(rid)) {
 				// MAYBE: Possibly add the candidate as an additional candidate? If we don't already have this candidate? Or would that be a bad?
 				continue;
@@ -141,13 +143,14 @@ export class Listener extends Conn {
 			const answer = new Conn(rid, {
 				...this.config,
 				...this.#adjustment,
+				mung: true, // Munging is required when answering connections, even if munging was not required while connecting to the relay server.
 				ice_pwd: this.ice_pwd,
 				setup: 'active',
 			});
 			this.answered.set(rid, answer);
 
 			// Start a timer that closes the answer if it doesn't connect
-			const timer = setTimeout(() => answer.close(), this.timeout);
+			const timer = setTimeout(() => { console.log('timing out', answer); answer.close(); }, this.timeout);
 			answer.addEventListener('connectionstatechange', () => {
 				if (answer.connectionState == 'connected') {
 					clearTimeout(timer);
