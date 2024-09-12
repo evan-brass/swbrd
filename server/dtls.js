@@ -9,7 +9,6 @@ import {
 import { CookieAckChunk, CookieChunk, DataChunk, HeartbeatAckChunk, HeartbeatChunk, InitAckChunk, InitChunk, Param, SackChunk, Sctp } from '../src/sctp.js';
 import { sock, send } from './sock.js';
 import { Data } from '../src/turn.js';
-import { Ip6 } from '../src/ipaddr.js';
 
 // Load the certificate and private key
 const evp_sha256 = check_err(openssl.EVP_sha256());
@@ -54,8 +53,7 @@ const timeout = new Deno.UnsafeCallback(
 		console.log('timer cb', ssl, timer_us);
 	}
 )
-
-export const connections = new Map(); // ids -> dtls;
+// TODO: Add a cleanup that removes peers that we haven't received data from in a while
 
 export class Dtls {
 	static connections = new Map(); // String(Dtls.key(Ip6, port, channel)) -> dtls
@@ -74,7 +72,7 @@ export class Dtls {
 		return this.peers.get(ufrag);
 	}
 
-	ids;
+	pid;
 	sctp_state = crypto.getRandomValues(new Uint32Array(2)); // [vtag, tsn]
 
 	#in;
@@ -96,7 +94,7 @@ export class Dtls {
 	}
 	delete() {
 		Dtls.connections.delete(Dtls.key(this.ip, this.port, this.channel));
-		if (this.ids) Dtls.peers.delete(this.ids);
+		if (this.pid) Dtls.peers.delete(this.pid);
 		openssl.SSL_free(this.#ssl);
 		this.#ssl = null;
 	}
@@ -206,15 +204,15 @@ export class Dtls {
 				result = openssl.SSL_get_error(this.#ssl, result);
 			}
 			else {
-				if (!this.ids) {
+				if (!this.pid) {
 					const fingerprint = new Uint8Array(32);
 					const cert = openssl.SSL_get0_peer_certificate(this.#ssl);
 					if (!cert) return; // TODO: Close the connection
 					check_err(openssl.X509_digest(cert, evp_sha256, fingerprint, null));
-					this.ids = to_string(from_bytes(fingerprint));
-					const existing = Dtls.peers.get(this.ids);
+					this.pid = to_string(from_bytes(fingerprint));
+					const existing = Dtls.peers.get(this.pid);
 					if (existing) existing.delete();
-					Dtls.peers.set(this.ids, this);
+					Dtls.peers.set(this.pid, this);
 				}
 				result = openssl.SSL_read(this.#ssl, buff, buff.byteLength);
 				if (result > 0) this.#handle_sctp(buff.subarray(0, result));

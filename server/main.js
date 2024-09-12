@@ -35,7 +35,6 @@ const ice_key = await crypto.subtle.importKey('raw', encoder.encode(default_ice_
 }, true, ['sign', 'verify']);
 
 const our_lufrag = to_string(id);
-// const contexts = new Map();
 
 console.log('listening on', sock.addr);
 for await (const [datagram, sender] of sock) {
@@ -47,8 +46,6 @@ for await (const [datagram, sender] of sock) {
 	// 4 different representations of the same information
 	const ip = parse_ipaddr(sender.hostname);
 	const mapped = ip.mapped();
-	// const conn_id = new Uint16Array([sender.port, ...mapped]);
-	// const key = String.fromCharCode(...new Uint8Array(conn_id.buffer));
 
 	let res, receiver = {
 		transport: 'udp',
