@@ -46,15 +46,6 @@ const verifier = new Deno.UnsafeCallback(
 openssl.SSL_CTX_set_verify(ctx, 0b11, verifier.pointer);
 openssl.SSL_CTX_set_verify_depth(ctx, 0);
 
-// Handle Timeouts:
-const timeout = new Deno.UnsafeCallback(
-	{parameters: ['pointer', 'u32'], result: 'i32'},
-	function timeout(ssl, timer_us) {
-		console.log('timer cb', ssl, timer_us);
-	}
-)
-// TODO: Add a cleanup that removes peers that we haven't received data from in a while
-
 export class Dtls {
 	static connections = new Map(); // String(Dtls.key(Ip6, port, channel)) -> dtls
 	static peers = new Map(); // pid -> dtls
@@ -62,6 +53,8 @@ export class Dtls {
 	ip;
 	port;
 	channel;
+
+	recv_stamp = performance.now();
 
 	static key(ip, port, channel) { return `[${ip}]:${port}:${channel}`; }
 	static get(ip, port, channel) {
@@ -88,6 +81,7 @@ export class Dtls {
 		this.#ssl = openssl.SSL_new(ctx);
 		if (!(this.#in && this.#out && this.#ssl)) throw new Error("");
 		openssl.SSL_set_accept_state(this.#ssl);
+		// TODO: Can we create just 2 BIOs and then share them among all of the DTLS Contexts?
 		openssl.SSL_set_bio(this.#ssl, this.#in, this.#out);
 
 		Dtls.connections.set(Dtls.key(this.ip, this.port, this.channel), this);
@@ -132,6 +126,7 @@ export class Dtls {
 		}
 	}
 	#handle_sctp(buffer) {
+		this.recv_stamp = performance.now();
 		if (buffer.byteLength >= Sctp.minByteLength) {
 			const sctp = new Sctp(buffer);
 			const resp = new Sctp(send, {
@@ -196,53 +191,73 @@ export class Dtls {
 	}
 	async handle() {
 		const buff = new Uint8Array(1200);
-		while (1) {
-			let result;
-			if (!openssl.SSL_is_init_finished(this.#ssl)) {
-				result = openssl.SSL_accept(this.#ssl);
-				if (result > 0) continue;
-				result = openssl.SSL_get_error(this.#ssl, result);
-			}
-			else {
-				if (!this.pid) {
-					const fingerprint = new Uint8Array(32);
-					const cert = openssl.SSL_get0_peer_certificate(this.#ssl);
-					if (!cert) return; // TODO: Close the connection
-					check_err(openssl.X509_digest(cert, evp_sha256, fingerprint, null));
-					this.pid = to_string(from_bytes(fingerprint));
-					const existing = Dtls.peers.get(this.pid);
-					if (existing) existing.delete();
-					Dtls.peers.set(this.pid, this);
+		try {
+			while (1) {
+				if (!this.#ssl) break;
+	
+				let result;
+				if (!openssl.SSL_is_init_finished(this.#ssl)) {
+					result = openssl.SSL_accept(this.#ssl);
+					if (result > 0) continue;
+					result = openssl.SSL_get_error(this.#ssl, result);
 				}
-				result = openssl.SSL_read(this.#ssl, buff, buff.byteLength);
-				if (result > 0) this.#handle_sctp(buff.subarray(0, result));
-			}
-
-			while (openssl.BIO_ctrl(this.#out, BIO_CTRL_PENDING, 0, null) > 0) {
-				const n = openssl.BIO_read(this.#out, buff, buff.byteLength);
-				if (n <= 0) throw new Error("");
-				
-				const msg = new Data(send, {
-					setByteLength: Data.minByteLength + n,
-					channel: this.channel,
-					data: buff.subarray(0, n)
-				});
-
-				try {
-					await sock.send(new Uint8Array(send, 0, msg.byteLength), {
-						transport: 'udp',
-						hostname: String(this.ip),
-						port: this.port
+				else {
+					if (!this.pid) {
+						const fingerprint = new Uint8Array(32);
+						const cert = openssl.SSL_get0_peer_certificate(this.#ssl);
+						if (!cert) return; // TODO: Close the connection
+						check_err(openssl.X509_digest(cert, evp_sha256, fingerprint, null));
+						this.pid = to_string(from_bytes(fingerprint));
+						const existing = Dtls.peers.get(this.pid);
+						if (existing) existing.delete();
+						Dtls.peers.set(this.pid, this);
+					}
+					result = openssl.SSL_read(this.#ssl, buff, buff.byteLength);
+					if (result > 0) this.#handle_sctp(buff.subarray(0, result));
+				}
+	
+				while (openssl.BIO_ctrl(this.#out, BIO_CTRL_PENDING, 0, null) > 0) {
+					const n = openssl.BIO_read(this.#out, buff, buff.byteLength);
+					if (n <= 0) throw new Error("");
+					
+					const msg = new Data(send, {
+						setByteLength: Data.minByteLength + n,
+						channel: this.channel,
+						data: buff.subarray(0, n)
 					});
-				} catch (e) {
-					console.error(e);
+	
+					try {
+						await sock.send(new Uint8Array(send, 0, msg.byteLength), {
+							transport: 'udp',
+							hostname: String(this.ip),
+							port: this.port
+						});
+					} catch (e) {
+						console.error(e);
+					}
 				}
+	
+				const want = openssl.SSL_want(this.#ssl);
+				if (want == SSL_READING || want == SSL_NOTHING) break;
+				check_err(openssl.SSL_get_error(this.#ssl, result));
+				return;
 			}
-
-			const want = openssl.SSL_want(this.#ssl);
-			if (want == SSL_READING || want == SSL_NOTHING) break;
-			check_err(openssl.SSL_get_error(this.#ssl, result));
-			return;
+		} catch (e) {
+			console.warn(e);
+			this.delete();
 		}
 	}
 }
+
+// Timeout DTLS connections
+const check_freq = 30 * 1000; // Every 30 sec
+const timeout = 3 * 60 * 1000; // 3 min
+setInterval(() => {
+	console.log('Checking timeouts for', Dtls.connections.size, 'contexts,', Dtls.peers.size, 'of those are peers');
+	const now = performance.now();
+	for (const dtls of Dtls.connections.values()) {
+		if ((now - dtls.recv_stamp) < timeout) continue;
+		console.log('Peer timed out', Dtls.key(dtls.ip, dtls.port, dtls.channel), dtls.pid);
+		dtls.delete();
+	}
+}, check_freq);
