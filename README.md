@@ -70,7 +70,7 @@ const conn = example.connect();
 // conn is just a normal Conn: you can do whatever you want with it:
 conn.addEventListener('datachannel', console.log);
 const _data = conn.createDataChannel('Hello World');
-const _transVid = a.addTransceiver('video');
+const _transVid = conn.addTransceiver('video');
 ```
 
 As with Conn - and RTCPeerConnection - the connection could fail meaning its `.connectionState` could go from `new` -> `connecting` -> `failed` without ever reaching `connected`.  If you are passing ICE candidates manually, then this could occur if no network path can be found between the two sides of the connection - you probably needed a TURN server.  When using Addr's, this could happen when the peer is offline or not listening to that address anymore.
