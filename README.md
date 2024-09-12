@@ -112,3 +112,27 @@ The overarching goal for the relay is to handle everything statelessly, which it
 I designed this server this way so that it would be cheap and easy for me to run a free instance, but you could run your own instance and lock it down to only give out addresses to certain peers, or to run over TCP/TLS instead of UDP, etc.  I've designed the Addr format in what I believe will be a way to support alternative relay servers, but if it doesn't fit the bill, then you could subclass Addr and use search parameters for you configuration.
 
 You can spin up the server via `deno task start` and it probably won't work, because I suck at writing cross platform code.  If it did work, then you can Listen through it using `turn:ucCm6JK3s22XuCRiTZVFpWajUq0tIpB7lDn1Sv8dRv3@localhost`.
+
+# What's next?
+My goal with this project was to build WebRTC addresses, so that I could then more easily implement overlay networks such as Kademlia.  Someday I hope this repo contains a reference Kademlia implementation that incorporates other ideas like cross-origin, embeddable, overlay networks that aggregate WebRTC connectsion accross multiple websites / browser tabs to present a single peer in the network reducing churn.  If we get there, then my next goal would be adding kademlia as an address format.
+```javascript
+import { Addr } from './src/addr.js';
+
+const peer = new Addr('kad:3AlTKotxyX1LxNjDkzKOmWFlWJREMKo4DT2aPy9kA8t').connect();
+```
+
+And then on top of that I want to extend the addresses to allow connecting to a datachannel at a peer, so that you can specify which service you want from that peer:
+```javascript
+const channel = new Addr('kad:3AlTKotxyX1LxNjDkzKOmWFlWJREMKo4DT2aPy9kA8t/torrent');
+const channel = new Addr('kad:D70BLWaqxKfdWUjQR4J6xTY4Ys9jQMzbn7ZZKep42a0/chess');
+const channel = new Addr('kad:D70BLWaqxKfdWUjQR4J6xTY4Ys9jQMzbn7ZZKep42a0/webvrchat');
+
+
+import { network_client } from 'x';
+
+const torrent_server = await network_client.install('torrent');
+
+torrent_server.seed(new Blob('Hello World'), {filename: 'cool'}); // I don't really know how torrenting works...
+```
+
+I've got a lot of ideas here that will likely not come to fruition.  And heck I wouldn't care about any of this if we just had a sane, non-interactive, P2P network API in the browser.
