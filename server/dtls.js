@@ -10,6 +10,10 @@ import { CookieAckChunk, CookieChunk, DataChunk, HeartbeatAckChunk, HeartbeatChu
 import { sock, send } from './sock.js';
 import { Data } from '../src/turn.js';
 
+// Timeout parameters
+const check_freq = 30 * 1000; // Every 30 sec
+const timeout = 3 * 60 * 1000; // 3 min
+
 // Load the certificate and private key
 const evp_sha256 = check_err(openssl.EVP_sha256());
 let pkey, cert, id; {
@@ -37,6 +41,10 @@ let ctx; {
 	check_err(openssl.SSL_CTX_check_private_key(ctx));
 }
 
+// Create a pair of datagram BIOs for the SSL contexts to share
+const bio_in = openssl.BIO_new(openssl.BIO_s_dgram_mem());
+const bio_out = openssl.BIO_new(openssl.BIO_s_dgram_mem());
+
 // TODO: Read the peer certificate hash it, and store a mapping to its
 // export const connected = new Map(); // id -> dtls context
 const verifier = new Deno.UnsafeCallback(
@@ -54,7 +62,8 @@ export class Dtls {
 	port;
 	channel;
 
-	recv_stamp = performance.now();
+	// Start connections with only half the timeout remaining.
+	recv_stamp = performance.now() - 0.5 * timeout;
 
 	static key(ip, port, channel) { return `[${ip}]:${port}:${channel}`; }
 	static get(ip, port, channel) {
@@ -68,21 +77,20 @@ export class Dtls {
 	pid;
 	sctp_state = crypto.getRandomValues(new Uint32Array(2)); // [vtag, tsn]
 
-	#in;
-	#out;
 	#ssl;
 	constructor(ip, port, channel) {
 		this.ip = ip;
 		this.port = port;
 		this.channel = channel;
 
-		this.#in = openssl.BIO_new(openssl.BIO_s_mem());
-		this.#out = openssl.BIO_new(openssl.BIO_s_mem());
 		this.#ssl = openssl.SSL_new(ctx);
-		if (!(this.#in && this.#out && this.#ssl)) throw new Error("");
+		if (!this.#ssl) throw new Error("");
+
+		openssl.BIO_up_ref(bio_in);
+		openssl.BIO_up_ref(bio_out);
+		openssl.SSL_set_bio(this.#ssl, bio_in, bio_out);
 		openssl.SSL_set_accept_state(this.#ssl);
 		// TODO: Can we create just 2 BIOs and then share them among all of the DTLS Contexts?
-		openssl.SSL_set_bio(this.#ssl, this.#in, this.#out);
 
 		Dtls.connections.set(Dtls.key(this.ip, this.port, this.channel), this);
 	}
@@ -94,7 +102,7 @@ export class Dtls {
 	}
 	push(buffer) {
 		if (!this.#ssl) return;
-		check_err(openssl.BIO_write(this.#in, buffer, buffer.byteLength));
+		check_err(openssl.BIO_write(bio_in, buffer, buffer.byteLength));
 	}
 	write(buffer) {
 		if (!this.#ssl) return;
@@ -142,8 +150,8 @@ export class Dtls {
 						gaps: 0,
 						dups: 0
 					});
-					const data = chunk.ppid == 51 ? decoder_lossy.decode(chunk.data) : Array.from(chunk.data);
-					console.log('SCTP data', chunk.stream, chunk.seq, chunk.ppid, data);
+					// const data = chunk.ppid == 51 ? decoder_lossy.decode(chunk.data) : Array.from(chunk.data);
+					// console.log('SCTP data', chunk.stream, chunk.seq, chunk.ppid, data);
 				}
 				else if (chunk instanceof InitChunk) {
 					const [vtag, init_tsn] = crypto.getRandomValues(new Uint32Array(2));
@@ -177,6 +185,9 @@ export class Dtls {
 						setByteLength: chunk.byteLength,
 						info: chunk.info
 					});
+				}
+				else if (chunk.type == 6) {
+					this.delete();
 				}
 				else {
 					console.log('Unhandled SCTP chunk type:', chunk.type);
@@ -216,8 +227,8 @@ export class Dtls {
 					if (result > 0) this.#handle_sctp(buff.subarray(0, result));
 				}
 	
-				while (openssl.BIO_ctrl(this.#out, BIO_CTRL_PENDING, 0, null) > 0) {
-					const n = openssl.BIO_read(this.#out, buff, buff.byteLength);
+				while (openssl.BIO_ctrl(bio_out, BIO_CTRL_PENDING, 0, null) > 0) {
+					const n = openssl.BIO_read(bio_out, buff, buff.byteLength);
 					if (n <= 0) throw new Error("");
 					
 					const msg = new Data(send, {
@@ -250,9 +261,8 @@ export class Dtls {
 }
 
 // Timeout DTLS connections
-const check_freq = 30 * 1000; // Every 30 sec
-const timeout = 3 * 60 * 1000; // 3 min
 setInterval(() => {
+	// TODO: There seem to be a lot of dtls contexts that are not becoming peers.  Is this something to do with ice restarts creating DTLS contexts that only ever receive bad application data messages, and never any DTLS handshake messages?
 	console.log('Checking timeouts for', Dtls.connections.size, 'contexts,', Dtls.peers.size, 'of those are peers');
 	const now = performance.now();
 	for (const dtls of Dtls.connections.values()) {

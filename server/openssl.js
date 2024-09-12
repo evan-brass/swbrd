@@ -54,6 +54,7 @@ export const {symbols: openssl} = Deno.dlopen(libpath, {
 	BIO_read: { parameters: ['pointer', 'buffer', 'i32'], result: 'i32' },
 	BIO_write: { parameters: ['pointer', 'buffer', 'i32'], result: 'i32' },
 	BIO_ctrl: { parameters: ['pointer', 'i32', 'i64', 'pointer'], result: 'i64' },
+	BIO_up_ref: { parameters: ['pointer'], result: 'i32' },
 	// TODO: Why is make_bio_pair not defined?
 	// BIO_make_bio_pair: { parameters: ['pointer', 'pointer'], result: 'i32' },
 	// BIO_new_bio_pair: { parameters: ['pointer', 'isize', 'pointer', 'isize'], result: 'pointer' },
