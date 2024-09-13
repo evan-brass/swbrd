@@ -8,4 +8,4 @@ ADD . .
 EXPOSE 3478/udp
 VOLUME /var/swbrd
 
-CMD deno task start
+CMD ["task", "start"]
