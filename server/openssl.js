@@ -10,6 +10,7 @@ export const {symbols: openssl} = Deno.dlopen(libpath, {
 	DTLS_server_method: { parameters: [], result: 'pointer' },
 	DTLS_client_method: { parameters: [], result: 'pointer' },
 	DTLS_set_timer_cb: { parameters: ['pointer', 'function'], result: 'pointer' },
+	DTLSv1_listen: { parameters: ['pointer', 'pointer'], result: 'i32' },
 
 	EVP_sha256: { parameters: [], result: 'pointer' },
 
@@ -55,6 +56,13 @@ export const {symbols: openssl} = Deno.dlopen(libpath, {
 	BIO_write: { parameters: ['pointer', 'buffer', 'i32'], result: 'i32' },
 	BIO_ctrl: { parameters: ['pointer', 'i32', 'i64', 'pointer'], result: 'i64' },
 	BIO_up_ref: { parameters: ['pointer'], result: 'i32' },
+	// BIO_dgram_set_peer: { parameters: ['pointer', 'pointer'], result: 'i32' },
+
+	BIO_ADDR_new: { parameters: [], result: 'pointer' },
+	BIO_ADDR_rawmake: { parameters: ['pointer', 'i32', 'buffer', 'isize', 'u16'], result: 'i32' },
+	BIO_ADDR_clear: { parameters: ['pointer'], result: 'void' },
+
+
 	// TODO: Why is make_bio_pair not defined?
 	// BIO_make_bio_pair: { parameters: ['pointer', 'pointer'], result: 'i32' },
 	// BIO_new_bio_pair: { parameters: ['pointer', 'isize', 'pointer', 'isize'], result: 'pointer' },
@@ -81,12 +89,15 @@ export const {symbols: openssl} = Deno.dlopen(libpath, {
 	], result: 'i32' },
 });
 export const BIO_CTRL_PENDING = 10;
+export const BIO_CTRL_DGRAM_SET_PEER = 44;
 
 export const SSL_NOTHING = 1;
 export const SSL_READING = 3;
 
 export const SSL_VERIFY_PEER = 0x01;
 export const SSL_VERIFY_FAIL_IF_NO_PEER_CERT = 0x02;
+
+export const AF_INET6 = 10;
 
 console.log('openssl', openssl.OPENSSL_version_major(), openssl.OPENSSL_version_minor(), openssl.OPENSSL_version_patch());
 

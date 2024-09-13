@@ -4,7 +4,9 @@ import {
 	openssl,
 	check_err,
 	SSL_NOTHING, SSL_READING,
-	BIO_CTRL_PENDING
+	BIO_CTRL_PENDING,
+	BIO_CTRL_DGRAM_SET_PEER,
+	AF_INET6,
 } from './openssl.js';
 import { CookieAckChunk, CookieChunk, DataChunk, HeartbeatAckChunk, HeartbeatChunk, InitAckChunk, InitChunk, Param, SackChunk, Sctp } from '../src/sctp.js';
 import { sock, send } from './sock.js';
@@ -44,6 +46,7 @@ let ctx; {
 // Create a pair of datagram BIOs for the SSL contexts to share
 const bio_in = openssl.BIO_new(openssl.BIO_s_dgram_mem());
 const bio_out = openssl.BIO_new(openssl.BIO_s_dgram_mem());
+const bio_addr = openssl.BIO_ADDR_new();
 
 // TODO: Read the peer certificate hash it, and store a mapping to its
 // export const connected = new Map(); // id -> dtls context
@@ -64,6 +67,9 @@ export class Dtls {
 
 	// Start connections with only half the timeout remaining.
 	recv_stamp = performance.now() - 0.5 * timeout;
+
+	// We really only need the address to be set on the in_bio when we're setting/checking the DTLS HelloVerify cookie
+	need_addr = true;
 
 	static key(ip, port, channel) { return `[${ip}]:${port}:${channel}`; }
 	static get(ip, port, channel) {
@@ -90,7 +96,6 @@ export class Dtls {
 		openssl.BIO_up_ref(bio_out);
 		openssl.SSL_set_bio(this.#ssl, bio_in, bio_out);
 		openssl.SSL_set_accept_state(this.#ssl);
-		// TODO: Can we create just 2 BIOs and then share them among all of the DTLS Contexts?
 
 		Dtls.connections.set(Dtls.key(this.ip, this.port, this.channel), this);
 	}
@@ -102,6 +107,18 @@ export class Dtls {
 	}
 	push(buffer) {
 		if (!this.#ssl) return;
+		// if (this.need_addr) {
+		// 	openssl.BIO_ADDR_clear(bio_addr);
+		// 	check_err(openssl.BIO_ADDR_rawmake(
+		// 		bio_addr,
+		// 		AF_INET6,
+		// 		this.ip,
+		// 		this.ip.byteLength,
+		// 		this.port
+		// 	));
+		// 	// check_err(openssl.BIO_ctrl(bio_in, BIO_CTRL_DGRAM_SET_PEER, 0, bio_addr));
+		// 	openssl.BIO_ctrl(bio_in, BIO_CTRL_DGRAM_SET_PEER, 0, bio_addr);
+		// }
 		check_err(openssl.BIO_write(bio_in, buffer, buffer.byteLength));
 	}
 	write(buffer) {
@@ -207,7 +224,14 @@ export class Dtls {
 				if (!this.#ssl) break;
 	
 				let result;
-				if (!openssl.SSL_is_init_finished(this.#ssl)) {
+				/*if (this.need_addr) {
+					result = openssl.DTLSv1_listen(this.#ssl, null);
+					if (result > 0) {
+						this.need_addr = false;
+						continue;
+					}
+				}
+				else*/ if (!openssl.SSL_is_init_finished(this.#ssl)) {
 					result = openssl.SSL_accept(this.#ssl);
 					if (result > 0) continue;
 					result = openssl.SSL_get_error(this.#ssl, result);
