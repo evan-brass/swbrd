@@ -389,13 +389,12 @@ for await (const [datagram, sender] of sock) {
 			});
 			await integrity.sign(turn_key);
 		}
-		// Fingerprint the packet if needed
-		if (in_fingerprint) {
-			const print = res.append(FingerprintAttr, {
-				type: 'fingerprint'
-			});
-			print.actual = print.expected();
-		}
+		// Fingerprint the packet (Firefox, maybe needs this?)
+		const print = res.append(FingerprintAttr, {
+			type: 'fingerprint'
+		});
+		if (!print) continue;
+		print.actual = print.expected();
 
 		try { await sock.send(new Uint8Array(res.buffer, res.byteOffset, res.byteLength), receiver); }
 		catch (e) { console.error(receiver, e); }
