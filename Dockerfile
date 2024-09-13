@@ -6,6 +6,6 @@ WORKDIR /swbrd
 ADD . .
 
 EXPOSE 3478/udp
-VOLUME /swbrd/cert.pem
+VOLUME /var/swbrd
 
 CMD deno task start

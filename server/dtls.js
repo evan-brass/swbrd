@@ -19,7 +19,7 @@ const timeout = 3 * 60 * 1000; // 3 min
 // Load the certificate and private key
 const evp_sha256 = check_err(openssl.EVP_sha256());
 let pkey, cert, id; {
-	const pem = Deno.readFileSync('./cert.pem');
+	const pem = Deno.readFileSync('/var/swbrd/cert.pem');
 	const bio = check_err(openssl.BIO_new_mem_buf(pem, pem.byteLength));
 	pkey = check_err(openssl.PEM_read_bio_PrivateKey(bio, null, null, null));
 	cert = check_err(openssl.PEM_read_bio_X509(bio, null, null, null));
