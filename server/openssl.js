@@ -1,7 +1,6 @@
 import { decoder_lossy } from "../src/util.js";
 
-const libpath = (Deno.build.os == 'darwin') ? '/usr/local/lib/libssl.3.dylib' : '/usr/lib/libssl.so.3';
-export const {symbols: openssl} = Deno.dlopen(libpath, {
+export const {symbols: openssl} = Deno.dlopen('/lib/libssl.so.3', {
 	OPENSSL_version_major: { parameters: [], result: 'u32' },
 	OPENSSL_version_minor: { parameters: [], result: 'u32' },
 	OPENSSL_version_patch: { parameters: [], result: 'u32' },

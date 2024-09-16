@@ -6,6 +6,7 @@
 		"useTabs": true
 	},
 	"tasks": {
-		"start": "deno run --unstable-ffi --unstable-net -A server/main.js"
+		"start": "deno run --unstable-ffi --unstable-net -A server/main.js",
+		"dev": "docker run -it -v$(pwd)/cert.pem:/var/swbrd/cert.pem:ro -p127.0.0.1:3478:3478/udp $(docker build --platform linux/amd64 -q .)"
 	}
 }
