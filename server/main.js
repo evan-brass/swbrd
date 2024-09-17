@@ -18,11 +18,10 @@ import { default_turn_username, default_turn_credential, default_ice_pwd } from 
 import { encoder } from "../src/util.js";
 import { id, Dtls } from './dtls.js';
 import { to_string } from '../src/id.js';
-import { sock, send } from './sock.js';
+import { sock, send, broadcast } from './sock.js';
 
 const realm = 'none';
 const nonce = 'none';
-const broadcast = new Ip6(0, 0, 0, 0, 0, 0xffff, 0xffff, 0xffff);
 
 // TODO: Replace async crypto sign with sync mbedtls hmac implementation:
 const turn_key = await crypto.subtle.importKey('raw', md5(`${default_turn_username}:${realm}:${default_turn_credential}`), {
@@ -123,6 +122,7 @@ for await (const [datagram, sender] of sock) {
 		}
 		else if (req.data.byteLength > 1 && 20 <= req.data[0] && req.data[0] < 64) {
 			const dtls = Dtls.get(mapped, sender.port, req.channel);
+			dtls.channel = req.channel;
 			dtls.push(req.data);
 			await dtls.handle();
 		}
@@ -192,6 +192,12 @@ for await (const [datagram, sender] of sock) {
 
 					res = false;
 				}
+			}
+			else if (data.value.byteLength > 1 && 20 <= data.value[0] && data.value[0] < 64) {
+				const dtls = Dtls.get(mapped, sender.port, 0x4000);
+				dtls.sport = port;
+				dtls.push(data.value);
+				await dtls.handle();
 			}
 			break handlers;
 		}

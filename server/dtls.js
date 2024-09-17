@@ -9,8 +9,9 @@ import {
 	AF_INET6,
 } from './openssl.js';
 import { CookieAckChunk, CookieChunk, DataChunk, HeartbeatAckChunk, HeartbeatChunk, InitAckChunk, InitChunk, Param, SackChunk, Sctp } from '../src/sctp.js';
-import { sock, send } from './sock.js';
+import { sock, send, broadcast } from './sock.js';
 import { Data } from '../src/turn.js';
+import { Addr6, MAGIC_COOKIE, Stun, Attr } from '../src/stun.js';
 
 // Timeout parameters
 const check_freq = 30 * 1000; // Every 30 sec
@@ -63,6 +64,7 @@ export class Dtls {
 
 	ip;
 	port;
+	sport;
 	channel;
 
 	// Start connections with only half the timeout remaining.
@@ -71,10 +73,10 @@ export class Dtls {
 	// We really only need the address to be set on the in_bio when we're setting/checking the DTLS HelloVerify cookie
 	need_addr = true;
 
-	static key(ip, port, channel) { return `[${ip}]:${port}:${channel}`; }
-	static get(ip, port, channel) {
-		const key = this.key(ip, port, channel);
-		return this.connections.get(key) ?? new this(ip, port, channel);
+	static key(ip, port) { return `[${ip}]:${port}`; }
+	static get(ip, port) {
+		const key = this.key(ip, port);
+		return this.connections.get(key) ?? new this(ip, port);
 	}
 	static get_ufrag(ufrag) {
 		return this.peers.get(ufrag);
@@ -84,10 +86,9 @@ export class Dtls {
 	sctp_state = crypto.getRandomValues(new Uint32Array(2)); // [vtag, tsn]
 
 	#ssl;
-	constructor(ip, port, channel) {
+	constructor(ip, port) {
 		this.ip = ip;
 		this.port = port;
-		this.channel = channel;
 
 		this.#ssl = openssl.SSL_new(ctx);
 		if (!this.#ssl) throw new Error("");
@@ -97,10 +98,10 @@ export class Dtls {
 		openssl.SSL_set_bio(this.#ssl, bio_in, bio_out);
 		openssl.SSL_set_accept_state(this.#ssl);
 
-		Dtls.connections.set(Dtls.key(this.ip, this.port, this.channel), this);
+		Dtls.connections.set(Dtls.key(this.ip, this.port), this);
 	}
 	delete() {
-		Dtls.connections.delete(Dtls.key(this.ip, this.port, this.channel));
+		Dtls.connections.delete(Dtls.key(this.ip, this.port));
 		if (this.pid) Dtls.peers.delete(this.pid);
 		openssl.SSL_free(this.#ssl);
 		this.#ssl = null;
@@ -254,12 +255,34 @@ export class Dtls {
 				while (openssl.BIO_ctrl(bio_out, BIO_CTRL_PENDING, 0, null) > 0) {
 					const n = openssl.BIO_read(bio_out, buff, buff.byteLength);
 					if (n <= 0) throw new Error("");
-					
-					const msg = new Data(send, {
-						setByteLength: Data.minByteLength + n,
-						channel: this.channel,
-						data: buff.subarray(0, n)
-					});
+
+					let msg;
+					if (this.channel) {
+						msg = new Data(send, {
+							setByteLength: Data.minByteLength + n,
+							channel: this.channel,
+							data: buff.subarray(0, n)
+						});
+					}
+					else if (this.sport) {
+						msg = new Stun(send, {
+							class: 'indication',
+							method: 'data',
+							cookie: MAGIC_COOKIE,
+							length: 0
+						});
+						msg.append(Addr6, {
+							type: 'peer',
+							ip: broadcast,
+							port: this.sport
+						});
+						msg.append(Attr, {
+							type: 'data',
+							setByteLength: Attr.minByteLength + n,
+							value: buff.subarray(0, n)
+						});
+					}
+					else { return; }
 	
 					try {
 						await sock.send(new Uint8Array(send, 0, msg.byteLength), {
