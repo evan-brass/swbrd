@@ -1,37 +1,17 @@
 <!DOCTYPE html>
-<script type="_module">
+<script type="module">
 const a = new RTCPeerConnection();
 const b = new RTCPeerConnection();
 a.createDataChannel('');
 
-let offer, answer;
-// offer = await a.createOffer();
-// offer.sdp = offer.sdp
-// 	.replaceAll(/a=ice-ufrag:.+/img, 'a=ice-ufrag:a/test/ufrag')
-// 	.replaceAll(/a=ice-pwd:.+/img, 'a=ice-pwd:the/ice/password/constant');
-
-await a.setLocalDescription(offer);
+await a.setLocalDescription();
 while (a.iceGatheringState != 'complete') await new Promise(res => a.addEventListener('icegatheringstatechange', res, {once: true}));
 
 await b.setRemoteDescription(a.localDescription);
-
-answer = await b.createAnswer();
-answer.sdp = answer.sdp
-	.replaceAll(/a=ice-ufrag:.+/img, 'a=ice-ufrag:b/test/ufrag')
-	.replaceAll(/a=ice-pwd:.+/img, 'a=ice-pwd:the/ice/password/constant');
-await b.setLocalDescription(answer);
+await b.setLocalDescription();
 while (b.iceGatheringState != 'complete') await new Promise(res => b.addEventListener('icegatheringstatechange', res, {once: true}));
 
 await a.setRemoteDescription(b.localDescription);
-
-await new Promise(res => setTimeout(res, 3000));
-const [as, bs] = await Promise.all([a.getStats(), b.getStats()]);
-
-const a_local = Array.from(as.values()).filter(s => s.type == 'local-candidate');
-const b_local = Array.from(bs.values()).filter(s => s.type == 'local-candidate');
-
-console.log(a_local);
-console.log(b_local);
 </script>
 <script type="_module">
 import { Cert } from './src/cert.js';
@@ -84,7 +64,7 @@ const _transAud = b.addTransceiver('audio');
 //  - Option 3: Trigger an ICE restart to find new network paths between the peers
 a.restartIce();
 </script>
-<script type="module">
+<script type="_module">
 	import { Listener } from './src/listen.js';
 	import { Cert } from './src/cert.js';
 
