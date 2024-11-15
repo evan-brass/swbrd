@@ -8,6 +8,11 @@ import { is_firefox } from './util.js';
 export const defaults = {
 	iceServers: [{urls: 'turn:stun.evan-brass.net', username: 'guest', credential: 'password'}]
 };
+const overrides = {
+	bundlePolicy: 'max-bundle',
+	rtcpMuxPolicy: 'require',
+	peerIdentity: null,
+};
 
 export class Conn extends RTCPeerConnection {
 	#dc = this.createDataChannel('', {negotiated: true, id: 0});
@@ -35,9 +40,7 @@ export class Conn extends RTCPeerConnection {
 			...defaults,
 			...config,
 			certificates: cert ? [cert] : [],
-			bundlePolicy: 'max-bundle',
-			rtcpMuxPolicy: 'require',
-			peerIdentity: null,
+			...overrides
 		});
 		this.#pid = BigInt(peerid);
 		this.#cert = cert;
@@ -199,9 +202,7 @@ export class Conn extends RTCPeerConnection {
 		super.setConfiguration({
 			...defaults,
 			...config,
-			bundlePolicy: 'max-bundle',
-			rtcpMuxPolicy: 'require',
-			peerIdentity: null,
+			...overrides,
 			certificates: this.#cert instanceof RTCCertificate ? [this.#cert] : [],
 		});
 	}
