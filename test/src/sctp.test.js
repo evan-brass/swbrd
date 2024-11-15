@@ -1,5 +1,5 @@
 import { InitChunk, Sctp, Param } from "../../src/sctp.js";
-import { assertEquals, assertInstanceOf } from '@std/assert';
+import { assertEquals, assertInstanceOf } from 'jsr:@std/assert';
 
 const vector1 = new Uint8Array([
 	19, 136, 19, 136, 0, 0, 0, 0, 48, 209,

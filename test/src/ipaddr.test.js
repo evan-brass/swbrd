@@ -1,5 +1,5 @@
 import { parse_ipaddr, Ip4, Ip6 } from "../../src/ipaddr.js";
-import { assertEquals } from '@std/assert';
+import { assertEquals } from 'jsr:@std/assert';
 
 const loopback4 = new Ip4(127, 0, 0, 1);
 const loopback4m = new Ip6(0, 0, 0, 0, 0, 0xffff, 0x7f00, 1);
