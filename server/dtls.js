@@ -10,7 +10,6 @@ import {
 } from './openssl.js';
 import { CookieAckChunk, CookieChunk, DataChunk, HeartbeatAckChunk, HeartbeatChunk, InitAckChunk, InitChunk, Param, SackChunk, Sctp } from '../src/sctp.js';
 import { sock, send, broadcast } from './sock.js';
-import { Data } from '../src/turn.js';
 import { Addr6, MAGIC_COOKIE, Stun, Attr } from '../src/stun.js';
 
 // Timeout parameters
@@ -257,14 +256,7 @@ export class Dtls {
 					if (n <= 0) throw new Error("");
 
 					let msg;
-					if (this.channel) {
-						msg = new Data(send, {
-							setByteLength: Data.minByteLength + n,
-							channel: this.channel,
-							data: buff.subarray(0, n)
-						});
-					}
-					else if (this.sport) {
+					if (this.sport) {
 						msg = new Stun(send, {
 							class: 'indication',
 							method: 'data',

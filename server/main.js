@@ -1,7 +1,4 @@
 import {
-	Turn, Data,
-} from '../src/turn.js';
-import {
 	Stun,
 	Addr4, Addr6,
 	TextAttr,
@@ -13,25 +10,19 @@ import {
 } from '../src/stun.js';
 import { parse_ipaddr } from "../src/ipaddr.js";
 import { Ip4, Ip6 } from '../src/ipaddr.js';
-import { md5 } from '../src/md5.js';
-import { default_turn_username, default_turn_credential, default_ice_pwd } from "../src/const.js";
-import { encoder } from "../src/util.js";
 import { id, Dtls } from './dtls.js';
 import { to_string } from '../src/id.js';
 import { sock, send, broadcast } from './sock.js';
 
 const realm = 'none';
 const nonce = 'none';
+const [turn_key, ice_key] = await Promise.all([
+	[1, 92, 138, 151, 62, 164, 180, 169, 201, 69, 246, 144, 20, 43, 243, 173],
+	[116, 104, 101, 47, 105, 99, 101, 47, 112, 97, 115, 115, 119, 111, 114, 100, 47, 99, 111, 110, 115, 116, 97, 110, 116]
+].map(v => crypto.subtle.importKey('raw', new Uint8Array(v), {
+	name: 'HMAC', hash: 'SHA-1'
+}, true, ['sign', 'verify'])));
 
-// TODO: Replace async crypto sign with sync mbedtls hmac implementation:
-const turn_key = await crypto.subtle.importKey('raw', md5(`${default_turn_username}:${realm}:${default_turn_credential}`), {
-	name: 'HMAC',
-	hash: 'SHA-1'
-}, true, ['sign', 'verify']);
-const ice_key = await crypto.subtle.importKey('raw', encoder.encode(default_ice_pwd), {
-	name: 'HMAC',
-	hash: 'SHA-1'
-}, true, ['sign', 'verify']);
 
 const our_lufrag = to_string(id);
 
@@ -39,7 +30,7 @@ console.log('listening on', sock.addr);
 for await (const [datagram, sender] of sock) {
 	if (datagram.byteLength < Turn.minByteLength) continue;
 
-	const req = new Turn(datagram).specialize();
+	const req = new Stun(datagram);
 	if (req.byteLength > datagram.byteLength) continue;
 
 	// 4 different representations of the same information
@@ -109,28 +100,8 @@ for await (const [datagram, sender] of sock) {
 	}
 
 	handlers:
-	// TURN Channel Data messages
-	if (req instanceof Data) {
-		if (req.data.byteLength >= Stun.minByteLength && req.data[0] < 3) {
-			const stun = new Stun(req.data);
-			if (stun.class != 'request' || stun.method != 'binding') break handlers;
-			res = new Data(send, {
-				channel: req.channel,
-				length: 0,
-			});
-			await answer_ice(stun, res);
-		}
-		else if (req.data.byteLength > 1 && 20 <= req.data[0] && req.data[0] < 64) {
-			const dtls = Dtls.get(mapped, sender.port, req.channel);
-			dtls.channel = req.channel;
-			dtls.push(req.data);
-			await dtls.handle();
-		}
-		else { break handlers; }
-	}
-
 	// STUN Send Indication
-	else if (req instanceof Stun && req.class == 'indication' && req.method == 'send') {
+	if (req.class == 'indication' && req.method == 'send') {
 		const peer = req.attrs.find(a => a.type == 'peer');
 		const data = req.attrs.find(a => a.type == 'data');
 		if (!(peer instanceof Addr6) || !data) break handlers;
@@ -237,7 +208,7 @@ for await (const [datagram, sender] of sock) {
 	}
 
 	// Ignore everything that isn't a STUN request:
-	else if (!(req instanceof Stun) || req.class != 'request') {/* Drop */}
+	else if (req.class != 'request') {/* Drop */}
 
 	// TODO: Add unreliability so that we cannot be abused for amplification attacks
 
@@ -358,16 +329,17 @@ for await (const [datagram, sender] of sock) {
 
 	// TURN Channel Bind
 	else if (req.method == 'channel bind') {
-		const peer = req.attrs.find(a => a.type == 'peer');
-		if (!(peer instanceof Addr6)) break handlers;
-		if (!peer.ip.every((v, i) => broadcast[i] == v)) break handlers;
-
+		// We return a malformed error saying that the nonce is stale, but without including a new nonce.  This placates Chrome.
 		res = new Stun(send, {
 			length: 0,
 			method: req.method,
-			class: 'success',
+			class: 'error',
 			cookie: req.cookie,
 			txid: req.txid
+		});
+		res.append(ErrorCode, {
+			type: 'error',
+			code: 438
 		});
 	}
 
