@@ -6,7 +6,7 @@ import { to_fingerprint, to_string } from "./id.js";
 import { is_firefox } from './util.js';
 
 export const defaults = {
-	iceServers: [{urls: 'stun:global.stun.twilio.com'}]
+	iceServers: [{urls: 'turn:stun.evan-brass.net', username: 'guest', credential: 'password'}]
 };
 
 export class Conn extends RTCPeerConnection {
@@ -73,12 +73,12 @@ export class Conn extends RTCPeerConnection {
 			candidate.address || candidate.a,
 			candidate.port || candidate.p,
 			'typ', candidate.type || 'relay',
+			// WEIRD: Best as I can tell, Firefox has strange behavior around 'localhost' or '::1' candidate addresses
 			// WEIRD: For some reason, Firefox won't pair the candidate unless it has a related address and port (which are supposed to be optional?)
 			'raddr', '::', 'rport', '0',
 			// 'ufrag', candidate.usernameFragment,
 		].join(' ');
 		candidate.sdpMid ??= 'dc';
-		console.log('addIceCandidate', this.signalingState, candidate);
 		return await super.addIceCandidate(candidate);
 	}
 
@@ -159,8 +159,7 @@ export class Conn extends RTCPeerConnection {
 				 * when the answer contains new ICE credentials, it throws an error saying
 				 * it didn't ask for an ICE restart (even though it actually did).
 				 * 
-				 * If they fix this, then this can be removed.
-				 * ISSUE: https://bugzilla.mozilla.org/show_bug.cgi?id=1916752
+				 * ISSUE: https://bugzilla.mozilla.org/show_bug.cgi?id=1916752 (The don't intend to fix)
 				 */
 				if (mung && is_firefox) {
 					super.restartIce();
