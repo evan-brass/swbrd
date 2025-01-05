@@ -65,8 +65,11 @@ export class Conn extends RTCPeerConnection {
 		}
 
 		// Can't add ICE candidates while the remote description is null:
-		while (super.remoteDescription === null) await new Promise(res => this.addEventListener('signalingstatechange', res, {once: true}));
-		
+		// HACK: Firefox additionally seems to need the local description to be set before adding remote candidates. (Unless those candidates are set in the remote SDP).
+		while (super.remoteDescription === null || is_firefox && super.localDescription === null) {
+			await new Promise(res => this.addEventListener('signalingstatechange', res, {once: true}));
+		}
+
 		candidate.usernameFragment ??= /a=ice-ufrag:(.+)/i.exec(super.remoteDescription.sdp)[1];
 		candidate.candidate ??= 'candidate:' + [
 			candidate.foundation || 'foundation',

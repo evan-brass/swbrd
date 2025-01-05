@@ -74,18 +74,14 @@ export class Addr extends URL {
 		const {username, address, port} = this.authority;
 		const usernameFragment = decodeURIComponent(username);
 
-		// HACK: Current hypothesis is that Firefox ignores the first ICE candidate. That's probably not true, but I haven't root caused it yet.  For firefox we apply default candidates twice.
-		for (let i = is_firefox ? 2 : 1; i > 0; --i) {
-			if (/^udp:/i.test(this.protocol)) {
-				yield {address, port, usernameFragment};
-			}
-			else if (/^(turns?)(?:\+(tcp|udp))?:/i.test(this.protocol)) {
-				const [port] = crypto.getRandomValues(new Uint16Array(1));
-				yield {
-					address: '::ffff:255.255.255.255', port,
-					usernameFragment
-				};
-			}
+		if (/^udp:/i.test(this.protocol)) {
+			yield {address, port, usernameFragment};
+		}
+		else if (/^(turns?)(?:\+(tcp|udp))?:/i.test(this.protocol)) {
+			yield {
+				address: '::ffff:ffff:ffff', port: 3478,
+				usernameFragment
+			};
 		}
 	}
 	connect(config = null) {
@@ -96,10 +92,12 @@ export class Addr extends URL {
 
 		const {password: ice_pwd} = this.authority;
 		const setup = decodeURIComponent(this.searchParams.get('setup') ?? 'passive');
+		const ice_lite = this.searchParams.get('ice-lite');
 
 		// Create the connection
 		const ret = new Conn(this.id, {
 			ice_pwd, setup,
+			ice_lite,
 			...config,
 			...adjustment
 		});
