@@ -119,10 +119,10 @@ export class Addr extends URL {
 
 				// If the connection is closed, then the config adjustment is irrelevant
 				if (ret.connectionState == 'closed') return;
-				
+
 				// Remove the adjustment
 				ret.setConfiguration(config);
-				
+
 				// Restart ICE so that the configuration can take effect
 				ret.restartIce();
 			}

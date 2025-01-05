@@ -1,5 +1,83 @@
 <!DOCTYPE html>
 <script type="module">
+import { cert } from '/src/cert.js';
+import { Addr } from '/src/addr.js';
+
+const server = new Addr('turn:Zx9xDRd0OG9PxMGJhg3C8NDr65kn4kOivLoSNqXKCoW@stun.evan-brass.net?ice-lite');
+// const server = new Addr('turn:ucCm6JK3s22XuCRiTZVFpWajUq0tIpB7lDn1Sv8dRv3@localhost');
+const con = server.connect();
+['message', 'open', 'close'].forEach(e => con.dc.addEventListener(e, console.log));
+console.log(String(cert));
+
+con.addEventListener('connectionstatechange', ({target: {connectionState}}) => console.log(connectionState));
+con.addEventListener('iceconnectionstatechange', ({target: {iceConnectionState}}) => console.log('ice', iceConnectionState));
+con.addEventListener('icegatheringstatechange', ({target: {iceGatheringState}}) => console.log('ice', iceGatheringState));
+con.addEventListener('icecandidate', ({candidate}) => console.log('ice', candidate));
+con.addEventListener('signalingstatechange', ({target: {signalingState}}) => console.log(signalingState));
+[
+	'datachannel',
+	'icecandidateerror',
+	'negotiationneeded',
+	'track',
+].every(e => con.addEventListener(e, console.log));
+
+// const client = new Addr(`turn:${cert}@${server.authority.hostname}`);
+// client.connect({cert: null});
+</script>
+<script type="_module">
+import{base} from '/src/base.js';
+const charset = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+
+// const fingerprint = 'FF' + ':ff'.repeat(31);
+// const fingerprint = '6C:D3:E3:87:CB:75:68:5D:45:1A:C7:E7:08:30:C5:85:30:3A:DE:48:FB:5D:37:B1:20:5D:F0:85:D7:D0:59:EE';
+const fingerprint = 'C3:E4:A4:B9:DD:56:08:7E:A6:15:5E:F7:EB:0F:BD:24:EB:C4:D4:AD:92:33:91:31:F4:37:3E:C5:57:44:11:D5';
+const bytes = fingerprint.split(':').map(s => parseInt(s, 16));
+const id = BigInt('0x' + fingerprint.replace(/:/g, ''));
+
+let actual = "";
+let rem = 0;
+for (let i = 0; i < Math.ceil(256 / Math.log2(charset.length)); ++i) {
+	for (let i = 0; i < bytes.length; ++i) {
+		const v = bytes[i] + rem * 256;
+		bytes[i] = Math.trunc(v / charset.length);
+		if (bytes[i] >= 256) { debugger; }
+		rem = v % charset.length;
+	}
+	actual = charset[rem] + actual;
+	if (bytes.every(i => i == 0)) break;
+	rem = 0;
+}
+const expected = base(id, {pad_length: 43});
+console.log(actual, expected, actual == expected);
+</script>
+<script type="_module">
+import { Addr } from './src/addr.js';
+const server = new Addr()
+
+</script>
+<script type="_module">
+const config = {
+	iceTransportPolicy: 'relay',
+	iceServers: [{
+		urls: 'turn:localhost',
+		username: 'guest',
+		credential: 'password'
+	}]
+};
+
+const a = new RTCPeerConnection(config);
+const b = new RTCPeerConnection(config);
+a.createDataChannel('');
+
+await a.setLocalDescription();
+while (a.iceGatheringState != 'complete') await new Promise(res => a.addEventListener('icegatheringstatechange', res, {once: true}));
+
+await b.setRemoteDescription(a.localDescription);
+await b.setLocalDescription();
+
+await a.setRemoteDescription(b.localDescription);
+</script>
+<script type="_module">
 const a = new RTCPeerConnection();
 const b = new RTCPeerConnection();
 a.createDataChannel('');

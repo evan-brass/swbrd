@@ -28,7 +28,7 @@ export class Conn extends RTCPeerConnection {
 		if (!this.#cert) throw new Error("Connection failed: cert was overridden, but other parameters required politeness prior to generating the local answer. Perhaps you needed to also override the setup.");
 		return (BigInt(this.cert) < this.pid);
 	}
-	
+
 	constructor(peerid, {
 		setup, ice_lite, ice_pwd,
 		mung = true,
@@ -161,7 +161,7 @@ export class Conn extends RTCPeerConnection {
 				 * This causes Firefox to unknowingly trigger an ICE restart and then
 				 * when the answer contains new ICE credentials, it throws an error saying
 				 * it didn't ask for an ICE restart (even though it actually did).
-				 * 
+				 *
 				 * ISSUE: https://bugzilla.mozilla.org/show_bug.cgi?id=1916752 (The don't intend to fix)
 				 */
 				if (mung && is_firefox) {

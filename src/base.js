@@ -27,11 +27,11 @@ export function base(input, {
 	}
 	else {
 		input = BigInt(input);
-		while (input > 0n) {
+		do {
 			ret ??= '';
 			ret = charset.charAt(Number(input % BigInt(charset.length))) + ret;
 			input /= BigInt(charset.length);
-		}
+		} while (input > 0n);
 		if (pad_len) ret.padStart(pad_len, charset[0]);
 	}
 	return ret;
