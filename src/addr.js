@@ -2,8 +2,6 @@ import { algorithm, from_string } from "./id.js";
 import { Conn } from './conn.js';
 import { query_txt } from './dns.js';
 import { default_turn_credential, default_turn_username } from "./const.js";
-import { Ip6 } from "./ipaddr.js";
-import { is_firefox } from "./util.js";
 /**
  * Example Addr-esses:
  * const a = new Addr('udp:seed.evan-brass.net'); await a.resolve_id(); const conn = a.connect();
@@ -92,6 +90,16 @@ export class Addr extends URL {
 
 		const {password: ice_pwd} = this.authority;
 		const setup = decodeURIComponent(this.searchParams.get('setup') ?? 'passive');
+
+		/**
+		 * HACK: Needed because Firefox doesn't switch roles when it receives 487 switch-role errors
+		 * If 487 works, you shouldn't need to explicitly state that you're connecting to
+		 * an ice-lite server, and you shouldn't need to know the credentials of your clients.
+		 *
+		 * When responding to ICE requests you only need to know your own ICE credentials.
+		 *
+		 * ISSUE: https://bugzilla.mozilla.org/show_bug.cgi?id=1940001
+		 */
 		const ice_lite = this.searchParams.get('ice-lite');
 
 		// Create the connection

@@ -1,28 +1,28 @@
 <!DOCTYPE html>
 <script type="module">
-import { cert } from '/src/cert.js';
-import { Addr } from '/src/addr.js';
+	import { cert } from '/src/cert.js';
+	import { Addr } from '/src/addr.js';
 
-const server = new Addr('turn:Zx9xDRd0OG9PxMGJhg3C8NDr65kn4kOivLoSNqXKCoW@stun.evan-brass.net?ice-lite');
-// const server = new Addr('turn:ucCm6JK3s22XuCRiTZVFpWajUq0tIpB7lDn1Sv8dRv3@localhost');
-const con = server.connect();
-['message', 'open', 'close'].forEach(e => con.dc.addEventListener(e, console.log));
-console.log(String(cert));
+	const server = new Addr('turn:Zx9xDRd0OG9PxMGJhg3C8NDr65kn4kOivLoSNqXKCoW@stun.evan-brass.net?ice-lite');
+	// const server = new Addr('turn:ucCm6JK3s22XuCRiTZVFpWajUq0tIpB7lDn1Sv8dRv3@localhost?ice-lite');
+	const con = server.connect();
+	['message', 'open', 'close'].forEach(e => con.dc.addEventListener(e, console.log));
+	console.log(String(cert));
 
-con.addEventListener('connectionstatechange', ({target: {connectionState}}) => console.log(connectionState));
-con.addEventListener('iceconnectionstatechange', ({target: {iceConnectionState}}) => console.log('ice', iceConnectionState));
-con.addEventListener('icegatheringstatechange', ({target: {iceGatheringState}}) => console.log('ice', iceGatheringState));
-con.addEventListener('icecandidate', ({candidate}) => console.log('ice', candidate));
-con.addEventListener('signalingstatechange', ({target: {signalingState}}) => console.log(signalingState));
-[
-	'datachannel',
-	'icecandidateerror',
-	'negotiationneeded',
-	'track',
-].every(e => con.addEventListener(e, console.log));
+	con.addEventListener('connectionstatechange', ({ target: { connectionState } }) => console.log(connectionState));
+	con.addEventListener('iceconnectionstatechange', ({ target: { iceConnectionState } }) => console.log('ice', iceConnectionState));
+	con.addEventListener('icegatheringstatechange', ({ target: { iceGatheringState } }) => console.log('ice', iceGatheringState));
+	con.addEventListener('icecandidate', ({ candidate }) => console.log('ice', candidate));
+	con.addEventListener('signalingstatechange', ({ target: { signalingState } }) => console.log(signalingState));
+	[
+		'datachannel',
+		'icecandidateerror',
+		'negotiationneeded',
+		'track',
+	].every(e => con.addEventListener(e, console.log));
 
-// const client = new Addr(`turn:${cert}@${server.authority.hostname}`);
-// client.connect({cert: null});
+	// const client = new Addr(`turn:${cert}@${server.authority.hostname}`);
+	// client.connect({cert: null});
 </script>
 <script type="_module">
 import{base} from '/src/base.js';
@@ -87,8 +87,6 @@ while (a.iceGatheringState != 'complete') await new Promise(res => a.addEventLis
 
 await b.setRemoteDescription(a.localDescription);
 await b.setLocalDescription();
-while (b.iceGatheringState != 'complete') await new Promise(res => b.addEventListener('icegatheringstatechange', res, {once: true}));
-
 await a.setRemoteDescription(b.localDescription);
 </script>
 <script type="_module">
