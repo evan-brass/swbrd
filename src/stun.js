@@ -1,78 +1,103 @@
 import { Wire } from './wire.js';
 import { decoder_lossy, encoder } from "./util.js";
 import { crc32 } from "./crc32.js";
-import { Ip4, Ip6 } from "./ipaddr.js";
+import { Ip4, Ip6, parse_ipaddr } from "./ipaddr.js";
 
 export const MAGIC_COOKIE = 0x2112A442;
 
-const classes = new Map([
-	[0x0000, 'request'],
-	[0x0010, 'indication'],
-	[0x0100, 'success'],
-	[0x0110, 'error'],
-].map(a => [a, a.toReversed()]).flat(1));
-
-const methods = new Map([
-	[0x001, 'binding'],
-	[0x003, 'allocate'],
-	[0x004, 'refresh'],
-	[0x006, 'send'],
-	[0x007, 'data'],
-	[0x008, 'create permission'],
-	[0x009, 'channel bind'],
-].map(a => [a, a.toReversed()]).flat(1));
-
-const attrs = new Map([
-	// [0x0001, 'old mapped'],
-	[0x0006, 'username'],
-	[0x0008, 'integrity'],
-	[0x0009, 'error'],
-	// [0x000A, 'unknown'],
-	[0x000C, 'channel'],
-	[0x000D, 'lifetime'],
-	[0x0012, 'peer'],
-	[0x0013, 'data'],
-	[0x0014, 'realm'],
-	[0x0015, 'nonce'],
-	[0x0016, 'relayed'],
-	[0x0017, 'requested family'],
-	// [0x0018, 'even port'],
-	[0x0019, 'requested transport'],
-	// [0x001A, 'dont fragment'],
-	[0x0020, 'mapped'],
-	[0x0022, 'reservation'],
-	[0x0024, 'priority'],
-	[0x0025, 'use candidate'],
-	[0x8000, 'additional requested family'],
-	[0x8001, 'address error'],
-	[0x8003, 'alternate domain'],
-	[0x8022, 'software'],
-	[0x8023, 'alternate server'],
-	[0x8028, 'fingerprint'],
-	[0x8029, 'ice controlled'],
-	[0x802A, 'ice controlling'],
-].map(a => [a, a.toReversed()]).flat(1));
+export const Class = {
+	Req: 0b00,
+	Ind: 0b01,
+	Suc: 0b10,
+	Err: 0b11,
+};
+export const Method = {
+	Binding: 0x001,
+	Allocate: 0x003,
+	Refresh: 0x004,
+	Send: 0x006,
+	Data: 0x007,
+	CreatePermission: 0x008,
+	ChannelBind: 0x009,
+};
+export const AttrType = {
+	Username: 0x006,
+	Integrity: 0x008,
+	Error: 0x0009,
+	Lifetime: 0x000D,
+	Peer: 0x0012,
+	Data: 0x0013,
+	Realm: 0x0014,
+	Nonce: 0x0015,
+	Relayed: 0x0016,
+	Integrity256: 0x001C,
+	Mapped: 0x0020,
+	Priority: 0x0024,
+	Fingerprint: 0x8028,
+	IceControlled: 0x8029,
+	IceControlling: 0x802A,
+};
+function integrity_info(cryptoKey) {
+	if (cryptoKey?.algorithm?.hash?.name == 'SHA-1') {
+		return {type: AttrType.Integrity, length: 20};
+	}
+	if (cryptoKey?.algorithm?.hash?.name == 'SHA-256') {
+		return {type: AttrType.Integrity256, length: 32};
+	}
+	throw new Error("Unknown key");
+}
 
 export class Stun extends Wire {
-	get byteLength() { return 20 + this.length; }
-	set byteLength(value) {
-		// Attributes must handle the alignment so we don't do that here.
-		super.byteLength = value;
-		this.length = (value - 20);
+	get byteLength() {
+		return Stun.minByteLength + this.length;
+	}
+	#set_type(cls, method) {
+		this.type = (method & 0x1F80) << 2 | (method & 0x0070) << 1
+			| (method & 0x000F) | (cls & 0x0002) << 7
+			| (cls & 0x0001) << 4;
 	}
 	get class() {
-		return classes.get(this.type & 0x0110);
+		return ((this.type & 0x0100) >> 7) | ((this.type & 0x0010) >> 4);
 	}
-	set class(value) {
-		if (typeof value == 'string') value = classes.get(value);
-		this.type = (this.type & ~0x0110) | value;
+	set class(val) {
+		this.#set_type(val, this.method);
 	}
 	get method() {
-		return methods.get(this.type & ~0x0110);
+		return (this.type & 0x3E00) >> 2 | (this.type & 0x00E0) >> 1
+			| (this.type & 0x000F);
 	}
-	set method(value) {
-		if (typeof value != 'string' || !methods.has(value)) throw new Error("Unknown method");
-		this.type = (this.type & 0x0110) | methods.get(value);
+	set method(val) {
+		this.#set_type(this.class, val);
+	}
+	*[Symbol.iterator]() {
+		if (super.byteLength < this.byteLength) return;
+		for (let offset = 0; offset < this.length;) {
+			const ret = new Attr(this.buffer, { parent: this, byteOffset: this.byteOffset + Stun.minByteLength + offset });
+			offset += ret.byteLength;
+			if (offset > this.length) return;
+			yield ret;
+		}
+	}
+	append(values = null, constr = Attr) {
+		const ret = new constr(this, { parent: this, byteOffset: this.byteOffset + this.byteLength, ...values });
+		this.length += ret.byteLength;
+		return ret;
+	}
+	async verify(cryptoKey) {
+		const {type: attr_type} = integrity_info(cryptoKey);
+		const attr = this[Symbol.iterator]().find(a => a.type == attr_type);
+		if (!attr) return false;
+		// Update the length to immediately follow the integrity attribute:
+		this.length = (-Stun.minByteLength + attr.byteOffset - this.byteOffset + attr.byteLength);
+		return await crypto.subtle.verify('HMAC', cryptoKey, attr.value, attr.prefix);
+	}
+	async sign(cryptoKey) {
+		const attr = this.append(integrity_info(cryptoKey));
+		attr.value = new Uint8Array(await crypto.subtle.sign('HMAC', cryptoKey, attr.prefix));
+	}
+	fingerprint() {
+		const attr = this.append({type: AttrType.Fingerprint, length: 4});
+		attr.setUint32(Attr.minByteLength, crc32(attr.prefix) ^ 0x5354554e);
 	}
 }
 Stun.field('type', 'u16');
@@ -81,172 +106,60 @@ Stun.field('cookie', 'u32');
 Stun.field('txid', '[12]');
 
 export class Attr extends Wire {
-	get byteLength() {
-		const len = this.length;
-		const pad = (4 - len % 4) % 4;
-		return 4 + len + pad;
+	get comprehension_required() {
+		return this.type < 0x8000;
 	}
-	set byteLength(value) {
-		const pad = (4 - value % 4) % 4;
-		super.byteLength = value + pad;
-		this.length = value - 4;
-		new Uint8Array(this.buffer, this.byteOffset + value, pad).fill(0);
-	}
-	get type() {
-		const typ = this.getUint16(0);
-		return attrs.get(typ) ?? typ;
-	}
-	set type(value) {
-		this.setUint16(0, typeof value == 'string' ? attrs.get(value) : value);
-	}
-	get comprehension_required() { return this.getUint16(0) < 0x8000; }
 	get prefix() {
-		let ret = new Uint8Array(this.buffer, this.parent.byteOffset, this.byteOffset - this.parent.byteOffset);
-		const length_at = ret.byteLength - Stun.minByteLength + this.byteLength;
-		if (this.parent.getUint16(2) != length_at) {
-			ret = ret.slice();
-			new DataView(ret.buffer, ret.byteOffset, ret.byteLength).setUint16(2, length_at);
-		}
-		return ret;
+		return new Uint8Array(this.buffer, this.parent.byteOffset, this.byteOffset - this.parent.byteOffset);
 	}
-	get value() {
-		return new Uint8Array(this.buffer, this.byteOffset + Attr.minByteLength, this.length);
-	}
-	set value(value) {
-		this.value.set(value);
+	get byteLength() {
+		const padding = (4 - this.length % 4) % 4;
+		return Attr.minByteLength + this.length + padding;
 	}
 }
-Stun.field('...attrs', Attr);
-Attr.minByteLength += 2;
+Attr.field('type', 'u16');
 Attr.field('length', 'u16');
+Attr.field('value', '[]');
 
-export class TextAttr extends Attr {
-	get value() {
-		return decoder_lossy.decode(super.value);
-	}
-	set value(value) {
-		encoder.encodeInto(value, super.value);
-	}
-}
-
-// STUN's error code format is silly
-export class ErrorCode extends Attr {
-	get code() {
-		return (this.getUint8(Attr.minByteLength + 2) & 0b111) * 100 +
-		(this.getUint8(Attr.minByteLength + 3) % 100)
-	}
-	set code(value) {
-		if (value < 0) throw new Error("Invalid")
-		this.setUint8(Attr.minByteLength + 1, 0); // Padding byte between family and error class
-		this.setUint8(Attr.minByteLength + 2, Math.trunc(value / 100) & 0b111);
-		this.setUint8(Attr.minByteLength + 3, Math.trunc(value) % 100)
-	}
-}
-ErrorCode.field('family', 'u8');
-ErrorCode.minByteLength += 3;
-
-export class U32Attr extends Attr {}
-U32Attr.field('value', 'u32');
-
-export class U64Attr extends Attr {}
-U64Attr.field('value', 'u64');
-
-export class FingerprintAttr extends Attr {
-	expected() {
-		return (crc32(this.prefix) ^ 0x5354554e) >>> 0;
-	}
-}
-FingerprintAttr.field('actual', 'u32');
-
-export class Sha1Integrity extends Attr {
-	async verify(key) {
-		if (key?.algorithm?.hash?.name != 'SHA-1') return false;
-		return await crypto.subtle.verify('HMAC', key, this.actual, this.prefix);
-	}
-	async sign(key) {
-		if (key?.algorithm?.hash?.name != 'SHA-1') throw new Error("The key should be an HMAC key using the SHA-1 algorithm.");
-		this.actual.set(new Uint8Array(await crypto.subtle.sign('HMAC', key, this.prefix)));
-	}
-}
-Sha1Integrity.field('actual', '[20]');
-
-// Addr doesn't support the old, non-xored version, and it doesn't support non-magic cookied packets.
 export class Addr extends Attr {
 	get port() {
-		return this.xport ^ this.parent.getUint16(4);
+		return this.getUint16(6) ^ this.parent.getUint16(4);
 	}
 	set port(val) {
-		this.setUint8(Attr.minByteLength, 0); // Zero the padding byte when you set the port (not ideal, but whatevs)
-		this.xport = val ^ this.parent.getUint16(4);
+		this.setUint16(6, val ^ this.parent.getUint16(4));
+	}
+	get ip() {
+		if (this.family == 0x01 && this.length == 8) {
+			const vals = Array.from({ length: 4 }, (_, i) => this.getUint8(8 + i) ^ this.parent.getUint8(4 + i));
+			return new Ip4(...vals);
+		}
+		else if (this.family == 0x02 && this.length == 20) {
+			const vals = Array.from({length: 8}, (_, i) => this.getUint16(8 + 2*i) ^ this.parent.getUint16(4 + 2 * i));
+			return new Ip6(...vals);
+		}
+		return null;
+	}
+	set ip(val) {
+		if (typeof val == 'string') val = parse_ipaddr(val);
+		if (val instanceof Ip4) {
+			this.length = 8;
+			this.family = 0x01;
+			val.forEach((octet, i) => {
+				this.setUint8(8 + i, octet ^ this.parent.getUint8(4 + i))
+			});
+		}
+		else if (val instanceof Ip6) {
+			this.length = 20;
+			this.family = 0x02;
+			val.forEach((u16, i) => {
+				this.setUint16(8 + 2*i, u16 ^ this.parent.getUint16(4 + 2*i));
+			});
+		}
+		else { throw new Error(); }
+		this.setUint8(4, 0); // Clear the padding byte
 	}
 }
 Addr.minByteLength += 1; // Padding
 Addr.field('family', 'u8');
-Addr.field('xport', 'u16');
-
-export class Addr4 extends Addr {
-	get ip() {
-		return new Ip4(...Array.from({length: 4}, (_, i) => this.getUint8(Addr.minByteLength + i) ^ this.parent.getUint8(4 + i)));
-	}
-	set ip(val) {
-		if (val.length != 4) throw new Error("Need exactly 4 bytes");
-		this.family = 0x01; // Set the family when you set the ip
-		val.forEach((v, i) => {
-			this.setUint8(Addr.minByteLength + i, this.parent.getUint8(4 + i) ^ v);
-		});
-	}
-}
-Addr4.minByteLength += 4;
-
-export class Addr6 extends Addr {
-	get ip() {
-		return new Ip6(...Array.from({length: 8}, (_, i) => this.getUint16(Addr.minByteLength + 2*i) ^ this.parent.getUint16(4 + 2*i)));
-	}
-	set ip(val) {
-		if (val.length != 8) throw new Error("Need exactly 8 u16");
-		this.family = 0x02; // Set the family when you set the ip
-		val.forEach((v, i) => {
-			this.setUint16(Addr.minByteLength + 2*i, this.parent.getUint16(4 + 2*i) ^ v);
-		});
-	}
-}
-Addr6.minByteLength += 16;
-
-Addr.prototype.specialize = function() {
-	switch (this.family) {
-		case 0x01:
-			return this.byteLength >= Addr4.minByteLength ? new Addr4(this) : this;
-		case 0x02:
-			return this.byteLength >= Addr6.minByteLength ? new Addr6(this) : this;
-		default:
-			return this;
-	}
-};
-
-Attr.prototype.specialize = function() {
-	switch (this.type) {
-		case 'username':
-		case 'realm':
-		case 'nonce':
-		case 'alternate domain':
-		case 'software':
-			return new TextAttr(this);
-		case 'priority':
-		case 'lifetime':
-			return this.byteLength >= U32Attr.minByteLength ? new U32Attr(this) : this;
-		case 'ice controlled':
-		case 'ice controlling':
-			return this.byteLength >= U64Attr.minByteLength ? new U64Attr(this) : this;
-		case 'fingerprint':
-			return this.byteLength >= FingerprintAttr.minByteLength ? new FingerprintAttr(this) : this;
-		case 'integrity':
-			return this.byteLength >= Sha1Integrity.minByteLength ? new Sha1Integrity(this) : this;
-		case 'mapped':
-		case 'peer':
-		case 'relayed':
-		case 'alternate server':
-			return this.byteLength >= Addr.minByteLength ? new Addr(this).specialize() : this
-		default:
-			return this;
-	}
-};
+Addr.minByteLength += 2; // xport
+Addr.minByteLength += 4; // Min 4 bytes for ipv4

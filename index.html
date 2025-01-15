@@ -1,28 +1,66 @@
 <!DOCTYPE html>
 <script type="module">
-	import { cert } from '/src/cert.js';
-	import { Addr } from '/src/addr.js';
+const config = {
+	iceTransportPolicy: 'relay',
+	iceServers: [{urls: 'turn:localhost', username: 'guest', credential: 'password'}]
+};
+const a = new RTCPeerConnection(config);
+const b = new RTCPeerConnection(config);
+a.createDataChannel('');
 
-	const server = new Addr('turn:Zx9xDRd0OG9PxMGJhg3C8NDr65kn4kOivLoSNqXKCoW@stun.evan-brass.net?ice-lite');
-	// const server = new Addr('turn:ucCm6JK3s22XuCRiTZVFpWajUq0tIpB7lDn1Sv8dRv3@localhost?ice-lite');
-	const con = server.connect();
-	['message', 'open', 'close'].forEach(e => con.dc.addEventListener(e, console.log));
-	console.log(String(cert));
+await a.setLocalDescription();
+while (a.iceGatheringState != 'complete') await new Promise(res => a.addEventListener('icegatheringstatechange', res, {once: true}));
+console.log(a.localDescription.sdp);
 
-	con.addEventListener('connectionstatechange', ({ target: { connectionState } }) => console.log(connectionState));
-	con.addEventListener('iceconnectionstatechange', ({ target: { iceConnectionState } }) => console.log('ice', iceConnectionState));
-	con.addEventListener('icegatheringstatechange', ({ target: { iceGatheringState } }) => console.log('ice', iceGatheringState));
-	con.addEventListener('icecandidate', ({ candidate }) => console.log('ice', candidate));
-	con.addEventListener('signalingstatechange', ({ target: { signalingState } }) => console.log(signalingState));
-	[
-		'datachannel',
-		'icecandidateerror',
-		'negotiationneeded',
-		'track',
-	].every(e => con.addEventListener(e, console.log));
+await b.setRemoteDescription(a.localDescription);
+await b.setLocalDescription();
+await a.setRemoteDescription(b.localDescription);
+</script>
+<script type="_module">
+import { Addr } from '/src/addr.js';
+import { Stun, MAGIC_COOKIE } from '/src/stun.js';
 
-	// const client = new Addr(`turn:${cert}@${server.authority.hostname}`);
-	// client.connect({cert: null});
+// Look through our URL to connect to addresses
+for (let addr of new URLSearchParams(location.search).getAll('addr')) {
+	addr = new Addr(decodeURIComponent(addr));
+	const conn = addr.connect();
+	console.log(addr, conn);
+}
+
+// Connect to my server
+const server_addr = new Addr('turn:Zx9xDRd0OG9PxMGJhg3C8NDr65kn4kOivLoSNqXKCoW@stun.evan-brass.net?ice-lite');
+// const server_addr = new Addr('turn:ucCm6JK3s22XuCRiTZVFpWajUq0tIpB7lDn1Sv8dRv3@localhost?ice-lite');
+
+const server = server_addr.connect();
+
+// Log everything
+['message', 'open', 'close'].forEach(e => server.dc.addEventListener(e, console.log));
+['connectionState', 'iceConnectionState', 'iceGatheringState', 'signalingState'].forEach(p => {
+	server.addEventListener(p.toLowerCase() + 'change', ({ target }) => console.log(p, target[p]));
+});
+['icecandidate', 'datachannel', 'icecandidateerror', 'negotiationneeded', 'track'].forEach(e => {
+	server.addEventListener(e, console.log);
+});
+
+// Assemble our address
+while (!server.cert) await new Promise(res => server.addEventListener('signalingstatechange', res, { once: true }));
+const ours = new URL(location);
+ours.searchParams.set('addr', `turn:${server.cert}@${server_addr.authority.host}`);
+console.log(ours.href);
+
+// Listen for binary messages from the server
+for (; ;) {
+	const { data } = await new Promise(res => server.dc.addEventListener('message', res, { once: true }));
+	if (!(data instanceof ArrayBuffer) || data.byteLength < Stun.minByteLength) { continue }
+	const msg = new Stun(data);
+	// if (msg.len != msg.byteLength) continue;
+	// if (msg.cookie != MAGIC_COOKIE) continue;
+	console.group(msg);
+	for (const a of msg) {
+		console.log(a);
+	}
+	console.groupEnd();
+}
 </script>
 <script type="_module">
 import{base} from '/src/base.js';
