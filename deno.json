@@ -1,7 +1,9 @@
 {
-	"fmt": { "useTabs": true },
+	"fmt": {
+		"useTabs": true
+	},
 	"tasks": {
-		"start": "deno run --unstable-ffi --unstable-net -A server/main.js",
-		"dev": "docker run -it -v$(pwd)/cert.pem:/var/swbrd/cert.pem:ro -p127.0.0.1:3478:3478/udp -p127.0.0.1:9229:9229/tcp $(docker build --platform linux/amd64 -q .) deno run --inspect=0.0.0.0:9229 --unstable-ffi --unstable-net -A server/main.js"
+		"start": "deno run --watch --unstable-ffi --unstable-net -A server/main.js",
+		"dev": "deno run --unstable-net -A src/index.js"
 	}
 }

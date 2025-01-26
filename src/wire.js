@@ -4,7 +4,7 @@ export class Wire extends DataView {
 	static minByteLength = 0;
 	static defaults = {};
 
-	constructor(input, { byteOffset, ...values} = {}) {
+	constructor(input, { byteOffset, ...values } = {}) {
 		let buffer;
 		if (ArrayBuffer.isView(input)) {
 			buffer = input.buffer;
@@ -43,7 +43,7 @@ export class Wire extends DataView {
 				freeze = true;
 			}
 			set = function (value) {
-				this[name].set(value);
+				get.call(this).set(value);
 			};
 		}
 		else if (num) {
