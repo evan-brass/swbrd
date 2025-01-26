@@ -124,7 +124,7 @@ export class Stun extends Wire {
 			else { throw new Error("Unknown Address value"); }
 		}
 		else if (kind == undefined) {
-			value = a.value;
+			a.value = value;
 		}
 		else {
 			throw new Error("Unknown Type");
@@ -150,7 +150,7 @@ export class Stun extends Wire {
 		attr.value = new Uint8Array(await crypto.subtle.sign('HMAC', cryptoKey, prefix));
 	}
 	fingerprint() {
-		const attr = this.append({ type: AttrType.Fingerprint, length: 4 });
+		const attr = this.append(AttrType.Fingerprint, 4);
 		const prefix = new Uint8Array(this.buffer, this.byteOffset, attr.byteOffset - this.byteOffset);
 		attr.setUint32(Attr.minByteLength, crc32(prefix) ^ 0x5354554e);
 	}
@@ -171,7 +171,11 @@ export class Stun extends Wire {
 					layer = l;
 
 					let value;
-					if (kind == 'text') {
+					if (typeof kind == 'number') {
+						if (a.length != kind) value = null;
+						else value = a.value;
+					}
+					else if (kind == 'text') {
 						value = decoder_lossy.decode(a.value);
 					}
 					else if (kind == 'u32') {
@@ -185,6 +189,10 @@ export class Stun extends Wire {
 					else if (kind == 'fucky_u8') {
 						if (a.length != 4) value = null;
 						else value = a.getUint8(Attr.minByteLength);
+					}
+					else if (kind == 'bool') {
+						if (a.length != 0) value = null;
+						else value = true;
 					}
 					// XOR'd Addresses
 					else if (kind == 'addr' && typ != 0x0001) {
@@ -244,7 +252,17 @@ export class Attr extends Wire {
 		const padding = (4 - this.length % 4) % 4;
 		return Attr.minByteLength + this.length + padding;
 	}
+	get value() {
+		return new Uint8Array(this.buffer, this.byteOffset + Attr.minByteLength, this.length);
+	}
+	set value(val) {
+		this.length = val.byteLength ?? val.length;
+		this.value.set(val);
+		this.padding.fill(0);
+	}
+	get padding() {
+		return new Uint8Array(this.buffer, this.byteOffset + Attr.minByteLength + this.length, (4 - this.length % 4) % 4);
+	}
 }
 Attr.field('type', 'u16');
 Attr.field('length', 'u16');
-Attr.field('value', '[]');

@@ -1,16 +1,27 @@
 import { Ip6, parse_ipaddr } from "./ipaddr.js";
-import { decoder_lossy, encoder } from "./util.js";
 import { Stun, Class, Method, Attr, AttrType, MAGIC_COOKIE } from "./stun.js";
 
 if (import.meta.main) {
-	const none = encoder.encode('none');
-	const [turnKey, iceKey] = await Promise.all([
-		[1, 92, 138, 151, 62, 164, 180, 169, 201, 69, 246, 144, 20, 43, 243, 173],
-		[116, 104, 101, 47, 105, 99, 101, 47, 112, 97, 115, 115, 119, 111, 114, 100, 47, 99, 111, 110, 115, 116, 97, 110, 116]
-	].map(v => crypto.subtle.importKey('raw', new Uint8Array(v), {
-		name: 'HMAC', hash: 'SHA-1'
-	}, true, ['sign', 'verify'])));
+	const key_params = [
+		{
+			name: 'HMAC', hash: 'SHA-1'
+		},
+		true,
+		['sign', 'verify']
+	];
+	const turnKey = await crypto.subtle.importKey('raw', new Uint8Array(
+		[1, 92, 138, 151, 62, 164, 180, 169, 201, 69, 246, 144, 20, 43, 243, 173]
+	), ...key_params);
 	const default_lifetime = 6000;
+
+	// ufrag -> ice key or dtls session
+	const peers = new Map();
+	peers.set(
+		'ucCm6JK3s22XuCRiTZVFpWajUq0tIpB7lDn1Sv8dRv3',
+		await crypto.subtle.importKey('raw', new Uint8Array(
+			[116, 104, 101, 47, 105, 99, 101, 47, 112, 97, 115, 115, 119, 111, 114, 100, 47, 99, 111, 110, 115, 116, 97, 110, 116]
+		), ...key_params)
+	);
 
 	const sock = Deno.listenDatagram({ port: 3478, hostname: '::', transport: 'udp' });
 	const buffer = new Uint8Array(2048);
@@ -29,7 +40,7 @@ if (import.meta.main) {
 			[AttrType.Username, 'text'],
 			[AttrType.Realm, 'text'],
 			[AttrType.Nonce, 'text'],
-		], [AttrType.Integrity], [AttrType.Fingerprint]);
+		], [[AttrType.Integrity, 20]], [[AttrType.Fingerprint, 4]]);
 
 		// Send Indications
 		if (msg.class == Class.Ind && msg.method == Method.Send) {
@@ -47,77 +58,143 @@ if (import.meta.main) {
 
 			msg.method = Method.Data;
 			const broadcast = new Ip6(0, 0, 0, 0, 0, 0xffff, 0xffff, 0xffff);
+			const is_broadcast = peer.ip.every((v, i) => broadcast[i] == v);
 
 			// Shift the data Attribute to the beginning of the message:
 			msg.length = 0;
-			buffer.copyWithin(Stun.minByteLength + Attr.minByteLength + 20 + Attr.minByteLength, data.byteOffset, data.byteLength);
+			const offset = Stun.minByteLength + Attr.minByteLength + 20 + Attr.minByteLength;
+			let length = data.byteLength;
+			buffer.copyWithin(offset, data.byteOffset, length);
+			data = new Uint8Array(buffer.buffer, offset, length);
 
 			// Swap the sender and peer, unless hosted:
-			if (peer.ip.every((v, i) => broadcast[i] == v)) {
+			if (is_broadcast) {
 				msg.append(AttrType.Peer, 'addr', { ip: broadcast, port: peer.port });
 			} else {
 				msg.append(AttrType.Peer, 'addr', { ip: sender, port });
 				receiver = { hostname: String(peer.ip), port: peer.port };
 			}
 
-			// Append the data attribute (We only need to assign the length, because the data is already in place.)
-			msg.append(AttrType.Data, data.byteLength);
-
 			// Peek inside the packet:
-			// hosted: {
-			// 	if (data[0] < 20) /* STUN */ {
-			// 		const inner = new Stun(data);
+			hosted: {
+				if (data[0] < 20) /* STUN */ {
+					const inner = new Stun(data);
+					if (inner.byteLength != length) { debugger; continue packet_loop; };
 
-			// 		// Only support ICE:
-			// 		if (inner.method != Method.Binding) { debugger; continue packet_loop; }
-			// 		if (inner.cookie != MAGIC_COOKIE) { debugger; continue packet_loop; }
+					// Only relay ICE packets:
+					if (inner.method != Method.Binding) { debugger; continue packet_loop; }
+					if (inner.cookie != MAGIC_COOKIE) { debugger; continue packet_loop; }
 
-			// 		// Connection Test requests:
-			// 		if (inner.class == Class.Req) {
-			// 			const [[
-			// 				username,
-			// 				priority,
-			// 				iceControlled,
-			// 				iceControlling,
-			// 				useCandidate,
-			// 			], [integrity], [fingerprint], unknown] = inner.parse([
-			// 				[AttrType.Username, 'text'],
-			// 				[AttrType.Priority, 'u32'],
-			// 				[AttrType.IceControlled, 'u64'],
-			// 				[AttrType.IceControlling, 'u64'],
-			// 				[AttrType.UseCandidate, 'bool'],
-			// 			], [[AttrType.Integrity]], [[AttrType.Fingerprint]]);
+					// Connection Test requests:
+					if (inner.class == Class.Req) {
+						const [[
+							username,
+							priority,
+							iceControlled,
+							iceControlling,
+							useCandidate,
+						], [integrity], [fingerprint], unknown] = inner.parse([
+							[AttrType.Username, 'text'],
+							[AttrType.Priority, 'u32'],
+							[AttrType.IceControlled, 'u64'],
+							[AttrType.IceControlling, 'u64'],
+							[AttrType.UseCandidate, 'bool'],
+						], [[AttrType.Integrity, 20]], [[AttrType.Fingerprint, 4]]);
 
-			// 			if (!username || !priority || integrity?.length == 20 || fingerprint?.length == 4 || (!iceControlled && !iceControlling) || (iceControlled && iceControlling)) {
-			// 				debugger; continue packet_loop;
-			// 			}
+						if (!username || !priority || !integrity || !fingerprint || (!iceControlled && !iceControlling) || (iceControlled && iceControlling)) {
+							debugger; continue packet_loop;
+						}
 
-			// 			console.log('ice', username, priority, useCandidate ? true : false);
-			// 		}
+						const [dst_ufrag, src_ufrag] = username.split(':');
+						if (!dst_ufrag || !src_ufrag) { debugger; continue packet_loop; }
 
-			// 		// Connection Test responses
-			// 		else if (inner.class != Class.Ind) {
-			// 			const [[
-			// 				mapped,
-			// 				error,
-			// 			], [integrity], [fingerprint], unknown] = inner.parse([
-			// 				[AttrType.Mapped, 'addr'],
-			// 				[AttrType.Error],
-			// 			], [[AttrType.Integrity]], [[AttrType.Fingerprint]]);
-			// 			if (unknown.length) { debugger; continue packet_loop; }
-			// 		}
+						//
+						if (is_broadcast) {
+							const entry = peers.get(dst_ufrag);
 
-			// 		// Connection Test Indications??
-			// 		else { continue packet_loop; }
-			// 	}
-			// 	else if (data[0] < 64) /* DTLS */ {
-			// 		console.log('dtls', data);
-			// 		break hosted;
-			// 	}
-			// 	else /* SRTP, Etc. */ {
-			// 		break hosted;
-			// 	}
-			// }
+							if (entry instanceof CryptoKey) {
+								if (!is_broadcast) { debugger; continue packet_loop; }
+
+								// Wrong ICE password
+								if (!await inner.verify(entry)) {
+									inner.length = 0;
+									inner.class = Class.Err;
+									inner.append(AttrType.Error, 4, [0, 0, 4, 3]);
+								}
+
+								// Wrong ICE role (clients must be controlling)
+								else if (iceControlled) {
+									inner.length = 0;
+									inner.class = Class.Err;
+									inner.append(AttrType.Error, 4, [0, 0, 4, 87]);
+									await inner.sign(entry);
+								}
+
+								// Success
+								else {
+									inner.length = 0;
+									inner.class = Class.Suc;
+									inner.append(AttrType.Mapped, 'addr', { ip: sender, port });
+									await inner.sign(entry);
+								}
+								inner.fingerprint();
+								length = inner.byteLength;
+							}
+							else if (entry) {
+								// Truncate everything following the integrity (Should just be the mandatory fingerprint)
+								inner.msg.length = -Stun.minByteLength + integrity.byteOffset - inner.byteOffset + integrity.byteLength;
+								if (inner.byteOffset + inner.byteLength + (24 /* Peer */ + 28 /* SCTP overhead */ + 60 /* TODO DTLS overhead */) > buffer.byteLength) {
+									continue packet_loop;
+								}
+								inner.append(AttrType.Peer, 'addr', { ip: sender, port });
+
+								// TODO: Shift inner into position for DTLS + SCTP and then forward to the owner of the dst_ufrag
+								continue packet_loop;
+							}
+							else { debugger; continue packet_loop; }
+						}
+
+						console.log('ice-req', username, priority, useCandidate ? true : false);
+					}
+
+					// Connection Test responses
+					else if (inner.class == Class.Suc && !is_broadcast) {
+						const [[
+							mapped,
+						], [integrity], [fingerprint], unknown] = inner.parse([
+							[AttrType.Mapped, 'addr'],
+						], [[AttrType.Integrity, 20]], [[AttrType.Fingerprint, 4]]);
+						if (!mapped || !integrity || !fingerprint || unknown.length) { debugger; continue packet_loop; }
+					}
+					else if (inner.class == Class.Err && !is_broadcast) {
+						const [[
+							_mapped,
+							error
+						], [integrity], [fingerprint], unknown] = inner.parse([
+							[AttrType.Mapped, 'addr'],
+							[AttrType.Error],
+						], [[AttrType.Integrity, 20]], [[AttrType.Fingerprint, 4]]);
+						if (!error || !integrity || !fingerprint || unknown.length) { debugger; continue packet_loop; }
+					}
+
+					// Connection Test Indications?? or non-requests to broadcast
+					else { continue packet_loop; }
+				}
+				else if (data[0] < 64) /* DTLS */ {
+					console.log('dtls', data);
+					// TODO: Handle DTLS handshaking
+					if (is_broadcast) continue packet_loop;
+					break hosted;
+				}
+				else /* SRTP, Etc. */ {
+					// MAYBE: Add support for SRTP?
+					if (is_broadcast) continue packet_loop;
+					break hosted;
+				}
+			}
+
+			// Append the data attribute (We only need to assign the length, because the data is already in position.)
+			msg.append(AttrType.Data, length);
 		}
 
 		// Drop all other Indications or Responses
@@ -132,13 +209,20 @@ if (import.meta.main) {
 			msg.append(AttrType.Mapped, 'addr', { ip: canonical, port });
 		}
 
-		// All other requests require Authentication
-		else if (username != 'guest' || realm != 'none' || nonce != 'none' || !await msg.verify(turnKey)) {
+		// Check the username, realm, and nonce
+		else if (username != 'guest' || realm != 'none' || nonce != 'none') {
 			msg.class = Class.Err;
 			msg.length = 0;
 			msg.append(AttrType.Error, 4, [0, 0, 4, 1]);
 			msg.append(AttrType.Realm, 'text', 'none');
 			msg.append(AttrType.Nonce, 'text', 'none');
+		}
+
+		// All other requests require Authentication
+		else if (!await msg.verify(turnKey)) {
+			msg.class = Class.Err;
+			msg.length = 0;
+			msg.append(AttrType.Error, 4, [0, 0, 4, 3]);
 		}
 
 		// Allocate Requests
@@ -176,7 +260,7 @@ if (import.meta.main) {
 				[AttrType.Username], [AttrType.Nonce], [AttrType.Realm],
 			], [[AttrType.Integrity]]);
 			if (unknown.length) { debugger; continue packet_loop; }
-			if (lifetime === 0) continue packet_loop; // Close notification, don't respond
+			if (lifetime === 0) continue packet_loop; // Close notification -> don't respond
 			msg.class = Class.Suc;
 			msg.length = 0;
 			msg.append(AttrType.Lifetime, 'u32', lifetime || default_lifetime);

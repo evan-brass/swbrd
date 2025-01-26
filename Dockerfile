@@ -1,6 +1,4 @@
-FROM denoland/deno:alpine
-
-RUN apk add libssl3
+FROM denoland/deno
 
 WORKDIR /swbrd
 ADD --link . .

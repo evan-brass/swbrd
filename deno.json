@@ -3,7 +3,6 @@
 		"useTabs": true
 	},
 	"tasks": {
-		"start": "deno run --watch --unstable-ffi --unstable-net -A server/main.js",
-		"dev": "deno run --unstable-net -A src/index.js"
+		"dev": "deno run --watch --inspect --unstable-net -A src/index.js"
 	}
 }
