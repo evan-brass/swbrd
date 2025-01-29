@@ -1,3 +1,4 @@
+import { Dtls, Handshake } from "./dtls.js";
 import { Ip6, parse_ipaddr } from "./ipaddr.js";
 import { Stun, Class, Method, Attr, AttrType, MAGIC_COOKIE } from "./stun.js";
 
@@ -182,6 +183,23 @@ if (import.meta.main) {
 				}
 				else if (data[0] < 64) /* DTLS */ {
 					console.log('dtls', data);
+					debugger;
+					for (let offset = 0; (offset + Dtls.minByteLength) < data.byteLength;) {
+						const dtls = new Dtls(data.buffer, { byteOffset: data.byteOffset + offset });
+						offset += dtls.byteLength;
+						if (offset > data.byteLength) break;
+						if (dtls.type == 22) {
+							for (let offset = Dtls.minByteLength; (offset + Handshake.minByteLength) < dtls.byteLength;) {
+								const handshake = new Handshake(dtls.buffer, { byteOffset: dtls.byteOffset + offset });
+								offset += handshake.byteLength;
+								if (offset > dtls.byteLength) break;
+
+								// Drop any DTLS packets that use fragmentation:
+								if (handshake.total != handshake.length || handshake.offset) continue packet_loop;
+							}
+						}
+						console.log(dtls);
+					}
 					// TODO: Handle DTLS handshaking
 					if (is_broadcast) continue packet_loop;
 					break hosted;
