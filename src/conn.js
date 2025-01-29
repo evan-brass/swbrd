@@ -32,6 +32,7 @@ export class Conn extends RTCPeerConnection {
 	constructor(peerid, {
 		setup, ice_lite, ice_pwd,
 		mung = true,
+		timeout = 10_000,
 		...config
 	} = {}) {
 		const cert = config?.cert ?? default_cert;
@@ -46,6 +47,14 @@ export class Conn extends RTCPeerConnection {
 		this.#cert = cert;
 
 		this.#dc.binaryType = 'arraybuffer';
+
+		// Add a timeout to close the conn if it fails to connect within timeout ms
+		if (typeof timeout == 'number') {
+			const t = setTimeout(() => this.close(), timeout);
+			this.addEventListener('connectionstatechange', ({ target: { connectionState } }) => {
+				if (connectionState == 'connected') clearTimeout(t);
+			});
+		}
 
 		this.#signaling_task({
 			setup, ice_lite, ice_pwd,
