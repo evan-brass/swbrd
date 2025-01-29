@@ -46,6 +46,16 @@ export class Wire extends DataView {
 				get.call(this).set(value);
 			};
 		}
+		else if (typ == 'u24') {
+			byteLength = 3;
+			get = function () {
+				return (this.getUint8(offset) << 16) | this.getUint16(offset + 1);
+			};
+			set = function (value) {
+				this.setUint8(offset, (value & 0xff0000) >> 16);
+				this.setUint16(offset + 1, value & 0x00ffff);
+			};
+		}
 		else if (num) {
 			const { 1: sign, 2: bits, 3: le_s } = num;
 			const le = Boolean(le_s);
