@@ -1,12 +1,17 @@
 const tables = new Map(); // Reversed Poly -> 8-bit lookup table
 export function get_table(reversed_poly) {
-	if (!tables.has(reversed_poly)) tables.set(reversed_poly, Uint32Array.from({length: 256}, (_, i) => {
-		let v = i;
-		for (let b = 0; b < 8; ++b) {
-			v = (v & 1) ? (v >>> 1 ^ reversed_poly) >>> 0 : v >>> 1;
-		}
-		return v;
-	}));
+	if (!tables.has(reversed_poly)) {
+		tables.set(
+			reversed_poly,
+			Uint32Array.from({ length: 256 }, (_, i) => {
+				let v = i;
+				for (let b = 0; b < 8; ++b) {
+					v = (v & 1) ? (v >>> 1 ^ reversed_poly) >>> 0 : v >>> 1;
+				}
+				return v;
+			}),
+		);
+	}
 	return tables.get(reversed_poly);
 }
 

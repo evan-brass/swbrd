@@ -9,12 +9,14 @@ export class Wire extends DataView {
 		if (ArrayBuffer.isView(input)) {
 			buffer = input.buffer;
 			byteOffset ??= input.byteOffset;
-		}
-		else if (input instanceof ArrayBuffer || input instanceof SharedArrayBuffer) {
+		} else if (
+			input instanceof ArrayBuffer || input instanceof SharedArrayBuffer
+		) {
 			buffer = input;
-		}
-		else {
-			throw new Error("Wires can only be created from ArrayBuffers/SharedArrayBuffers or A view of a buffer.");
+		} else {
+			throw new Error(
+				'Wires can only be created from ArrayBuffers/SharedArrayBuffers or A view of a buffer.',
+			);
 		}
 		super(buffer, byteOffset);
 
@@ -33,20 +35,26 @@ export class Wire extends DataView {
 			if (arr[1]) {
 				byteLength = parseInt(arr[1]);
 				get = function () {
-					return new Uint8Array(this.buffer, this.byteOffset + offset, byteLength);
+					return new Uint8Array(
+						this.buffer,
+						this.byteOffset + offset,
+						byteLength,
+					);
 				};
-			}
-			else {
+			} else {
 				get = function () {
-					return new Uint8Array(this.buffer, this.byteOffset + offset, this.byteLength - offset);
-				}
+					return new Uint8Array(
+						this.buffer,
+						this.byteOffset + offset,
+						this.byteLength - offset,
+					);
+				};
 				freeze = true;
 			}
 			set = function (value) {
 				get.call(this).set(value);
 			};
-		}
-		else if (typ == 'u24') {
+		} else if (typ == 'u24') {
 			byteLength = 3;
 			get = function () {
 				return (this.getUint8(offset) << 16) | this.getUint16(offset + 1);
@@ -55,12 +63,13 @@ export class Wire extends DataView {
 				this.setUint8(offset, (value & 0xff0000) >> 16);
 				this.setUint16(offset + 1, value & 0x00ffff);
 			};
-		}
-		else if (num) {
+		} else if (num) {
 			const { 1: sign, 2: bits, 3: le_s } = num;
 			const le = Boolean(le_s);
 			byteLength = parseInt(bits) / 8;
-			const js_typ = `${bits == '64' ? 'Big' : ''}${sign == 'u' ? 'Ui' : 'I'}nt${bits}`;
+			const js_typ = `${bits == '64' ? 'Big' : ''}${
+				sign == 'u' ? 'Ui' : 'I'
+			}nt${bits}`;
 			const getter = this.prototype['get' + js_typ];
 			const setter = this.prototype['set' + js_typ];
 			get = function () {
@@ -69,12 +78,12 @@ export class Wire extends DataView {
 			set = function (value) {
 				setter.call(this, offset, value, le);
 			};
-		}
-		else { throw new Error("Unknown field datatype"); }
+		} else throw new Error('Unknown field datatype');
 
 		Object.defineProperty(this.prototype, name, {
 			enumerable: true,
-			get, set,
+			get,
+			set,
 		});
 		this.minByteLength += byteLength;
 		if (freeze) Object.freeze(this.prototype);

@@ -1,6 +1,7 @@
 {
 	"fmt": {
-		"useTabs": true
+		"useTabs": true,
+		"singleQuote": true
 	},
 	"tasks": {
 		"dev": "deno run --watch --inspect --unstable-net -A src/index.js"

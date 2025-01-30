@@ -1,7 +1,7 @@
 import { Wire } from './wire.js';
-import { decoder_lossy, encoder } from "./util.js";
-import { crc32 } from "./crc32.js";
-import { Ip4, Ip6, parse_ipaddr } from "./ipaddr.js";
+import { decoder_lossy, encoder } from './util.js';
+import { crc32 } from './crc32.js';
+import { Ip4, Ip6, parse_ipaddr } from './ipaddr.js';
 
 export const MAGIC_COOKIE = 0x2112A442;
 
@@ -47,7 +47,7 @@ function integrity_info(cryptoKey) {
 	if (cryptoKey?.algorithm?.hash?.name == 'SHA-256') {
 		return { type: AttrType.Integrity256, length: 32 };
 	}
-	throw new Error("Unknown key");
+	throw new Error('Unknown key');
 }
 
 export class Stun extends Wire {
@@ -55,9 +55,9 @@ export class Stun extends Wire {
 		return Stun.minByteLength + this.length;
 	}
 	#set_type(cls, method) {
-		this.type = (method & 0x1F80) << 2 | (method & 0x0070) << 1
-			| (method & 0x000F) | (cls & 0x0002) << 7
-			| (cls & 0x0001) << 4;
+		this.type = (method & 0x1F80) << 2 | (method & 0x0070) << 1 |
+			(method & 0x000F) | (cls & 0x0002) << 7 |
+			(cls & 0x0001) << 4;
 	}
 	get class() {
 		return ((this.type & 0x0100) >> 7) | ((this.type & 0x0010) >> 4);
@@ -66,8 +66,8 @@ export class Stun extends Wire {
 		this.#set_type(val, this.method);
 	}
 	get method() {
-		return (this.type & 0x3E00) >> 2 | (this.type & 0x00E0) >> 1
-			| (this.type & 0x000F);
+		return (this.type & 0x3E00) >> 2 | (this.type & 0x00E0) >> 1 |
+			(this.type & 0x000F);
 	}
 	set method(val) {
 		this.#set_type(this.class, val);
@@ -75,7 +75,10 @@ export class Stun extends Wire {
 	*[Symbol.iterator]() {
 		if (super.byteLength < this.byteLength) return;
 		for (let offset = 0; offset < this.length;) {
-			const ret = new Attr(this.buffer, { parent: this, byteOffset: this.byteOffset + Stun.minByteLength + offset });
+			const ret = new Attr(this.buffer, {
+				parent: this,
+				byteOffset: this.byteOffset + Stun.minByteLength + offset,
+			});
 			offset += ret.byteLength;
 			if (offset > this.length) return;
 			yield ret;
@@ -89,21 +92,17 @@ export class Stun extends Wire {
 			if (value) {
 				a.value = value;
 			}
-		}
-		else if (kind == 'text') {
+		} else if (kind == 'text') {
 			const encoded = encoder.encode(value);
 			a.length = encoded.byteLength;
 			a.value = encoded;
-		}
-		else if (kind == 'u32') {
+		} else if (kind == 'u32') {
 			a.length = Uint32Array.BYTES_PER_ELEMENT;
 			a.setUint32(Attr.minByteLength, value);
-		}
-		else if (kind == 'u64') {
+		} else if (kind == 'u64') {
 			a.length = BigUint64Array.BYTES_PER_ELEMENT;
 			a.setBigUint64(value);
-		}
-		else if (kind == 'addr' && typ != 0x0001) {
+		} else if (kind == 'addr' && typ != 0x0001) {
 			const { ip = parse_ipaddr(value.hostname), port } = value;
 			a.setUint8(Attr.minByteLength, 0);
 			a.setUint16(Attr.minByteLength + 2, port ^ this.getUint16(4));
@@ -113,21 +112,20 @@ export class Stun extends Wire {
 				for (let i = 0; i < ip.length; ++i) {
 					a.setUint8(Attr.minByteLength + 4 + i, ip[i] ^ this.getUint8(4 + i));
 				}
-			}
-			else if (ip instanceof Ip6) {
+			} else if (ip instanceof Ip6) {
 				a.length = 20;
 				a.setUint8(Attr.minByteLength + 1, 0x02);
 				for (let i = 0; i < ip.length; ++i) {
-					a.setUint16(Attr.minByteLength + 4 + 2 * i, ip[i] ^ this.getUint16(4 + 2 * i));
+					a.setUint16(
+						Attr.minByteLength + 4 + 2 * i,
+						ip[i] ^ this.getUint16(4 + 2 * i),
+					);
 				}
-			}
-			else { throw new Error("Unknown Address value"); }
-		}
-		else if (kind == undefined) {
+			} else throw new Error('Unknown Address value');
+		} else if (kind == undefined) {
 			a.value = value;
-		}
-		else {
-			throw new Error("Unknown Type");
+		} else {
+			throw new Error('Unknown Type');
 		}
 
 		this.length += a.byteLength;
@@ -136,26 +134,41 @@ export class Stun extends Wire {
 	// NOTE: Calling .verify() truncates the packet to immediately following the integrity attribute if present.
 	async verify(cryptoKey) {
 		const { type: attr_type } = integrity_info(cryptoKey);
-		const attr = this[Symbol.iterator]().find(a => a.type == attr_type);
+		const attr = this[Symbol.iterator]().find((a) => a.type == attr_type);
 		if (!attr) return false;
 		// Update the length to immediately follow the integrity attribute:
-		this.length = (-Stun.minByteLength + attr.byteOffset - this.byteOffset + attr.byteLength);
-		const prefix = new Uint8Array(this.buffer, this.byteOffset, attr.byteOffset - this.byteOffset);
+		this.length = -Stun.minByteLength + attr.byteOffset - this.byteOffset +
+			attr.byteLength;
+		const prefix = new Uint8Array(
+			this.buffer,
+			this.byteOffset,
+			attr.byteOffset - this.byteOffset,
+		);
 		return await crypto.subtle.verify('HMAC', cryptoKey, attr.value, prefix);
 	}
 	async sign(cryptoKey) {
 		const { type, length } = integrity_info(cryptoKey);
 		const attr = this.append(type, length);
-		const prefix = new Uint8Array(this.buffer, this.byteOffset, attr.byteOffset - this.byteOffset);
-		attr.value = new Uint8Array(await crypto.subtle.sign('HMAC', cryptoKey, prefix));
+		const prefix = new Uint8Array(
+			this.buffer,
+			this.byteOffset,
+			attr.byteOffset - this.byteOffset,
+		);
+		attr.value = new Uint8Array(
+			await crypto.subtle.sign('HMAC', cryptoKey, prefix),
+		);
 	}
 	fingerprint() {
 		const attr = this.append(AttrType.Fingerprint, 4);
-		const prefix = new Uint8Array(this.buffer, this.byteOffset, attr.byteOffset - this.byteOffset);
+		const prefix = new Uint8Array(
+			this.buffer,
+			this.byteOffset,
+			attr.byteOffset - this.byteOffset,
+		);
 		attr.setUint32(Attr.minByteLength, crc32(prefix) ^ 0x5354554e);
 	}
 	parse(...layers) {
-		const values = layers.map(l => new Array(l.length));
+		const values = layers.map((l) => new Array(l.length));
 		const unknown = [];
 		const unknown_opt = [];
 
@@ -174,30 +187,25 @@ export class Stun extends Wire {
 					if (typeof kind == 'number') {
 						if (a.length != kind) value = null;
 						else value = a.value;
-					}
-					else if (kind == 'text') {
+					} else if (kind == 'text') {
 						value = decoder_lossy.decode(a.value);
-					}
-					else if (kind == 'u32') {
+					} else if (kind == 'u32') {
 						if (a.length != Uint32Array.BYTES_PER_ELEMENT) value = null;
 						else value = a.getUint32(Attr.minByteLength);
-					}
-					else if (kind == 'u64') {
+					} else if (kind == 'u64') {
 						if (a.length != BigUint64Array.BYTES_PER_ELEMENT) value = null;
 						else value = a.getBigUint64(Attr.minByteLength);
-					}
-					else if (kind == 'fucky_u8') {
+					} else if (kind == 'fucky_u8') {
 						if (a.length != 4) value = null;
 						else value = a.getUint8(Attr.minByteLength);
-					}
-					else if (kind == 'bool') {
+					} else if (kind == 'bool') {
 						if (a.length != 0) value = null;
 						else value = true;
-					}
-					// XOR'd Addresses
+					} // XOR'd Addresses
 					else if (kind == 'addr' && typ != 0x0001) {
 						if (a.length < 8) value = null;
-						const port = a.getUint16(Attr.minByteLength + 2) ^ this.getUint16(4);
+						const port = a.getUint16(Attr.minByteLength + 2) ^
+							this.getUint16(4);
 						if (a.getUint8(Attr.minByteLength + 1) == 0x01 && a.length == 8) {
 							const ip = new Ip4(
 								a.getUint8(Attr.minByteLength + 4) ^ this.getUint8(4),
@@ -206,8 +214,9 @@ export class Stun extends Wire {
 								a.getUint8(Attr.minByteLength + 7) ^ this.getUint8(7),
 							);
 							value = { ip, port };
-						}
-						else if (a.getUint8(Attr.minByteLength + 1) == 0x02 && a.length == 20) {
+						} else if (
+							a.getUint8(Attr.minByteLength + 1) == 0x02 && a.length == 20
+						) {
 							const ip = new Ip6(
 								a.getUint16(Attr.minByteLength + 4) ^ this.getUint16(4),
 								a.getUint16(Attr.minByteLength + 6) ^ this.getUint16(6),
@@ -219,14 +228,11 @@ export class Stun extends Wire {
 								a.getUint16(Attr.minByteLength + 18) ^ this.getUint16(18),
 							);
 							value = { ip, port };
-						}
-						else { value = null; }
-					}
-					else if (kind === undefined) {
+						} else value = null;
+					} else if (kind === undefined) {
 						value = a.value;
-					}
-					else {
-						throw new Error("Unknown Kind");
+					} else {
+						throw new Error('Unknown Kind');
 					}
 					values[l][i] = value;
 
@@ -253,7 +259,11 @@ export class Attr extends Wire {
 		return Attr.minByteLength + this.length + padding;
 	}
 	get value() {
-		return new Uint8Array(this.buffer, this.byteOffset + Attr.minByteLength, this.length);
+		return new Uint8Array(
+			this.buffer,
+			this.byteOffset + Attr.minByteLength,
+			this.length,
+		);
 	}
 	set value(val) {
 		this.length = val.byteLength ?? val.length;
@@ -261,7 +271,11 @@ export class Attr extends Wire {
 		this.padding.fill(0);
 	}
 	get padding() {
-		return new Uint8Array(this.buffer, this.byteOffset + Attr.minByteLength + this.length, (4 - this.length % 4) % 4);
+		return new Uint8Array(
+			this.buffer,
+			this.byteOffset + Attr.minByteLength + this.length,
+			(4 - this.length % 4) % 4,
+		);
 	}
 }
 Attr.field('type', 'u16');

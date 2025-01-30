@@ -1,11 +1,16 @@
-import { base } from "./base.js";
+import { base } from './base.js';
 
 export const algorithm = 'sha-256';
 export const bytes = 32;
 export const bits = bytes * 8;
 
 export function to_fingerprint(id) {
-	return `${algorithm} ${BigInt(id).toString(16).padStart(2 * bytes, '0').replace(/[0-9a-f]{2}/ig, ':$&').slice(1)}`;
+	return `${algorithm} ${
+		BigInt(id).toString(16).padStart(2 * bytes, '0').replace(
+			/[0-9a-f]{2}/ig,
+			':$&',
+		).slice(1)
+	}`;
 }
 
 export function from_bytes(arr) {
@@ -21,9 +26,9 @@ export function from_bytes(arr) {
 }
 
 export function to_string(id) {
-	return base(BigInt(id), {bits});
+	return base(BigInt(id), { bits });
 }
 
 export function from_string(s) {
-	return base(String(s), {bits});
+	return base(String(s), { bits });
 }

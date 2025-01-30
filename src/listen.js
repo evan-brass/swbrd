@@ -1,17 +1,23 @@
-import { default_ice_pwd } from "./const.js";
+import { default_ice_pwd } from './const.js';
 import { encoder, state } from './util.js';
-import { Stun, Class, Method, MAGIC_COOKIE, AttrType } from './stun.js';
+import { AttrType, Class, MAGIC_COOKIE, Method, Stun } from './stun.js';
 
 export async function* listen(conn, {
 	ice_pwd = default_ice_pwd,
-	ice_ufrag = String(conn.cert)
+	ice_ufrag = String(conn.cert),
 } = {}) {
-	const key = await crypto.subtle.importKey('raw', encoder.encode(ice_pwd), {
-		name: 'HMAC',
-		hash: 'SHA-1'
-	}, true, ['sign', 'verify']);
+	const key = await crypto.subtle.importKey(
+		'raw',
+		encoder.encode(ice_pwd),
+		{
+			name: 'HMAC',
+			hash: 'SHA-1',
+		},
+		true,
+		['sign', 'verify'],
+	);
 
-	for (; ;) {
+	for (;;) {
 		if (conn.dc.readyState == 'closed') break;
 		const { data } = await state({
 			'close': conn.dc,
@@ -20,7 +26,7 @@ export async function* listen(conn, {
 		if (!(data instanceof ArrayBuffer)) continue;
 
 		// Parse the Binary message as STUN
-		if (data.byteLength < Stun.minByteLength) continue
+		if (data.byteLength < Stun.minByteLength) continue;
 		const test = new Stun(data);
 		if (test.byteLength != data.byteLength) continue;
 		if (test.class != Class.Req) continue;
@@ -32,7 +38,7 @@ export async function* listen(conn, {
 			[username, priority, iceControlled, iceControlling, _useCandidate],
 			[integrity],
 			[peer],
-			uknown
+			uknown,
 		] = test.parse([
 			[AttrType.Username, 'text'],
 			[AttrType.Priority, 'u32'],
@@ -40,9 +46,9 @@ export async function* listen(conn, {
 			[AttrType.IceControlling, 'u64'],
 			[AttrType.UseCandidate, 'bool'],
 		], [
-			[AttrType.Integrity, 20]
+			[AttrType.Integrity, 20],
 		], [
-			[AttrType.Peer, 'addr']
+			[AttrType.Peer, 'addr'],
 		]);
 		if (uknown.length) continue;
 		if (
@@ -65,7 +71,7 @@ export async function* listen(conn, {
 			priority,
 			address,
 			port,
-			usernameFragment
+			usernameFragment,
 		};
 	}
 }
