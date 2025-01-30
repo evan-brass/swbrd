@@ -51,10 +51,11 @@ export async function* listen(conn, {
 			(typeof iceControlled != 'bigint' && typeof iceControlling != 'bigint') ||
 			!integrity || !peer
 		) continue;
+		const { ip: address, port } = peer;
 
 		// Parse username
-		const [dst_ufrag, src_ufrag] = username.split(':');
-		if (dst_ufrag != ice_ufrag || !src_ufrag) continue;
+		const [dst_ufrag, usernameFragment] = username.split(':');
+		if (dst_ufrag != ice_ufrag || !usernameFragment) continue;
 
 		// Check ICE pwd
 		if (!await test.verify(key)) continue;
@@ -62,9 +63,9 @@ export async function* listen(conn, {
 		// Done, construct an ICE candidate and yield it
 		yield {
 			priority,
-			address: String(peer.ip),
-			port: peer.port,
-			usernameFragment: src_ufrag,
+			address,
+			port,
+			usernameFragment
 		};
 	}
 }
