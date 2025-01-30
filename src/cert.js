@@ -61,7 +61,7 @@ export class Cert extends RTCCertificate {
 		}
 		const openreq = indexedDB.open('swbrd', 1);
 		openreq.onupgradeneeded = (
-			{ oldVersion, newVersion, target: { result: db } },
+			{ oldVersion: _ov, newVersion: _nv, target: { result: db } },
 		) => {
 			db.createObjectStore('certs');
 		};
