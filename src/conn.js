@@ -1,9 +1,7 @@
 import { cert as default_cert } from './cert.js';
 import { default_ice_pwd } from "./const.js";
-import { algorithm } from "./id.js";
-import { from_bytes } from "./id.js";
-import { to_fingerprint, to_string } from "./id.js";
-import { is_firefox } from './util.js';
+import { algorithm, from_bytes, to_fingerprint, to_string } from "./id.js";
+import { is_firefox, state } from './util.js';
 
 export const defaults = {
 	iceServers: [{urls: 'turn:stun.evan-brass.net', username: 'guest', credential: 'password'}]
@@ -76,7 +74,7 @@ export class Conn extends RTCPeerConnection {
 		// Can't add ICE candidates while the remote description is null:
 		// HACK: Firefox additionally seems to need the local description to be set before adding remote candidates. (Unless those candidates are set in the remote SDP).
 		while (super.remoteDescription === null || is_firefox && super.localDescription === null) {
-			await new Promise(res => this.addEventListener('signalingstatechange', res, {once: true}));
+			await state({ 'signalingstatechange': this });
 		}
 
 		candidate.usernameFragment ??= /a=ice-ufrag:(.+)/i.exec(super.remoteDescription.sdp)[1];
@@ -162,7 +160,7 @@ export class Conn extends RTCPeerConnection {
 		// Switchover into handling renegotiation
 		while (this.#dc.readyState != 'closed') {
 			if (this.#dc.readyState == 'connecting') {
-				await new Promise(res => this.#dc.addEventListener('open', res, {once: true}));
+				await state({ 'open': this.dc, 'close': this.dc });
 			}
 			else if (negotiation_needed) {
 				if (this.#dc.readyState == 'closing') continue;
@@ -194,10 +192,10 @@ export class Conn extends RTCPeerConnection {
 			}
 			else {
 				// Wait for something to happen
-				await new Promise(res => {
-					this.addEventListener('negotiationneeded', res, {once: true});
-					this.#dc.addEventListener('message', res, {once: true});
-					this.#dc.addEventListener('close', res, {once: true});
+				await state({
+					'negotiationneeded': this,
+					'message': this.dc,
+					'close': this.dc
 				});
 			}
 		}

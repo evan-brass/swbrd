@@ -2,6 +2,7 @@ import { algorithm, from_string } from "./id.js";
 import { Conn } from './conn.js';
 import { query_txt } from './dns.js';
 import { default_turn_credential, default_turn_username } from "./const.js";
+import { state } from "./util.js";
 /**
  * Example Addr-esses:
  * const a = new Addr('udp:seed.evan-brass.net'); await a.resolve_id(); const conn = a.connect();
@@ -119,9 +120,7 @@ export class Addr extends URL {
 			// Undo the adjustement
 			if (adjustment) {
 				// Wait for the connection to succeed (or close)
-				while (!['connected', 'closed'].includes(ret.connectionState)) await new Promise(
-					res => ret.addEventListener('connectionstatechange', res, {once: true})
-				);
+				while (!['connected', 'closed'].includes(ret.connectionState)) await state({ 'connectionstatechange': ret });
 
 				// If the connection is closed, then the config adjustment is irrelevant
 				if (ret.connectionState == 'closed') return;

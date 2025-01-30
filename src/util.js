@@ -8,3 +8,12 @@ export async function write(writer, value) {
 	if (!writer.desiredSize) return;
 	await writer.write(value);
 }
+
+export function state(transitions = {}) {
+	return new Promise(res => {
+		for (const [e, target] of Object.entries(transitions)) {
+			if (!(target instanceof EventTarget)) throw new Error("??");
+			target.addEventListener(e, res, { once: true });
+		}
+	});
+}

@@ -1,5 +1,5 @@
 import { default_ice_pwd } from "./const.js";
-import { encoder } from './util.js';
+import { encoder, state } from './util.js';
 import { Stun, Class, Method, MAGIC_COOKIE, AttrType } from './stun.js';
 
 export async function* listen(conn, {
@@ -13,9 +13,9 @@ export async function* listen(conn, {
 
 	for (; ;) {
 		if (conn.dc.readyState == 'closed') break;
-		const { data } = await new Promise(res => {
-			conn.dc.addEventListener('close', res, { once: true });
-			conn.dc.addEventListener('message', res, { once: true });
+		const { data } = await state({
+			'close': conn.dc,
+			'message': conn.dc,
 		});
 		if (!(data instanceof ArrayBuffer)) continue;
 
