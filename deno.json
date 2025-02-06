@@ -4,6 +4,6 @@
 		"singleQuote": true
 	},
 	"tasks": {
-		"dev": "deno run --watch --inspect --unstable-net -A src/index.js"
+		"relay": "deno run --unstable-net --allow-net relay/main.js"
 	}
 }
