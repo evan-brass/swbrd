@@ -162,6 +162,7 @@ const server = new Addr()
 
 </script>
 <script type="_module">
+import { state } from './src/util.js';
 const config = {
 	iceTransportPolicy: 'relay',
 	iceServers: [{
@@ -176,7 +177,7 @@ const b = new RTCPeerConnection(config);
 a.createDataChannel('');
 
 await a.setLocalDescription();
-while (a.iceGatheringState != 'complete') await new Promise(res => a.addEventListener('icegatheringstatechange', res, {once: true}));
+while (a.iceGatheringState != 'complete') await state({ 'icegatheringstatechange': a })
 
 await b.setRemoteDescription(a.localDescription);
 await b.setLocalDescription();
