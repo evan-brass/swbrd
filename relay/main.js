@@ -1,5 +1,8 @@
+import { from_bytes, to_string } from '../src/id.js';
 import { Ip6, parse_ipaddr } from '../src/ipaddr.js';
 import { Attr, AttrType, Class, MAGIC_COOKIE, Method, Stun } from '../src/stun.js';
+import { encoder } from '../src/util.js';
+import mbedtls from './mbedtls.js';
 
 if (!import.meta.main) throw new Error("swbrd library code is in src");
 
@@ -21,6 +24,42 @@ const turnKey = await crypto.subtle.importKey(
 );
 const default_lifetime = 6000;
 const broadcast = new Ip6(0, 0, 0, 0, 0, 0xffff, 0xffff, 0xffff);
+
+let ssl_config, our_pid; {
+	// Read the x509 cert off the disk
+	const file_pem = await Deno.readTextFile('cert.pem');
+	const file_bytes = encoder.encode(file_pem + '\0');
+
+	// Parse it into mbedtls
+	const cert = mbedtls.new_x509_crt();
+	if (cert == null) throw new Error();
+	mbedtls.x509_crt_init(cert);
+	let res = mbedtls.x509_crt_parse(cert, file_bytes, file_bytes.byteLength);
+	if (res != 0) throw new Error();
+
+	// Digest the cert's raw der
+	const cert_raw = new Uint8Array(Deno.UnsafePointerView.getArrayBuffer(
+		mbedtls.get_x509_crt_ptr(cert),
+		mbedtls.get_x509_crt_len(cert),
+	));
+	const fingerprint = new Uint8Array(await crypto.subtle.digest('SHA-256', cert_raw));
+	our_pid = from_bytes(fingerprint);
+	console.log('our pid', to_string(our_pid));
+
+	const pk = mbedtls.new_pk_context();
+	if (pk == null) throw new Error();
+	mbedtls.pk_init(pk);
+	res = mbedtls.pk_parse_key(pk, file_bytes, file_bytes.byteLength, null, 0, null, null);
+	if (res != 0) throw new Error();
+
+	ssl_config = mbedtls.new_ssl_config();
+	if (ssl_config == null) throw new Error();
+	mbedtls.ssl_config_init(ssl_config);
+	res = mbedtls.ssl_config_defaults(ssl_config, 0 /* MBEDTLS_SSL_IS_CLIENT */, 1 /* MBEDTLS_SSL_TRANSPORT_DATAGRAM */, 0 /*MBEDTLS_SSL_PRESET_DEFAULT */);
+	if (res != 0) throw new Error();
+	res = mbedtls.ssl_conf_own_cert(ssl_config, cert, pk);
+	if (res != 0) throw new Error();
+}
 
 const sock = Deno.listenDatagram({
 	port: 3478,
