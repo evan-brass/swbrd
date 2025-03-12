@@ -1,5 +1,31 @@
 <!DOCTYPE html>
 <script type="module">
+import { cert, Cert } from '/src/cert.js';
+import { Conn } from '/src/conn.js';
+
+// Log everything.
+function log_everything(conn, label = conn.pid) {
+	const logger = (...args) => console.log(label, ...args);
+	['message', 'open', 'close'].forEach(e => conn.dc.addEventListener(e, logger));
+	['connectionState', 'iceConnectionState', 'iceGatheringState', 'signalingState'].forEach(p => {
+		conn.addEventListener(p.toLowerCase() + 'change', () => logger(p, conn[p]));
+	});
+	['icecandidate', 'datachannel', 'icecandidateerror', 'negotiationneeded', 'track'].forEach(e => {
+		conn.addEventListener(e, logger);
+	});
+}
+
+const certa = await Cert.load('peera');
+const certb = await Cert.load('peerb');
+
+const a = new Conn(BigInt(certb), {cert: certa});
+const b = new Conn(BigInt(certa), {cert: certb});
+log_everything(a, 'a');
+log_everything(b, 'b');
+
+a.dc.addEventListener('open', () => a.restartIce()); // Trigger an ICE restart once the connection is open.
+</script>
+<script type="_module">
 import { state } from '/src/util.js';
 
 const config = {
@@ -8,7 +34,7 @@ const config = {
 		username: 'guest',
 		credential: 'password',
 		// urls: 'turn:stun.evan-brass.net',
-		urls: 'turn:localhost',
+		urls: 'turn:localhost?transport=tcp',
 	}]
 };
 const a = new RTCPeerConnection(config);

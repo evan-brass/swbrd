@@ -5,7 +5,8 @@ import { is_firefox, state } from './util.js';
 
 export const defaults = {
 	iceServers: [{
-		urls: 'turn:stun.evan-brass.net',
+		// urls: 'turn:stun.evan-brass.net',
+		urls: 'turn:localhost?transport=tcp',
 		username: 'guest',
 		credential: 'password',
 	}],
@@ -47,6 +48,7 @@ export class Conn extends RTCPeerConnection {
 		ice_pwd,
 		mung = true,
 		timeout = 10_000,
+		starter = ['::ffff:255.255.255.255', 65535],
 		...config
 	} = {}) {
 		const cert = config?.cert ?? default_cert;
@@ -82,6 +84,7 @@ export class Conn extends RTCPeerConnection {
 			console.error(e);
 			this.close();
 		});
+		if (starter) this.addIceCandidate(starter);
 	}
 
 	async addIceCandidate(candidate) {

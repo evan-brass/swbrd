@@ -1,2 +1,1 @@
-A purely stateless UDP relay server that speaks the TURN wire format
-
+A not-TURN server for making WebRTC connections without using signaling messages.

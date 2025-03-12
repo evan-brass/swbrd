@@ -1,8 +1,6 @@
-import { from_bytes, to_string } from '../src/id.js';
 import { Ip6, parse_ipaddr } from '../src/ipaddr.js';
-import { Attr, AttrType, Class, MAGIC_COOKIE, Method, Stun } from '../src/stun.js';
-import { encoder } from '../src/util.js';
-import mbedtls from './mbedtls.js';
+import { Stun, Class, Method, Attr, AttrType } from '../src/stun.js';
+import { write } from '../src/util.js';
 
 if (!import.meta.main) throw new Error("swbrd library code is in src");
 
@@ -25,221 +23,234 @@ const turnKey = await crypto.subtle.importKey(
 const default_lifetime = 6000;
 const broadcast = new Ip6(0, 0, 0, 0, 0, 0xffff, 0xffff, 0xffff);
 
-let ssl_config, our_pid; {
-	// Read the x509 cert off the disk
-	const file_pem = await Deno.readTextFile('cert.pem');
-	const file_bytes = encoder.encode(file_pem + '\0');
+const all = new Map();
 
-	// Parse it into mbedtls
-	const cert = mbedtls.new_x509_crt();
-	if (cert == null) throw new Error();
-	mbedtls.x509_crt_init(cert);
-	let res = mbedtls.x509_crt_parse(cert, file_bytes, file_bytes.byteLength);
-	if (res != 0) throw new Error();
-
-	// Digest the cert's raw der
-	const cert_raw = new Uint8Array(Deno.UnsafePointerView.getArrayBuffer(
-		mbedtls.get_x509_crt_ptr(cert),
-		mbedtls.get_x509_crt_len(cert),
-	));
-	const fingerprint = new Uint8Array(await crypto.subtle.digest('SHA-256', cert_raw));
-	our_pid = from_bytes(fingerprint);
-	console.log('our pid', to_string(our_pid));
-
-	const pk = mbedtls.new_pk_context();
-	if (pk == null) throw new Error();
-	mbedtls.pk_init(pk);
-	res = mbedtls.pk_parse_key(pk, file_bytes, file_bytes.byteLength, null, 0, null, null);
-	if (res != 0) throw new Error();
-
-	ssl_config = mbedtls.new_ssl_config();
-	if (ssl_config == null) throw new Error();
-	mbedtls.ssl_config_init(ssl_config);
-	res = mbedtls.ssl_config_defaults(ssl_config, 0 /* MBEDTLS_SSL_IS_CLIENT */, 1 /* MBEDTLS_SSL_TRANSPORT_DATAGRAM */, 0 /*MBEDTLS_SSL_PRESET_DEFAULT */);
-	if (res != 0) throw new Error();
-	res = mbedtls.ssl_conf_own_cert(ssl_config, cert, pk);
-	if (res != 0) throw new Error();
+function make_key(ip, port) {
+	return `[${ip}]:${port}`;
 }
 
-const sock = Deno.listenDatagram({
-	port: 3478,
-	hostname: '::',
-	transport: 'udp',
-});
-const buffer = new Uint8Array(2048);
-packet_loop: for (; ;) {
-	const [{ byteLength }, { hostname, port }] = await sock.receive(buffer);
-	const msg = new Stun(buffer);
-	if (msg.byteLength != byteLength) continue;
-	const sender = parse_ipaddr(hostname);
-	const canonical = sender.canonical();
-	let receiver = { hostname, port };
+class Turn {
+	ip;
+	port;
+	writer;
+	mappings = [];
+	constructor(conn) {
+		conn.setNoDelay(true);
+		this.writer = conn.writable.getWriter();
+		this.ip = parse_ipaddr(conn.remoteAddr.hostname);
+		this.port = conn.remoteAddr.port;
 
-	// Parse STUN Attributes
-	const [
-		[
-			// Allocate / Refresh / CreatePermission / ChannelBind
-			username, realm, nonce,
-			// Allocate
-			requestedTransport,
-			// Allocate / Refresh
-			lifetime,
-			// Send / CreatePermission / ChannelBind
-			peer,
-			// Send
-			data,
-			// ChannelBind
-			_channel,
-		],
-		[_integrity],
-		[_fingerprint],
-		unknown
-	] = msg.parse(
-		[
-			[AttrType.Username, 'text'],
-			[AttrType.Realm, 'text'],
-			[AttrType.Nonce, 'text'],
-			[AttrType.RequestedTransport, 'fucky_u8'],
-			[AttrType.Lifetime, 'u32'],
-			[AttrType.Peer, 'addr'],
-			[AttrType.Data],
-			[AttrType.ChannelNumber, 4],
-		],
-		[[AttrType.Integrity, 20]],
-		[[AttrType.Fingerprint, 'u32']],
-	);
-
-	// Anything with unknown attributes
-	if (unknown.length) {
-		console.warn('dropping', unknown);
-		continue packet_loop;
+		const key = make_key(this.ip, this.port);
+		all.set(key, this);
+		this.#handle(conn.readable).finally(() => all.delete(key));
 	}
-	// Send Indications
-	else if (msg.class == Class.Ind && msg.method == Method.Send) {
-		if (!(peer?.ip instanceof Ip6) || !data?.byteLength) continue packet_loop;
-		msg.method = Method.Data;
-		const is_broadcast = peer.ip.every((v, i) => broadcast[i] == v);
+	async #handle_msg(msg) {
+		const ret = new Stun(new ArrayBuffer(100)); // All fixed-length responses have a maximum length of 100 bytes
+		ret.class = Class.Suc;
+		ret.method = msg.method;
+		ret.length = 0;
+		ret.cookie = msg.cookie;
+		ret.txid = msg.txid;
 
-		// Shift the data attribute to where it needs to be
-		msg.length = 0;
-		const offset = Stun.minByteLength + Attr.minByteLength + 20 +
-			Attr.minByteLength;
-		const length = data.byteLength;
-		buffer.copyWithin(offset, data.byteOffset, length);
-		const moved_data = new Uint8Array(buffer.buffer, offset, length);
+		// Parse STUN Attributes
+		const [
+			[
+				// Allocate / Refresh / CreatePermission / ChannelBind
+				username, realm, nonce,
+				// Allocate
+				requestedTransport,
+				// Allocate / Refresh
+				lifetime,
+				// Send / CreatePermission / ChannelBind
+				peer,
+				// Send
+				data,
+				// ChannelBind
+				_channel,
+			],
+			[_integrity],
+			[_fingerprint],
+			unknown
+		] = msg.parse(
+			[
+				[AttrType.Username, 'text'],
+				[AttrType.Realm, 'text'],
+				[AttrType.Nonce, 'text'],
+				[AttrType.RequestedTransport, 'fucky_u8'],
+				[AttrType.Lifetime, 'u32'],
+				[AttrType.Peer, 'addr'],
+				[AttrType.Data],
+				[AttrType.ChannelNumber, 4],
+			],
+			[[AttrType.Integrity, 20]],
+			[[AttrType.Fingerprint, 'u32']],
+		);
 
-		// Append the peer attribute and update the receiver
-		msg.append(AttrType.Peer, 'addr', { ip: sender, port });
-		receiver = { hostname: String(peer.ip), port: peer.port };
+		// Drop anything with unknown comprehension required attributes
+		if (unknown.length) return;
 
-		// Peek inside the packet:
-		hosted: if (is_broadcast) {
-			// Check if this is an ICE connection test
-			const inner = new Stun(moved_data);
-			if (inner.byteLength != length) break hosted;
-			if (inner.class != Class.Req) break hosted;
-			if (inner.method != Method.Binding) break hosted;
-			if (inner.cookie != MAGIC_COOKIE) break hosted;
+		// Send Indications
+		else if (msg.class == Class.Ind && msg.method == Method.Send) {
+			if (!(peer?.ip instanceof Ip6) || !data?.byteLength) return;
+			const is_broadcast = peer.ip.every((v, i) => broadcast[i] == v);
 
-			const [
-				[
-					username,
-					priority,
-					iceControlled,
-					iceControlling,
-					_useCandidate,
-				],
-				[integrity],
-				[fingerprint],
-				unknown,
-			] = inner.parse(
-				[
-					[AttrType.Username, 'text'],
-					[AttrType.Priority, 'u32'],
-					[AttrType.IceControlled, 'u64'],
-					[AttrType.IceControlling, 'u64'],
-					[AttrType.UseCandidate, 'bool'],
-				],
-				[[AttrType.Integrity, 20]],
-				[[AttrType.Fingerprint, 'u32']],
-			);
-			if (
-				unknown.length ||
-				!username || !priority || !integrity || !fingerprint ||
-				(typeof iceControlled == typeof iceControlling) ||
-				(typeof iceControlled != 'bigint' && typeof iceControlling != 'bigint')
-			) {
-				break hosted;
+			// Send indications get modified in place and then relayed
+			msg.method = Method.Data;
+			msg.length = 0;
+			const offset = Stun.minByteLength + Attr.minByteLength + 20 +
+				Attr.minByteLength;
+			const length = data.byteLength;
+			new Uint8Array(msg.buffer).copyWithin(offset, data.byteOffset, length);
+			const moved_data = new Uint8Array(msg.buffer, offset, length);
+			console.log(moved_data);
+
+			// True broadcast
+			if (is_broadcast && peer.port == 65535) {
+				for (const turn of all.values()) {
+					if (turn == this) continue;
+					let self_port = 1 + turn.mappings.indexOf(this);
+					if (self_port == 0) {
+						if (turn.mappings.length >= 2000) continue;
+						turn.mappings.push(this);
+						self_port = turn.mappings.length;
+					}
+					msg.length = 0;
+					msg.append(AttrType.Peer, 'addr', {ip: broadcast, port: self_port});
+					msg.append(AttrType.Data, length);
+					await write(turn.writer, new Uint8Array(msg.buffer, msg.byteOffset, msg.byteLength));
+				}
 			}
 
-			// Truncate the ICE connection test to the integrity attr
-			inner.length = (integrity.byteOffset - inner.byteOffset) - Stun.minByteLength + 20;
-			inner.append(AttrType.Peer, 'addr', {ip: sender, port});
+			// Pseudo unicast
+			else if (is_broadcast) {
+				const turn = this.mappings[peer.port - 1];
+				if (!turn) return;
+				let self_port = 1 + turn.mappings.indexOf(this);
+				if (self_port == 0) {
+					if (turn.mappings.length >= 2000) return;
+					turn.mappings.push(this);
+					self_port = turn.mappings.length;
+				}
+				msg.length = 0;
+				msg.append(AttrType.Peer, 'addr', { ip: broadcast, port: self_port });
+				msg.append(AttrType.Data, length);
+				await write(turn.writer, new Uint8Array(msg.buffer, msg.byteOffset, msg.byteLength));
+			}
 
-			// TODO: ipc this to a webrtc implementation
-			const _test = buffer.subarray(inner.byteOffset, inner.byteOffset + inner.byteLength);
+			// Transparent Unicast
+			else {
+				const key = make_key(peer.ip, peer.port);
+				const turn = all.get(key);
+				if (!turn) return;
+				msg.length = 0;
+				msg.append(AttrType.Peer, 'addr', { ip: this.ip, port: this.port });
+				msg.append(AttrType.Data, length);
+				await write(turn.writer, new Uint8Array(msg.buffer, msg.byteOffset, msg.byteLength));
+			}
+
+			// We just performed a relay, so don't respond with anything.
+			return;
 		}
-		// NOTE: Currently packets sent to ::ffff:255.255.255.255 will try to be sent, and then immediately dropped by the OS.  I'm leaving this in because I think it might be a useful method of ipc instead of using a named pipe or something.  I'm still not sure if having a process boundary is the right way to go.  It would be nice to be able to restart hosted peers without restarting the relay server.
 
-		// Append the data attribute (We only need to assign the length, because the data is already in position.)
-		msg.append(AttrType.Data, length);
-	} // Drop all other Indications or Responses
-	else if (msg.class != Class.Req) {
-		continue packet_loop;
-	} // Binding Requests
-	else if (msg.method == Method.Binding) {
-		msg.length = 0;
-		msg.class = Class.Suc;
-		msg.append(AttrType.Mapped, 'addr', { ip: canonical, port });
-	} // Check the username, realm, and nonce
-	else if (username != 'guest' || realm != 'none' || nonce != 'none') {
-		msg.class = Class.Err;
-		msg.length = 0;
-		msg.append(AttrType.Error, 4, [0, 0, 4, 1]);
-		msg.append(AttrType.Realm, 'text', 'none');
-		msg.append(AttrType.Nonce, 'text', 'none');
-	} // All other requests require Authentication
-	else if (!await msg.verify(turnKey)) {
-		msg.class = Class.Err;
-		msg.length = 0;
-		msg.append(AttrType.Error, 4, [0, 0, 4, 3]);
-	} // Allocate Requests
-	else if (msg.method == Method.Allocate) {
-		if (requestedTransport != 17 /* UDP */) {
-			continue packet_loop;
+		// Drop all other non-requests
+		else if (msg.class != Class.Req) return;
+
+		// Binding Requests
+		else if (msg.method == Method.Binding) {
+			ret.append(AttrType.Mapped, 'addr', {ip: this.ip.canonical(), port: this.port});
 		}
-		msg.class = Class.Suc;
-		msg.length = 0;
 
-		msg.append(AttrType.Mapped, 'addr', { ip: canonical, port });
-		msg.append(AttrType.Relayed, 'addr', { ip: sender, port });
-		msg.append(AttrType.Lifetime, 'u32', lifetime || default_lifetime);
-		await msg.sign(turnKey);
-		console.assert(await msg.verify(turnKey), 'signature error');
-	} // Refresh Request
-	else if (msg.method == Method.Refresh) {
-		if (lifetime === 0) continue packet_loop; // Close notification -> don't respond
-		msg.class = Class.Suc;
-		msg.length = 0;
-		msg.append(AttrType.Lifetime, 'u32', lifetime || default_lifetime);
-		await msg.sign(turnKey);
-	} // Create Permission Request
-	else if (msg.method == Method.CreatePermission) {
-		msg.class = Class.Suc;
-		msg.length = 0;
-		await msg.sign(turnKey);
-	} // Channel Bind Request
-	else if (msg.method == Method.ChannelBind) {
-		msg.class = Class.Err;
-		msg.length = 0;
-		msg.append(AttrType.Error, 4, [0, 0, 4, 38]);
-		await msg.sign(turnKey);
-	} // Drop all other requests
-	else continue packet_loop;
+		// Check username, realm, and nonce
+		else if (username != 'guest' || realm != 'none' || nonce != 'none') {
+			ret.class = Class.Err;
+			ret.append(AttrType.Error, 4, [0, 0, 4, 1]);
+			ret.append(AttrType.Realm, 'text', 'none');
+			ret.append(AttrType.Nonce, 'text', 'none');
+		}
 
-	try {
-		await sock.send(buffer.subarray(0, msg.byteLength), receiver);
-	} catch (e) {
-		console.warn(e);
+		// All other requests require valid integrity
+		else if (!await msg.verify(turnKey)) {
+			ret.class = Class.Err;
+			ret.append(AttrType.Error, 4, [0, 0, 4, 3]);
+		}
+
+		// Allocate
+		else if (msg.method == Method.Allocate) {
+			if (requestedTransport != 17 /* UDP */) return;
+			ret.append(AttrType.Mapped, 'addr', {ip: this.ip.canonical(), port: this.port});
+			ret.append(AttrType.Relayed, 'addr', {ip: this.ip, port: this.port});
+			ret.append(AttrType.Lifetime, 'u32', lifetime || default_lifetime)
+			await ret.sign(turnKey);
+		}
+
+		// Refresh
+		else if (msg.method == Method.Refresh) {
+			if (lifetime == 0) return; // Close notification -> don't respond
+			ret.append(AttrType.Lifetime, 'u32', lifetime || default_lifetime);
+			await ret.sign(turnKey);
+		}
+
+		// Create Permission
+		else if (msg.method == Method.CreatePermission) {
+			await ret.sign(turnKey);
+		}
+
+		// Channel Bind
+		else if (msg.method == Method.ChannelBind) {
+			ret.class = Class.Err;
+			ret.append(AttrType.Error, 4, [0, 0, 4, 38]);
+			await ret.sign(turnKey)
+		}
+
+		// Drop all other requests
+		else return;
+
+		// Send the response
+		await write(this.writer, new Uint8Array(ret.buffer, ret.byteOffset, ret.byteLength));
 	}
+	async #handle(readable) {
+		const maxByteLength = 4096;
+		// FUCK: Deno's Conn is taking my resiziable buffer and returning a non-resiziable one... So we need to resize the buffer manually
+		let buffer = new ArrayBuffer(40);
+		const reader = readable.getReader({ mode: 'byob' });
+
+		let available = 0;
+		for (;;) {
+			try {
+				const {value, done} = await reader.read(new Uint8Array(buffer, available));
+				if (value) {
+					buffer = value.buffer; // The stream apis detach buffers alot (so that they can be in different workers)
+					available += value.byteLength;
+
+					const msg = new Stun(buffer);
+					const msg_byteLength = msg.byteLength;
+					// Check if the message exceeds our max buffer size:
+					if (msg_byteLength > maxByteLength) break;
+
+					// Resize the buffer if needed:
+					else if (msg_byteLength > buffer.byteLength) {
+						// Transfer to a larger buffer
+						buffer = buffer.transfer(msg_byteLength);
+					}
+
+					// If we have enough data available for this message, then consume it:
+					else if (msg_byteLength <= available) {
+						await this.#handle_msg(msg);
+
+						// Shift the data in the buffer:
+						new Uint8Array(buffer).copyWithin(0, msg_byteLength, available);
+						available -= msg_byteLength;
+					}
+				}
+				if (done) break;
+			} catch (e) {
+				console.warn(e);
+				break;
+			}
+		}
+	}
+}
+
+for await (const conn of Deno.listen({ hostname: '::', port: 3478 })) {
+	new Turn(conn);
 }
