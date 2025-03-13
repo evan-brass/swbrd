@@ -163,6 +163,7 @@ export class Conn extends RTCPeerConnection {
 				'a=group:BUNDLE dc',
 				`a=fingerprint:${to_fingerprint(this.pid)}`,
 				`a=ice-ufrag:${to_string(this.pid)}`,
+				// TODO: ice-pwd needs to be different per connection I want to prefix it with to_string(this.#cert) but that means need_cert would need to be called before setRemoteDescription and thus mung must always be true and manual certs must always be provided...
 				`a=ice-pwd:${ice_pwd || default_ice_pwd}`,
 				'a=ice-options:trickle',
 				...(ice_lite != undefined ? ['a=ice-lite'] : []),

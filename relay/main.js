@@ -33,7 +33,7 @@ class Turn {
 	ip;
 	port;
 	writer;
-	mappings = [];
+	mappings;
 	constructor(conn) {
 		conn.setNoDelay(true);
 		this.writer = conn.writable.getWriter();
@@ -69,7 +69,7 @@ class Turn {
 				_channel,
 			],
 			[_integrity],
-			[_fingerprint],
+			[fingerprint],
 			unknown
 		] = msg.parse(
 			[
@@ -101,51 +101,64 @@ class Turn {
 				Attr.minByteLength;
 			const length = data.byteLength;
 			new Uint8Array(msg.buffer).copyWithin(offset, data.byteOffset, length);
-			const moved_data = new Uint8Array(msg.buffer, offset, length);
-			console.log(moved_data);
+			// const moved_data = new Uint8Array(msg.buffer, offset, length);
 
-			// True broadcast
-			if (is_broadcast && peer.port == 65535) {
-				for (const turn of all.values()) {
-					if (turn == this) continue;
+			const relay = async turn => {
+				let peer;
+				if (Array.isArray(turn.mappings)) {
 					let self_port = 1 + turn.mappings.indexOf(this);
 					if (self_port == 0) {
-						if (turn.mappings.length >= 2000) continue;
+						if (turn.mappings.length >= 2000) return;
 						turn.mappings.push(this);
 						self_port = turn.mappings.length;
 					}
-					msg.length = 0;
-					msg.append(AttrType.Peer, 'addr', {ip: broadcast, port: self_port});
-					msg.append(AttrType.Data, length);
-					await write(turn.writer, new Uint8Array(msg.buffer, msg.byteOffset, msg.byteLength));
+					peer = { ip: broadcast, port: self_port };
+				}
+				else {
+					peer = { ip: this.ip, port: this.port };
+				}
+				msg.length = 0;
+				msg.append(AttrType.Peer, 'addr', peer);
+				msg.append(AttrType.Data, length);
+				await write(turn.writer, new Uint8Array(msg.buffer, msg.byteOffset, msg.byteLength));
+			};
+
+			// Broadcast
+			if (is_broadcast && peer.port == 65535) {
+				/**
+				 * HACK: Needed because Firefox enforces TURN permissions locally.
+				 * This means that it cannot receive packets from ips which it has not
+				 * granted permission too.  It can however receive from unexpected ports
+				 * so we map all peer ip+ports to an assigned port at a known ip.
+				 * This is unneccessary state and we only have 2000 slots available, so
+				 * we only perform this mapping for Firefox and not for Chrome.
+				 *
+				 * Also, once the connection opens and you trickle true ICE candidates,
+				 * those will have proper permissions, and thus will not hit this mapping.
+				 *
+				 * ISSUE: https://bugzilla.mozilla.org/show_bug.cgi?id=1952664
+				 */
+				if (fingerprint) this.mappings ??= [];
+
+				for (const turn of all.values()) {
+					if (turn == this) continue;
+					await relay(turn);
 				}
 			}
 
-			// Pseudo unicast
+			// Unicast Mapped
 			else if (is_broadcast) {
 				const turn = this.mappings[peer.port - 1];
 				if (!turn) return;
-				let self_port = 1 + turn.mappings.indexOf(this);
-				if (self_port == 0) {
-					if (turn.mappings.length >= 2000) return;
-					turn.mappings.push(this);
-					self_port = turn.mappings.length;
-				}
-				msg.length = 0;
-				msg.append(AttrType.Peer, 'addr', { ip: broadcast, port: self_port });
-				msg.append(AttrType.Data, length);
-				await write(turn.writer, new Uint8Array(msg.buffer, msg.byteOffset, msg.byteLength));
+				await relay(turn);
 			}
 
-			// Transparent Unicast
+			// Unicast Transparent
 			else {
 				const key = make_key(peer.ip, peer.port);
 				const turn = all.get(key);
 				if (!turn) return;
-				msg.length = 0;
-				msg.append(AttrType.Peer, 'addr', { ip: this.ip, port: this.port });
-				msg.append(AttrType.Data, length);
-				await write(turn.writer, new Uint8Array(msg.buffer, msg.byteOffset, msg.byteLength));
+				await relay(turn);
 			}
 
 			// We just performed a relay, so don't respond with anything.
@@ -252,5 +265,6 @@ class Turn {
 }
 
 for await (const conn of Deno.listen({ hostname: '::', port: 3478 })) {
+	console.log('new', conn.remoteAddr.hostname, conn.remoteAddr.port, 'existing', all.size);
 	new Turn(conn);
 }
