@@ -96,10 +96,11 @@ class Turn {
 
 			// Send indications get modified in place and then relayed
 			msg.method = Method.Data;
-			msg.length = 0;
 			const offset = Stun.minByteLength + Attr.minByteLength + 20 +
 				Attr.minByteLength;
 			const length = data.byteLength;
+
+			// TODO: I honestly have no clue why the following line works...  Surely it's missing a msg.byteOffset somewhere, and why the hell is length in the ending index position?
 			new Uint8Array(msg.buffer).copyWithin(offset, data.byteOffset, length);
 			// const moved_data = new Uint8Array(msg.buffer, offset, length);
 
