@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <script type="module">
 import { cert, Cert } from '/src/cert.js';
-import { Conn } from '/src/conn.js';
+import { Addr } from '/src/addr.js';
 
 // Log everything.
 function log_everything(conn, label = conn.pid) {
@@ -18,12 +18,10 @@ function log_everything(conn, label = conn.pid) {
 const certa = await Cert.load('peera');
 const certb = await Cert.load('peerb');
 
-const a = new Conn(BigInt(certb), {cert: certa});
-const b = new Conn(BigInt(certa), {cert: certb});
+const a = new Addr(`turn+tcp:${certb}@localhost?setup`).connect({cert: certa});
+const b = new Addr(`turn+tcp:${certa}@localhost?setup`).connect({cert: certb});
 log_everything(a, 'a');
 log_everything(b, 'b');
-
-a.dc.addEventListener('open', () => a.restartIce()); // Trigger an ICE restart once the connection is open.
 </script>
 <script type="_module">
 import { state } from '/src/util.js';

@@ -48,7 +48,6 @@ export class Conn extends RTCPeerConnection {
 		ice_pwd,
 		mung = true,
 		timeout = 10_000,
-		starter = ['::ffff:255.255.255.255', 65535],
 		...config
 	} = {}) {
 		const cert = config?.cert ?? default_cert;
@@ -84,7 +83,6 @@ export class Conn extends RTCPeerConnection {
 			console.error(e);
 			this.close();
 		});
-		if (starter) this.addIceCandidate(starter);
 	}
 
 	async addIceCandidate(candidate) {
@@ -163,7 +161,7 @@ export class Conn extends RTCPeerConnection {
 				'a=group:BUNDLE dc',
 				`a=fingerprint:${to_fingerprint(this.pid)}`,
 				`a=ice-ufrag:${to_string(this.pid)}`,
-				// TODO: ice-pwd needs to be different per connection I want to prefix it with to_string(this.#cert) but that means need_cert would need to be called before setRemoteDescription and thus mung must always be true and manual certs must always be provided...
+				// TODO: ice-pwd would need to be unique if you do broadcasting.  One option: ice_pwd + to_string(this.cert) for theirs and ice_pwd + to_string(this.pid) for ours.
 				`a=ice-pwd:${ice_pwd || default_ice_pwd}`,
 				'a=ice-options:trickle',
 				...(ice_lite != undefined ? ['a=ice-lite'] : []),

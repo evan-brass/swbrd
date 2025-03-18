@@ -60,7 +60,7 @@ export class Addr extends URL {
 		return {
 			/**
 			 * HACK: If iceTransportPolicy=='relay' then Firefox will kill local relay candidates if they become prflx candidates.
-			 * Chrome doesn't do this.
+			 * Chrome will mark the local candidate as prflx but that doesn't stop it from utilizing it.
 			 * - https://www.rfc-editor.org/rfc/rfc9429#section-4.1.1
 			 * - https://www.rfc-editor.org/rfc/rfc9429#sec.ice-candidate-policy
 			 *
@@ -106,7 +106,7 @@ export class Addr extends URL {
 		} else if (/^(turns?)(?:\+(tcp|udp))?:/i.test(this.protocol)) {
 			yield {
 				address: '::ffff:ffff:ffff',
-				port: 3478,
+				port: 65535,
 				usernameFragment,
 			};
 		}
