@@ -2,7 +2,7 @@ import { algorithm, from_string } from './id.js';
 import { Conn } from './conn.js';
 import { query_txt } from './dns.js';
 import { default_turn_credential, default_turn_username } from './const.js';
-import { state } from './util.js';
+import { is_firefox, state } from './util.js';
 /**
  * Example Addr-esses:
  * const a = new Addr('udp:seed.evan-brass.net'); await a.resolve_id(); const conn = a.connect();
@@ -58,7 +58,15 @@ export class Addr extends URL {
 		const { 1: proto, 2: transport } = turn_res;
 		const { host } = this.authority;
 		return {
-			iceTransportPolicy: 'relay',
+			/**
+			 * HACK: If iceTransportPolicy=='relay' then Firefox will kill local relay candidates if they become prflx candidates.
+			 * Chrome doesn't do this.
+			 * - https://www.rfc-editor.org/rfc/rfc9429#section-4.1.1
+			 * - https://www.rfc-editor.org/rfc/rfc9429#sec.ice-candidate-policy
+			 *
+			 * ISSUE: If I knew what the right thing to do was...
+			 */
+			iceTransportPolicy: is_firefox ? 'all' : 'relay',
 			iceServers: [{
 				urls: `${proto}:${host}${transport ? '?transport=' + transport : ''}`,
 				username: decodeURIComponent(
