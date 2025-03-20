@@ -1,5 +1,6 @@
+import { from_string } from '../src/id.js';
 import { Ip6, parse_ipaddr } from '../src/ipaddr.js';
-import { Stun, Class, Method, Attr, AttrType } from '../src/stun.js';
+import { Stun, Class, Method, Attr, AttrType, MAGIC_COOKIE } from '../src/stun.js';
 import { write } from '../src/util.js';
 
 if (!import.meta.main) throw new Error("swbrd library code is in src");
@@ -96,13 +97,17 @@ class Turn {
 
 			// Send indications get modified in place and then relayed
 			msg.method = Method.Data;
-			const offset = Stun.minByteLength + Attr.minByteLength + 20 +
-				Attr.minByteLength;
-			const length = data.byteLength;
+			const offset = msg.byteOffset
+				/* STUN Header */ + Stun.minByteLength
+				/* XOR-PEER-ADDRESS Header */ + Attr.minByteLength
+				/* - Value: Port + IP6 */ + 20
+				/* DATA Header */ + Attr.minByteLength;
+			let length = data.byteLength;
 
-			// TODO: I honestly have no clue why the following line works...  Surely it's missing a msg.byteOffset somewhere, and why the hell is length in the ending index position?
-			new Uint8Array(msg.buffer).copyWithin(offset, data.byteOffset, length);
-			// const moved_data = new Uint8Array(msg.buffer, offset, length);
+			// Shift the DataAttribute to where we want it (It's probably already there, but be sure)
+			new Uint8Array(msg.buffer).copyWithin(offset, data.byteOffset, data.byteOffset + length);
+			const moved_data = new Uint8Array(msg.buffer, offset, length);
+			// console.log(moved_data);
 
 			const relay = async turn => {
 				let peer;
@@ -141,10 +146,72 @@ class Turn {
 				 */
 				if (fingerprint) this.mappings ??= [];
 
-				for (const turn of all.values()) {
-					if (turn == this) continue;
-					await relay(turn);
+				// Special treatment for [::ffff:255.255.255.255]:65535
+				const fb = moved_data[0];
+				/* STUN */ if (fb < 3) {
+					// Verify that the message is an ICE connection test
+					const inner = new Stun(msg.buffer, {byteOffset: offset});
+					if (inner.byteLength != length) return;
+					if (inner.class != Class.Req) return;
+					if (inner.method != Method.Binding) return;
+					if (inner.cookie != MAGIC_COOKIE) return;
+
+					const [
+						[
+							username,
+							priority,
+							iceControlled,
+							iceControlling,
+							_useCandidate,
+						],
+						[integrity],
+						[fingerprint],
+						unknown,
+					] = inner.parse(
+						[
+							[AttrType.Username, 'text'],
+							[AttrType.Priority, 'u32'],
+							[AttrType.IceControlled, 'u64'],
+							[AttrType.IceControlling, 'u64'],
+							[AttrType.UseCandidate, 'bool'],
+						],
+						[[AttrType.Integrity, 20]],
+						[[AttrType.Fingerprint, 'u32']],
+					);
+					if (
+						unknown.length ||
+						!username || !priority || !integrity || !fingerprint ||
+						(typeof iceControlled == typeof iceControlling)
+					) { return; }
+
+					const [dst_ufrag, src_ufrag, more] = username.split(':');
+					if (!dst_ufrag || !src_ufrag || more) return;
+					const [dpid, spid] = [dst_ufrag, src_ufrag].map(from_string);
+					if (!dpid || !spid) return;
+					console.log(dpid, spid);
+
+					// Handle Hosted ICE
+					if (dst_ufrag == 'ucCm6JK3s22XuCRiTZVFpWajUq0tIpB7lDn1Sv8dRv3') {
+						// TODO: Respond to the ICE
+						return;
+					}
+					// Broadcast the ICE connection test so that it can be discovered
+					else {
+						// Broadcast the ICE connection test to everyone
+						for (const turn of all.values()) {
+							if (turn == this) continue;
+							await relay(turn);
+						}
+
+						// Don't respond
+						return;
+					}
 				}
+				/* DTLS */ else if (20 < fb && fb < 64) {
+					// TODO: Handle DTLS to hosted
+					return;
+				}
+				/* Drop */ else { return }
 			}
 
 			// Unicast Mapped
@@ -152,6 +219,9 @@ class Turn {
 				const turn = this.mappings[peer.port - 1];
 				if (!turn) return;
 				await relay(turn);
+
+				// Relayed, so no response
+				return;
 			}
 
 			// Unicast Transparent
@@ -160,10 +230,10 @@ class Turn {
 				const turn = all.get(key);
 				if (!turn) return;
 				await relay(turn);
-			}
 
-			// We just performed a relay, so don't respond with anything.
-			return;
+				// Relayed, so no response
+				return;
+			}
 		}
 
 		// Drop all other non-requests
