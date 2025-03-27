@@ -1,8 +1,5 @@
 <!DOCTYPE html>
-<script type="module">
-import { cert, Cert } from '/src/cert.js';
-import { Addr } from '/src/addr.js';
-
+<script>
 // Log everything.
 function log_everything(conn, label = conn.pid) {
 	const logger = (...args) => console.log(label, ...args);
@@ -14,6 +11,16 @@ function log_everything(conn, label = conn.pid) {
 		conn.addEventListener(e, logger);
 	});
 }
+</script>
+<script type="module">
+import { Addr } from '/src/addr.js';
+
+const host = new Addr('turn+tcp:ucCm6JK3s22XuCRiTZVFpWajUq0tIpB7lDn1Sv8dRv3@localhost?setup=active').connect();
+log_everything(host, 'host');
+</script>
+<script type="_module">
+import { cert, Cert } from '/src/cert.js';
+import { Addr } from '/src/addr.js';
 
 const certa = await Cert.load('peera');
 const certb = await Cert.load('peerb');
@@ -47,18 +54,6 @@ await a.setRemoteDescription(b.localDescription);
 <script type="_module">
 	import { Addr } from '/src/addr.js';
 	import { listen } from '/src/listen.js';
-
-	// Log everything.
-	function log_everything(conn, label = conn.pid) {
-		const logger = (...args) => console.log(label, ...args);
-		['message', 'open', 'close'].forEach(e => conn.dc.addEventListener(e, logger));
-		['connectionState', 'iceConnectionState', 'iceGatheringState', 'signalingState'].forEach(p => {
-			conn.addEventListener(p.toLowerCase() + 'change', () => logger(p, conn[p]));
-		});
-		['icecandidate', 'datachannel', 'icecandidateerror', 'negotiationneeded', 'track'].forEach(e => {
-			conn.addEventListener(e, logger);
-		});
-	}
 
 	// Connect to my server
 	const server_addr = new Addr('turn:Zx9xDRd0OG9PxMGJhg3C8NDr65kn4kOivLoSNqXKCoW@stun.evan-brass.net?ice-lite');

@@ -1,7 +1,10 @@
-import { from_string } from '../src/id.js';
+import { from_bytes, from_string } from '../src/id.js';
 import { Ip6, parse_ipaddr } from '../src/ipaddr.js';
 import { Stun, Class, Method, Attr, AttrType, MAGIC_COOKIE } from '../src/stun.js';
-import { write } from '../src/util.js';
+import { encoder, write } from '../src/util.js';
+
+import { mbedtls, mem8, memdv, check, check_non_null, func_ptr } from 'mbedtls';
+import { default_ice_pwd } from '../src/const.js';
 
 if (!import.meta.main) throw new Error("swbrd library code is in src");
 
@@ -21,8 +24,66 @@ const turnKey = await crypto.subtle.importKey(
 	),
 	...key_params,
 );
+const iceKey = await crypto.subtle.importKey(
+	'raw',
+	encoder.encode(default_ice_pwd),
+	...key_params,
+);
 const default_lifetime = 6000;
 const broadcast = new Ip6(0, 0, 0, 0, 0, 0xffff, 0xffff, 0xffff);
+
+// Setup DTLS stuff
+const ssl_config = check_non_null(mbedtls.new_ssl_config());
+let our_id;
+{
+	check(mbedtls.ssl_config_defaults(
+		ssl_config,
+		mbedtls.SSL_IS_CLIENT,
+		mbedtls.SSL_TRANSPORT_DATAGRAM,
+		mbedtls.SSL_PRESET_DEFAULT,
+	));
+	mbedtls.debug_set_threshold(3);
+	mbedtls.ssl_conf_authmode(ssl_config, mbedtls.SSL_VERIFY_OPTIONAL);
+	mbedtls.set_ssl_config_dbg(ssl_config);
+
+	// Setup entropy
+	const drbg = check_non_null(mbedtls.new_hmac_drbg_context());
+	const drbg_f = func_ptr(mbedtls.hmac_drbg_random);
+	{
+		const entropy = check_non_null(mbedtls.new_entropy_context());
+		const md_info = mbedtls.md_info_from_type(0x09 /* mbedtls_md_type_t.MBEDTLS_MD_SHA256 */);
+		check(mbedtls.hmac_drbg_seed(drbg, md_info, func_ptr(mbedtls.entropy_func), entropy, null, 0));
+	}
+	mbedtls.ssl_conf_rng(ssl_config, drbg_f, drbg);
+
+	// Parse our certificate and private key
+	const cert = check_non_null(mbedtls.new_x509_crt());
+	const pk = check_non_null(mbedtls.new_pk_context());
+	{
+		const pem = await Deno.readFile('./cert.pem');
+		const pem_len = pem.byteLength + 1;
+		const pem_ptr = check_non_null(mbedtls.malloc(pem_len));
+		mem8(pem_ptr).set(pem);
+		mem8(pem_ptr + pem.byteLength, 1).fill(0); // mbedtls expects 1 null byte at the end of PEM strings
+
+		check(mbedtls.x509_crt_parse(cert, pem_ptr, pem_len));
+		check(mbedtls.pk_parse_key(pk, pem_ptr, pem_len, null, 0, drbg_f, drbg));
+		mbedtls.free(pem_ptr);
+	}
+	check(mbedtls.ssl_conf_own_cert(ssl_config, cert, pk));
+	mbedtls.ssl_conf_ca_chain(ssl_config, cert, null);
+
+	// Get our id:
+	our_id = from_bytes(
+		new Uint8Array(await crypto.subtle.digest('SHA-256', mbedtls.get_x509_crt_raw(cert)))
+	);
+	console.log('Our id', our_id);
+
+	// More configuration options
+	check(mbedtls.ssl_conf_cid(ssl_config, 32, true));
+}
+
+const dtls_contexts = new Map(); // peerid -> ssl_context
 
 const all = new Map();
 
@@ -35,6 +96,7 @@ class Turn {
 	port;
 	writer;
 	mappings;
+	dtls;
 	constructor(conn) {
 		conn.setNoDelay(true);
 		this.writer = conn.writable.getWriter();
@@ -44,6 +106,58 @@ class Turn {
 		const key = make_key(this.ip, this.port);
 		all.set(key, this);
 		this.#handle(conn.readable).finally(() => all.delete(key));
+	}
+	async #handle_dtls() {
+		// Prep a TURN message for any DTLS data
+		const msg = new Stun(new ArrayBuffer(2048));
+		msg.class = Class.Ind;
+		msg.method = Method.Data;
+		msg.cookie = MAGIC_COOKIE;
+
+		// NOTE: Because one DTLS can be shared by multiple Turn's our dtls may have been closed by someone else
+		while (this.dtls) {
+			const res = mbedtls.ssl_read(this.dtls, null, 0);
+			if (res > 0) {
+				// Application data is available:
+				const app = mbedtls.get_ssl_context_application_data(this.dtls);
+				console.log('DTLS', app);
+				app.fill(0); // Zeroize the application data buffer.
+			}
+			else if (res == mbedtls.ERR_SSL_WANT_WRITE) {
+				const out = mbedtls.get_ssl_context_send(this.dtls);
+				if (out.byteLength <= 2000) {
+					msg.length = 0;
+					// NOTE: Evan - you dumbass - the txid affects xor-mapped addresses, therefore you must rewrite the Peer address if you modify the txid.
+					crypto.getRandomValues(msg.txid);
+					msg.append(AttrType.Peer, 'addr', { ip: broadcast, port: 65535 });
+					msg.append(AttrType.Data, undefined, out)
+
+					// Write the DTLS packet out:
+					await write(this.writer, new Uint8Array(msg.buffer, msg.byteOffset, msg.byteLength));
+				}
+				memdv(mbedtls.get_ssl_context_send_res(this.dtls)).setInt32(0, out.byteLength, true);
+			}
+			else if (res == mbedtls.ERR_SSL_WANT_READ) {
+				// DTLS is fully handled, move on
+				break;
+			}
+			else {
+				// DTLS closed:
+				mbedtls.ssl_free(this.dtls);
+				mbedtls.free(this.dtls);
+				// Clear the DTLS from dtls_contexts
+				dtls_contexts.entries().forEach(([k, v]) => {
+					if (v == this.dtls) dtls_contexts.delete(k);
+				});
+				// Delete the DTLS from other Turn's
+				all.values().forEach(t => {
+					if (t.dtls == this.dtls) t.dtls = null;
+				});
+				// Remove the DTLS from ourself
+				this.dtls = null;
+				break;
+			}
+		}
 	}
 	async #handle_msg(msg) {
 		const ret = new Stun(new ArrayBuffer(100)); // All fixed-length responses have a maximum length of 100 bytes
@@ -102,7 +216,7 @@ class Turn {
 				/* XOR-PEER-ADDRESS Header */ + Attr.minByteLength
 				/* - Value: Port + IP6 */ + 20
 				/* DATA Header */ + Attr.minByteLength;
-			let length = data.byteLength;
+			const length = data.byteLength;
 
 			// Shift the DataAttribute to where we want it (It's probably already there, but be sure)
 			new Uint8Array(msg.buffer).copyWithin(offset, data.byteOffset, data.byteOffset + length);
@@ -162,7 +276,7 @@ class Turn {
 							priority,
 							iceControlled,
 							iceControlling,
-							_useCandidate,
+							useCandidate,
 						],
 						[integrity],
 						[fingerprint],
@@ -188,12 +302,49 @@ class Turn {
 					if (!dst_ufrag || !src_ufrag || more) return;
 					const [dpid, spid] = [dst_ufrag, src_ufrag].map(from_string);
 					if (!dpid || !spid) return;
-					console.log(dpid, spid);
 
 					// Handle Hosted ICE
-					if (dst_ufrag == 'ucCm6JK3s22XuCRiTZVFpWajUq0tIpB7lDn1Sv8dRv3') {
-						// TODO: Respond to the ICE
-						return;
+					if (dpid == our_id) {
+						// Verify the message integrity:
+						if (!await inner.verify(iceKey)) return;
+
+						inner.length = 0;
+						// Switch role:
+						if (iceControlled) {
+							inner.class = Class.Err;
+							inner.append(AttrType.Error, 4, [0, 0, 4, 87]);
+						}
+						// Success
+						else {
+							inner.class = Class.Suc;
+
+							// Create a DTLS connection for this peer
+							if (useCandidate) {
+								this.dtls ??= dtls_contexts.get(src_ufrag);
+								if (!this.dtls) {
+									this.dtls = check_non_null(mbedtls.new_ssl_context());
+									check(mbedtls.ssl_setup(this.dtls, ssl_config));
+									dtls_contexts.set(src_ufrag, this.dtls);
+									const cid_ptr = check_non_null(mbedtls.malloc(32));
+									// TODO: Use peerid (as bytes) for the cid.
+									crypto.getRandomValues(mem8(cid_ptr, 32));
+									check(mbedtls.ssl_set_cid(this.dtls, mbedtls.SSL_CID_ENABLED, cid_ptr, 32));
+									mbedtls.free(cid_ptr);
+								}
+							}
+						}
+						inner.append(AttrType.Mapped, 'addr', { ip: this.ip, port: this.port });
+						await inner.sign(iceKey)
+						inner.fingerprint();
+
+						// Write out the ICE response
+						msg.length = 0;
+						msg.append(AttrType.Peer, 'addr', { ip: broadcast, port: 65535 });
+						msg.append(AttrType.Data, inner.byteLength);
+						await write(this.writer, new Uint8Array(msg.buffer, msg.byteOffset, msg.byteLength));
+
+						// Handle DTLS
+						await this.#handle_dtls();
 					}
 					// Broadcast the ICE connection test so that it can be discovered
 					else {
@@ -202,38 +353,33 @@ class Turn {
 							if (turn == this) continue;
 							await relay(turn);
 						}
-
-						// Don't respond
-						return;
 					}
 				}
 				/* DTLS */ else if (20 < fb && fb < 64) {
-					// TODO: Handle DTLS to hosted
+					if (fb == 25) console.log('YAY! DTLS CID!');
+					if (this.dtls) {
+						// Copy the data into the ssl's recv buffer.
+						const recv = mbedtls.get_ssl_context_recv(this.dtls);
+						if (moved_data.byteLength < recv.byteLength) {
+							recv.set(moved_data);
+							memdv(mbedtls.get_ssl_context_recv_res(this.dtls)).setInt32(0, moved_data.byteLength, true);
+						}
+					}
+					await this.#handle_dtls();
 					return;
 				}
 				/* Drop */ else { return }
 			}
 
-			// Unicast Mapped
-			else if (is_broadcast) {
-				const turn = this.mappings[peer.port - 1];
-				if (!turn) return;
-				await relay(turn);
-
-				// Relayed, so no response
-				return;
-			}
-
-			// Unicast Transparent
+			// Unicast
 			else {
-				const key = make_key(peer.ip, peer.port);
-				const turn = all.get(key);
+				const turn = is_broadcast ? this.mappings?.[peer.port - 1] : all.get(make_key(peer.ip, peer.port));
 				if (!turn) return;
 				await relay(turn);
-
-				// Relayed, so no response
-				return;
 			}
+
+			// We've handled relaying / hosting whatever data already so don't respond
+			return;
 		}
 
 		// Drop all other non-requests
