@@ -159,6 +159,21 @@ class Turn {
 			}
 		}
 	}
+	#dtls_clean() {
+		// DTLS closed:
+		mbedtls.ssl_free(this.dtls);
+		mbedtls.free(this.dtls);
+		// Clear the DTLS from dtls_contexts
+		dtls_contexts.entries().forEach(([k, v]) => {
+			if (v == this.dtls) dtls_contexts.delete(k);
+		});
+		// Delete the DTLS from other Turn's
+		all.values().forEach(t => {
+			if (t.dtls == this.dtls) t.dtls = null;
+		});
+		// Remove the DTLS from ourself
+		this.dtls = null;
+	}
 	async #handle_msg(msg) {
 		const ret = new Stun(new ArrayBuffer(100)); // All fixed-length responses have a maximum length of 100 bytes
 		ret.class = Class.Suc;
@@ -478,6 +493,8 @@ class Turn {
 				break;
 			}
 		}
+
+		this.#dtls_clean();
 	}
 }
 
