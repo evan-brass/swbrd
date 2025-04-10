@@ -30,7 +30,7 @@ const iceKey = await crypto.subtle.importKey(
 	...key_params,
 );
 const default_lifetime = 6000;
-const broadcast = new Ip6(0, 0, 0, 0, 0, 0xffff, 0xffff, 0xffff);
+const broadcast = new Ip6(0xfe80, 0, 0, 0, 0xffff, 0xffff, 0xffff, 0xffff);
 
 // Setup DTLS stuff
 const ssl_config = check_non_null(mbedtls.new_ssl_config());
@@ -275,7 +275,7 @@ class Turn {
 				 */
 				if (fingerprint) this.mappings ??= [];
 
-				// Special treatment for [::ffff:255.255.255.255]:65535
+				// Special treatment for [fe80::ffff:ffff:ffff:ffff]:65535
 				const fb = moved_data[0];
 				/* STUN */ if (fb < 3) {
 					// Verify that the message is an ICE connection test
