@@ -106,7 +106,7 @@ export class Addr extends URL {
 		} else if (/^(turns?)(?:\+(tcp|udp))?:/i.test(this.protocol)) {
 			yield {
 				address: 'fe80::ffff:ffff:ffff:ffff',
-				port: 65535,
+				port: is_firefox ? 65534 : 65535,
 				usernameFragment,
 			};
 		}
