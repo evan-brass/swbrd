@@ -13,14 +13,14 @@ function log_everything(conn, label = conn.pid) {
 }
 </script>
 <script type="_module">
-import { Addr } from '/src/addr.js';
+import { Addr } from './src/addr.js';
 
 const host = new Addr('turn+tcp:ucCm6JK3s22XuCRiTZVFpWajUq0tIpB7lDn1Sv8dRv3@localhost?setup=active').connect();
 log_everything(host, 'host');
 </script>
 <script type="module">
-import { cert, Cert } from '/src/cert.js';
-import { Addr } from '/src/addr.js';
+import { cert, Cert } from './src/cert.js';
+import { Addr } from './src/addr.js';
 
 const certa = await Cert.load('peera');
 const certb = await Cert.load('peerb');
@@ -31,7 +31,7 @@ log_everything(a, 'a');
 log_everything(b, 'b');
 </script>
 <script type="_module">
-import { state } from '/src/util.js';
+import { state } from './src/util.js';
 
 const config = {
 	iceTransportPolicy: 'relay',
@@ -52,8 +52,8 @@ await b.setLocalDescription();
 await a.setRemoteDescription(b.localDescription);
 </script>
 <script type="_module">
-	import { Addr } from '/src/addr.js';
-	import { listen } from '/src/listen.js';
+	import { Addr } from './src/addr.js';
+	import { listen } from './src/listen.js';
 
 	// Connect to my server
 	const server_addr = new Addr('turn:Zx9xDRd0OG9PxMGJhg3C8NDr65kn4kOivLoSNqXKCoW@stun.evan-brass.net?ice-lite');
@@ -150,7 +150,7 @@ await a.setRemoteDescription(b.localDescription);
 	await a.setRemoteDescription(b.localDescription);
 </script>
 <script type="_module">
-import{base} from '/src/base.js';
+import{base} from './src/base.js';
 const charset = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
 
 // const fingerprint = 'FF' + ':ff'.repeat(31);
