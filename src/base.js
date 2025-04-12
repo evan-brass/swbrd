@@ -1,7 +1,11 @@
-export const base58 = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';
-export const base62 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
-export const base64 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
-export const urlbase64 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_';
+export const base58 =
+	'123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';
+export const base62 =
+	'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+export const base64 =
+	'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+export const urlbase64 =
+	'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_';
 
 // base(0xdeadbeef01234567n, {charset: base64}) == 'N6tvu8BI0Vn'
 // btoa(String.fromCharCode(0xde,0xad,0xbe,0xef,0x01,0x23,0x45,0x67)) == '3q2+7wEjRWc='
@@ -24,14 +28,13 @@ export function base(input, {
 			ret += BigInt(d) * BigInt(charset.length) ** BigInt(input.length - i - 1);
 		}
 		if (typeof ret != 'bigint' || BigInt.asUintN(bits, ret) != ret) return; // Make sure that the result is within the numbers representable with the given number of bits
-	}
-	else {
+	} else {
 		input = BigInt(input);
-		while (input > 0n) {
+		do {
 			ret ??= '';
 			ret = charset.charAt(Number(input % BigInt(charset.length))) + ret;
 			input /= BigInt(charset.length);
-		}
+		} while (input > 0n);
 		if (pad_len) ret.padStart(pad_len, charset[0]);
 	}
 	return ret;

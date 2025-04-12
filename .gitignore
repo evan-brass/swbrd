@@ -1,3 +1,2 @@
-dist
+*.wasm
 *.pem
-*.pem.env

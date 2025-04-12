@@ -1,18 +1,24 @@
-import { algorithm, from_bytes, to_string } from "./id.js";
+import { algorithm, from_bytes, to_string } from './id.js';
 
 const day_in_ms = 24 * 60 * 60 * 1000;
 const year_in_ms = 365 * day_in_ms;
 
 export class Cert extends RTCCertificate {
 	id;
-	static async generate(keygenAlgorithm = { name: 'ECDSA', namedCurve: 'P-256', expires: Date.now() + year_in_ms }) {
+	static async generate(
+		keygenAlgorithm = {
+			name: 'ECDSA',
+			namedCurve: 'P-256',
+			expires: Date.now() + year_in_ms,
+		},
+	) {
 		const ret = await RTCPeerConnection.generateCertificate(keygenAlgorithm);
 		Object.setPrototypeOf(ret, this.prototype);
 
 		let fingerprint;
 		// Try to retreive the fingerprint using getFingerprints
 		if (ret?.getFingerprints) {
-			for (const {algorithm, value} of ret.getFingerprints()) {
+			for (const { algorithm, value } of ret.getFingerprints()) {
 				if (algorithm.toLowerCase() == algorithm) {
 					fingerprint = value;
 					break;
@@ -25,7 +31,11 @@ export class Cert extends RTCCertificate {
 			const temp = new RTCPeerConnection({ certificates: [ret] });
 			temp.createDataChannel('');
 			const offer = await temp.createOffer();
-			for (const {1: algorithm, 2: value} of offer.sdp.matchAll(/^a=fingerprint:([^ ]+) ([0-9a-f]{2}(:[0-9a-f]{2})+)/img)) {
+			for (
+				const { 1: algorithm, 2: value } of offer.sdp.matchAll(
+					/^a=fingerprint:([^ ]+) ([0-9a-f]{2}(:[0-9a-f]{2})+)/img,
+				)
+			) {
 				if (algorithm.toLowerCase() == algorithm) {
 					fingerprint = value;
 					break;
@@ -50,10 +60,17 @@ export class Cert extends RTCCertificate {
 			});
 		}
 		const openreq = indexedDB.open('swbrd', 1);
-		openreq.onupgradeneeded = ({oldVersion, newVersion, target: {result: db}}) => {
+		openreq.onupgradeneeded = (
+			{ oldVersion: _ov, newVersion: _nv, target: { result: db } },
+		) => {
 			db.createObjectStore('certs');
 		};
-		openreq.onblocked = ({ oldVersion, newVersion }) => rej(new Error(`Certificate Database blocked: ${oldVersion} -> ${newVersion}`));
+		openreq.onblocked = ({ oldVersion, newVersion }) =>
+			rej(
+				new Error(
+					`Certificate Database blocked: ${oldVersion} -> ${newVersion}`,
+				),
+			);
 		const db = await wrap(openreq);
 
 		// Generate a replacement in case the existing certificate has expired / doesn't match the algorithm / etc.
@@ -67,11 +84,9 @@ export class Cert extends RTCCertificate {
 			const { cert, id, algorithm: alg } = cursor.value;
 			if (cert.expires - Date.now() < 2 * day_in_ms) {
 				cursor.delete();
-			}
-			else if (alg != algorithm) {
+			} else if (alg != algorithm) {
 				cursor.continue();
-			}
-			else {
+			} else {
 				Object.setPrototypeOf(cert, this.prototype);
 				cert.id = id;
 				Object.freeze(cert);
@@ -81,7 +96,7 @@ export class Cert extends RTCCertificate {
 		await wrap(certs.put({
 			cert: candidate,
 			id: candidate.id,
-			algorithm
+			algorithm,
 		}, key));
 
 		return candidate;
