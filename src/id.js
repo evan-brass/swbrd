@@ -16,13 +16,9 @@ export function to_fingerprint(id) {
 export function from_bytes(arr) {
 	if (arr.length != bytes) return;
 
-	let n = '0x';
-	for (let b of arr) {
-		if (typeof b != 'string') b = b.toString(16);
-		if (b.length < 2) b = b.padStart(2, '0');
-		n += b;
-	}
-	return BigInt(n);
+	return BigInt(
+		arr.reduce((a, v) => a + v.toString(16).padStart(2, '0'), '0x')
+	);
 }
 
 export function to_string(id) {

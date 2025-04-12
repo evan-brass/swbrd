@@ -12,21 +12,21 @@ function log_everything(conn, label = conn.pid) {
 	});
 }
 </script>
-<script type="module">
+<script type="_module">
 import { Addr } from '/src/addr.js';
 
 const host = new Addr('turn+tcp:ucCm6JK3s22XuCRiTZVFpWajUq0tIpB7lDn1Sv8dRv3@localhost?setup=active').connect();
 log_everything(host, 'host');
 </script>
-<script type="_module">
+<script type="module">
 import { cert, Cert } from '/src/cert.js';
 import { Addr } from '/src/addr.js';
 
 const certa = await Cert.load('peera');
 const certb = await Cert.load('peerb');
 
-const a = new Addr(`turn+tcp:${certb}@localhost?setup`).connect({cert: certa});
-const b = new Addr(`turn+tcp:${certa}@localhost?setup`).connect({cert: certb});
+const a = new Addr(`turn+tcp:${certb}@stun.evan-brass.net?setup`).connect({cert: certa});
+const b = new Addr(`turn+tcp:${certa}@stun.evan-brass.net?setup`).connect({cert: certb});
 log_everything(a, 'a');
 log_everything(b, 'b');
 </script>
