@@ -5,7 +5,10 @@ import { is_firefox, state } from './util.js';
 
 export const defaults = {
 	iceServers: [{
-		urls: 'turn:stun.evan-brass.net',
+		urls: [
+			'turn:stun.evan-brass.net',
+			'turn:stun.evan-brass.net?transport=tcp',
+		],
 		username: 'guest',
 		credential: 'password',
 	}],
