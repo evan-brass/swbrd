@@ -138,31 +138,14 @@ export class Addr extends URL {
 			ice_pwd,
 			setup,
 			ice_lite,
+			adjustment,
 			...config,
-			...adjustment,
 		});
 
 		// Spawn the task to signal the connection
 		(async () => {
 			for (const candidate of this.candidates()) {
 				await ret.addIceCandidate(candidate);
-			}
-
-			// Undo the adjustement
-			if (adjustment) {
-				// Wait for the connection to succeed (or close)
-				while (!['connected', 'closed'].includes(ret.connectionState)) {
-					await state({ 'connectionstatechange': ret });
-				}
-
-				// If the connection is closed, then the config adjustment is irrelevant
-				if (ret.connectionState == 'closed') return;
-
-				// Remove the adjustment
-				ret.setConfiguration(config);
-
-				// Restart ICE so that the configuration can take effect
-				ret.restartIce();
 			}
 		})();
 

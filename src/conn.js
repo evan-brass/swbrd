@@ -50,6 +50,7 @@ export class Conn extends RTCPeerConnection {
 		ice_pwd,
 		mung = true,
 		timeout = 10_000,
+		adjustment = null,
 		...config
 	} = {}) {
 		const cert = config?.cert ?? default_cert;
@@ -57,6 +58,7 @@ export class Conn extends RTCPeerConnection {
 		super({
 			...defaults,
 			...config,
+			...adjustment,
 			certificates: cert ? [cert] : [],
 			...overrides,
 		});
@@ -77,6 +79,8 @@ export class Conn extends RTCPeerConnection {
 		}
 
 		this.#signaling_task({
+			config,
+			adjustment,
 			setup,
 			ice_lite,
 			ice_pwd,
@@ -129,7 +133,7 @@ export class Conn extends RTCPeerConnection {
 		return await super.addIceCandidate(candidate);
 	}
 
-	async #signaling_task(/* Session: */ { setup, ice_lite, ice_pwd, mung }) {
+	async #signaling_task(/* Session: */ { config, adjustment, setup, ice_lite, ice_pwd, mung }) {
 		// Prepare for renegotiation
 		let negotiation_needed = false;
 		this.addEventListener('negotiationneeded', () => negotiation_needed = true);
@@ -206,7 +210,12 @@ export class Conn extends RTCPeerConnection {
 		while (this.#dc.readyState != 'closed') {
 			if (this.#dc.readyState == 'connecting') {
 				await state({ 'open': this.dc, 'close': this.dc });
-			} else if (negotiation_needed) {
+			}
+			else if (adjustment) {
+				adjustment = null;
+				this.setConfiguration(config);
+				this.restartIce();
+			} if (negotiation_needed) {
 				if (this.#dc.readyState == 'closing') continue;
 				negotiation_needed = false;
 
