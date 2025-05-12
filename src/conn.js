@@ -215,8 +215,7 @@ export class Conn extends RTCPeerConnection {
 				adjustment = null;
 				this.setConfiguration(config);
 				this.restartIce();
-			} if (negotiation_needed) {
-				if (this.#dc.readyState == 'closing') continue;
+			} else if (negotiation_needed && this.#dc.readyState != 'closing') {
 				negotiation_needed = false;
 
 				/**
@@ -225,7 +224,7 @@ export class Conn extends RTCPeerConnection {
 				 * when the answer contains new ICE credentials, it throws an error saying
 				 * it didn't ask for an ICE restart (even though it actually did).
 				 *
-				 * ISSUE: https://bugzilla.mozilla.org/show_bug.cgi?id=1916752 (The don't intend to fix)
+				 * ISSUE: https://bugzilla.mozilla.org/show_bug.cgi?id=1916752 (They don't intend to fix)
 				 */
 				if (mung && is_firefox) {
 					super.restartIce();
