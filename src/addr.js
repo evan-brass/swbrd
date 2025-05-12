@@ -1,4 +1,5 @@
-import { algorithm, from_string } from './id.js';
+import { algorithm, from_string, to_string } from './id.js';
+import { cert as default_cert } from './cert.js';
 import { Conn } from './conn.js';
 import { query_txt } from './dns.js';
 import { default_turn_credential, default_turn_username } from './const.js';
@@ -52,32 +53,6 @@ export class Addr extends URL {
 		}
 		return this.#authority;
 	}
-	temp_adjustment() {
-		const turn_res = /^(turns?)(?:\+(tcp|udp))?:/i.exec(this.protocol);
-		if (!turn_res) return null;
-		const { 1: proto, 2: transport } = turn_res;
-		const { host } = this.authority;
-		return {
-			/**
-			 * HACK: If iceTransportPolicy=='relay' then Firefox will kill local relay candidates if they become prflx candidates.
-			 * Chrome will mark the local candidate as prflx but that doesn't stop it from utilizing it.
-			 * - https://www.rfc-editor.org/rfc/rfc9429#section-4.1.1
-			 * - https://www.rfc-editor.org/rfc/rfc9429#sec.ice-candidate-policy
-			 *
-			 * ISSUE: If I knew what the right thing to do was...
-			 */
-			iceTransportPolicy: is_firefox ? 'all' : 'relay',
-			iceServers: [{
-				urls: `${proto}:${host}${transport ? '?transport=' + transport : ''}`,
-				username: decodeURIComponent(
-					this.searchParams.get('turn_username') || default_turn_username,
-				),
-				credential: decodeURIComponent(
-					this.searchParams.get('turn_credential') || default_turn_credential,
-				),
-			}],
-		};
-	}
 	*candidates() {
 		// Yield candidate search params
 		const candidates = Array.from(
@@ -98,24 +73,61 @@ export class Addr extends URL {
 		if (candidates.length > 0) return;
 
 		// Yield protocol specific candidate
-		const { username, address, port } = this.authority;
-		const usernameFragment = decodeURIComponent(username);
-
+		const { address, port } = this.authority;
 		if (/^udp:/i.test(this.protocol)) {
-			yield { address, port, usernameFragment };
+			yield { address, port };
 		} else if (/^(turns?)(?:\+(tcp|udp))?:/i.test(this.protocol)) {
 			yield {
-				address: is_firefox ? 'fe80::ffff:ffff:ffff:ffff' : 'ff02::1',
+				address: 'fe80::ffff:ffff:ffff:ffff',
 				port: 65535,
-				usernameFragment,
 			};
 		}
 	}
 	connect(config = null) {
 		if (!this.id) return;
+		const pid = this.id;
 
 		// Adjust the config if needed
-		const adjustment = this.temp_adjustment();
+		let cert = config?.cert;
+		let ice_ufrag = config?.ice_ufrag;
+		let mung = config?.mung;
+		let adjustment = null;
+		const turn_res = /^(turns?)(?:\+(tcp|udp))?:/i.exec(this.protocol);
+		if (turn_res) {
+			const { 1: proto, 2: transport } = turn_res;
+			const { host } = this.authority;
+
+			// Turn addresses need to know the local cert to generate the Turn username for the adjustment
+			cert ||= default_cert;
+			ice_ufrag ||= 'dissolve';
+
+			/**
+			 * HACK: Firefox doesn't correctly handle error 487.  So, our TURN server's dissolve implementation
+			 * currently uses a request to get Firefox to switch roles.
+			 *
+			 * ISSUE: https://bugzilla.mozilla.org/show_bug.cgi?id=1940001
+			 */
+			mung ??= is_firefox;
+
+			adjustment = {
+				/**
+				 * HACK: If iceTransportPolicy=='relay' then Firefox will kill local relay candidates if they become prflx candidates.
+				 * Chrome will mark the local candidate as prflx but that doesn't stop it from utilizing it.
+				 * - https://www.rfc-editor.org/rfc/rfc9429#section-4.1.1
+				 * - https://www.rfc-editor.org/rfc/rfc9429#sec.ice-candidate-policy
+				 *
+				 * ISSUE: If I knew what the right thing to do was...
+				 */
+				iceTransportPolicy: is_firefox ? 'all' : 'relay',
+				iceServers: [{
+					urls: `${proto}:${host}${transport ? '?transport=' + transport : ''}`,
+					username: `${to_string(pid)}:${to_string(cert)}`,
+					credential: decodeURIComponent(
+						this.searchParams.get('turn_credential') || default_turn_credential,
+					),
+				}],
+			};
+		}
 
 		const { password: ice_pwd } = this.authority;
 		const setup = decodeURIComponent(
@@ -134,7 +146,10 @@ export class Addr extends URL {
 		const ice_lite = this.searchParams.get('ice-lite');
 
 		// Create the connection
-		const ret = new Conn(this.id, {
+		const ret = new Conn(pid, {
+			cert,
+			mung,
+			ice_ufrag,
 			ice_pwd,
 			setup,
 			ice_lite,

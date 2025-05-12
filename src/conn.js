@@ -47,8 +47,9 @@ export class Conn extends RTCPeerConnection {
 	constructor(peerid, {
 		setup,
 		ice_lite,
+		ice_ufrag,
 		ice_pwd,
-		mung = true,
+		mung = false,
 		timeout = 10_000,
 		adjustment = null,
 		...config
@@ -83,6 +84,7 @@ export class Conn extends RTCPeerConnection {
 			adjustment,
 			setup,
 			ice_lite,
+			ice_ufrag,
 			ice_pwd,
 			mung,
 		}).catch((e) => {
@@ -133,7 +135,7 @@ export class Conn extends RTCPeerConnection {
 		return await super.addIceCandidate(candidate);
 	}
 
-	async #signaling_task(/* Session: */ { config, adjustment, setup, ice_lite, ice_pwd, mung }) {
+	async #signaling_task({ config, adjustment, setup, ice_lite, ice_ufrag, ice_pwd, mung }) {
 		// Prepare for renegotiation
 		let negotiation_needed = false;
 		this.addEventListener('negotiationneeded', () => negotiation_needed = true);
@@ -166,7 +168,7 @@ export class Conn extends RTCPeerConnection {
 				't=0 0',
 				'a=group:BUNDLE dc',
 				`a=fingerprint:${to_fingerprint(this.pid)}`,
-				`a=ice-ufrag:${to_string(this.pid)}`,
+				`a=ice-ufrag:${ice_ufrag || to_string((this.pid))}`,
 				// TODO: ice-pwd would need to be unique if you do broadcasting.  One option: ice_pwd + to_string(this.cert) for theirs and ice_pwd + to_string(this.pid) for ours.
 				`a=ice-pwd:${ice_pwd || default_ice_pwd}`,
 				'a=ice-options:trickle',
@@ -206,13 +208,16 @@ export class Conn extends RTCPeerConnection {
 		await super.setLocalDescription(answer);
 		need_cert();
 
+		console.log('adjustment', adjustment);
 		// Switchover into handling renegotiation
-		while (this.#dc.readyState != 'closed') {
+		for (;;) {
 			if (this.#dc.readyState == 'connecting') {
-				await state({ 'open': this.dc, 'close': this.dc });
-			}
-			else if (adjustment) {
+				await state({'open': this.dc, 'close': this.dc});
+			} else if (this.#dc.readyState == 'closed') {
+				break;
+			} else if (adjustment) {
 				adjustment = null;
+				mung = false;
 				this.setConfiguration(config);
 				this.restartIce();
 			} else if (negotiation_needed && this.#dc.readyState != 'closing') {
@@ -223,6 +228,10 @@ export class Conn extends RTCPeerConnection {
 				 * This causes Firefox to unknowingly trigger an ICE restart and then
 				 * when the answer contains new ICE credentials, it throws an error saying
 				 * it didn't ask for an ICE restart (even though it actually did).
+				 *
+				 * This is now also an issue with dissolve.  You need to set mung = is_firefox for
+				 * dissolve because a remote offer will contain the true ufrag, not the dissolve
+				 * credentials.
 				 *
 				 * ISSUE: https://bugzilla.mozilla.org/show_bug.cgi?id=1916752 (They don't intend to fix)
 				 */
