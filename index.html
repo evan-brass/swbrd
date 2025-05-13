@@ -1,389 +1,490 @@
 <!DOCTYPE html>
 <script>
-// Log everything.
-function log_everything(conn, label = conn.pid) {
-	const logger = (...args) => console.log(label, ...args);
-	['message', 'open', 'close'].forEach(e => conn.dc.addEventListener(e, logger));
-	['connectionState', 'iceConnectionState', 'iceGatheringState', 'signalingState'].forEach(p => {
-		conn.addEventListener(p.toLowerCase() + 'change', () => logger(p, conn[p]));
-	});
-	['icecandidate', 'datachannel', 'icecandidateerror', 'negotiationneeded', 'track'].forEach(e => {
-		conn.addEventListener(e, logger);
-	});
-}
-</script>
-<script type="_module">
-import { Addr } from './src/addr.js';
-
-const host = new Addr('turn+tcp:ucCm6JK3s22XuCRiTZVFpWajUq0tIpB7lDn1Sv8dRv3@localhost?setup=active').connect();
-log_everything(host, 'host');
-</script>
-<script type="module">
-import { cert, Cert } from './src/cert.js';
-import { Addr } from './src/addr.js';
-
-const certa = await Cert.load('peera');
-const certb = await Cert.load('peerb');
-
-const a = new Addr(`turn+tcp:${certb}@stun.evan-brass.net?setup`).connect({cert: certa});
-const b = new Addr(`turn+tcp:${certa}@stun.evan-brass.net?setup`).connect({cert: certb});
-log_everything(a, 'a');
-log_everything(b, 'b');
-</script>
-<script type="_module">
-import { state } from './src/util.js';
-
-const config = {
-	iceTransportPolicy: 'relay',
-	iceServers: [{
-		username: 'guest',
-		credential: 'password',
-		// urls: 'turn:stun.evan-brass.net',
-		urls: 'turn:localhost?transport=tcp',
-	}]
-};
-const a = new RTCPeerConnection(config);
-const b = new RTCPeerConnection(config);
-a.createDataChannel('');
-await a.setLocalDescription();
-while (a.iceGatheringState != 'complete') await state({ 'icegatheringstatechange': a });
-await b.setRemoteDescription(a.localDescription);
-await b.setLocalDescription();
-await a.setRemoteDescription(b.localDescription);
+	// Log everything.
+		function log_everything(conn, label = conn.pid) {
+			const logger = (...args) => console.log(label, ...args);
+			['message', 'open', 'close'].forEach((e) =>
+				conn.dc.addEventListener(e, logger)
+			);
+			[
+				'connectionState',
+				'iceConnectionState',
+				'iceGatheringState',
+				'signalingState',
+			].forEach((p) => {
+				conn.addEventListener(
+					p.toLowerCase() + 'change',
+					() => logger(p, conn[p]),
+				);
+			});
+			[
+				'icecandidate',
+				'datachannel',
+				'icecandidateerror',
+				'negotiationneeded',
+				'track',
+			].forEach((e) => {
+				conn.addEventListener(e, logger);
+			});
+		}
 </script>
 <script type="_module">
 	import { Addr } from './src/addr.js';
-	import { listen } from './src/listen.js';
 
-	// Connect to my server
-	const server_addr = new Addr('turn:Zx9xDRd0OG9PxMGJhg3C8NDr65kn4kOivLoSNqXKCoW@stun.evan-brass.net?ice-lite');
-	// const server_addr = new Addr('turn:ucCm6JK3s22XuCRiTZVFpWajUq0tIpB7lDn1Sv8dRv3@localhost?ice-lite');
+		const host = new Addr(
+			'turn+tcp:ucCm6JK3s22XuCRiTZVFpWajUq0tIpB7lDn1Sv8dRv3@localhost?setup=active',
+		).connect();
+		log_everything(host, 'host');
+</script>
+<script type="module">
+	import { Cert, cert } from './src/cert.js';
+		import { Addr } from './src/addr.js';
 
-	const server = server_addr.connect();
-	log_everything(server, 'server');
+		const certa = await Cert.load('peera');
+		const certb = await Cert.load('peerb');
 
-	// Make outgoing connections to all addrs in our url
-	for (const param of new URLSearchParams(location.search).getAll('addr')) {
-		const addr = new Addr(decodeURIComponent(param));
-		if (addr.id == BigInt(server.cert)) continue; // Don't connect to yourself
-		console.log(addr);
-		const conn = addr.connect();
-		log_everything(conn);
-	}
+		const a = new Addr(`turn+tcp:${certb}@stun.evan-brass.net?setup`)
+			.connect({ cert: certa });
+		const b = new Addr(`turn+tcp:${certa}@stun.evan-brass.net?setup`)
+			.connect({ cert: certb });
+		log_everything(a, 'a');
+		log_everything(b, 'b');
+</script>
+<script type="_module">
+	import { state } from './src/util.js';
 
-	// Assemble our address
-	const ours = new URL(location);
-	ours.searchParams.set('addr', `turn:${server.cert}@${server_addr.authority.host}`);
-	console.log(ours.href);
+		const config = {
+			iceTransportPolicy: 'relay',
+			iceServers: [{
+				username: 'guest',
+				credential: 'password',
+				// urls: 'turn:stun.evan-brass.net',
+				urls: 'turn:localhost?transport=tcp',
+			}],
+		};
+		const a = new RTCPeerConnection(config);
+		const b = new RTCPeerConnection(config);
+		a.createDataChannel('');
+		await a.setLocalDescription();
+		while (a.iceGatheringState != 'complete') {
+			await state({ 'icegatheringstatechange': a });
+		}
+		await b.setRemoteDescription(a.localDescription);
+		await b.setLocalDescription();
+		await a.setRemoteDescription(b.localDescription);
+</script>
+<script type="_module">
+	import { Addr } from './src/addr.js';
+		import { listen } from './src/listen.js';
 
-	const incoming = new Map(); // pid -> Conn
-	for await (const candidate of listen(server)) {
-		const inc = new Addr(`turn:${candidate.usernameFragment}@${server_addr.authority.host}`);
-		if (!inc.id || incoming.has(inc.id)) continue;
-		if (BigInt(inc.id) == BigInt(server.cert)) {
-			continue; // Don't connect to ourself
+		// Connect to my server
+		const server_addr = new Addr(
+			'turn:Zx9xDRd0OG9PxMGJhg3C8NDr65kn4kOivLoSNqXKCoW@stun.evan-brass.net?ice-lite',
+		);
+		// const server_addr = new Addr('turn:ucCm6JK3s22XuCRiTZVFpWajUq0tIpB7lDn1Sv8dRv3@localhost?ice-lite');
+
+		const server = server_addr.connect();
+		log_everything(server, 'server');
+
+		// Make outgoing connections to all addrs in our url
+		for (
+			const param of new URLSearchParams(location.search).getAll('addr')
+		) {
+			const addr = new Addr(decodeURIComponent(param));
+			if (addr.id == BigInt(server.cert)) continue; // Don't connect to yourself
+			console.log(addr);
+			const conn = addr.connect();
+			log_everything(conn);
 		}
 
-		const conn = inc.connect({ setup: 'active' });
-		conn.addIceCandidate(candidate); // Add the discovered candidate to the new connection
-		incoming.set(conn.pid, conn);
+		// Assemble our address
+		const ours = new URL(location);
+		ours.searchParams.set(
+			'addr',
+			`turn:${server.cert}@${server_addr.authority.host}`,
+		);
+		console.log(ours.href);
 
-		// Remove conn when it closes:
-		conn.addEventListener('connectionstatechange', ({ target: { pid, connectionState } }) => {
-			if (connectionState == 'closed') incoming.delete(pid);
+		const incoming = new Map(); // pid -> Conn
+		for await (const candidate of listen(server)) {
+			const inc = new Addr(
+				`turn:${candidate.usernameFragment}@${server_addr.authority.host}`,
+			);
+			if (!inc.id || incoming.has(inc.id)) continue;
+			if (BigInt(inc.id) == BigInt(server.cert)) {
+				continue; // Don't connect to ourself
+			}
+
+			const conn = inc.connect({ setup: 'active' });
+			conn.addIceCandidate(candidate); // Add the discovered candidate to the new connection
+			incoming.set(conn.pid, conn);
+
+			// Remove conn when it closes:
+			conn.addEventListener(
+				'connectionstatechange',
+				({ target: { pid, connectionState } }) => {
+					if (connectionState == 'closed') incoming.delete(pid);
+				},
+			);
+
+			console.log('answered', conn);
+		}
+</script>
+<script type="_module">
+	const config = {
+			iceTransportPolicy: 'relay',
+			// iceServers: [{ urls: 'turn:localhost', username: 'guest', credential: 'password' }]
+			iceServers: [{
+				urls: 'turn:stun.evan-brass.net',
+				username: 'guest',
+				credential: 'password',
+			}],
+		};
+		const a = new RTCPeerConnection(config);
+		a.addEventListener(
+			'connectionstatechange',
+			() => console.log('a', a.connectionState),
+		);
+
+		await a.setRemoteDescription({
+			type: 'offer',
+			sdp: [
+				'v=0',
+				'o=swbrd 42 0 IN IP4 0.0.0.0',
+				's=-',
+				't=0 0',
+				'a=group:BUNDLE dc',
+				'a=fingerprint:sha-256 C3:E4:A4:B9:DD:56:08:7E:A6:15:5E:F7:EB:0F:BD:24:EB:C4:D4:AD:92:33:91:31:F4:37:3E:C5:57:44:11:D5',
+				'a=ice-ufrag:ucCm6JK3s22XuCRiTZVFpWajUq0tIpB7lDn1Sv8dRv3',
+				'a=ice-pwd:the/ice/password/constant',
+				'm=application 42 UDP/DTLS/SCTP webrtc-datachannel',
+				'c=IN IP4 0.0.0.0',
+				'a=candidate:foundation 1 udp 42 fe80::ffff:ffff:ffff:ffff 3478 typ relay',
+				'a=mid:dc',
+				'a=setup:passive',
+				'a=sctp-port:5000',
+				'',
+			].join('\n'),
+		});
+		await a.setLocalDescription();
+</script>
+<script type="_module">
+	const config = {
+			iceTransportPolicy: 'relay', // Force relaying because I want to show the TURN server in action.
+			iceServers: [{
+				urls: 'turn:localhost',
+				username: 'guest',
+				credential: 'password',
+			}],
+		};
+
+		const a = new RTCPeerConnection(config);
+		const b = new RTCPeerConnection(config);
+		a.createDataChannel('');
+
+		// Log connection states
+		a.addEventListener(
+			'connectionstatechange',
+			() => console.log('a', a.connectionState),
+		);
+		b.addEventListener(
+			'connectionstatechange',
+			() => console.log('b', b.connectionState),
+		);
+
+		// Negotiate the connection
+		await a.setLocalDescription();
+		while (a.iceGatheringState != 'complete') {
+			await new Promise((res) =>
+				a.addEventListener('icegatheringstatechange', res, { once: true })
+			);
+		}
+		await b.setRemoteDescription(a.localDescription);
+		await b.setLocalDescription();
+		// while (b.iceGatheringState != 'complete') await new Promise(res => b.addEventListener('icegatheringstatechange', res, { once: true }));
+		await a.setRemoteDescription(b.localDescription);
+</script>
+<script type="_module">
+	import { base } from './src/base.js';
+		const charset =
+			'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+
+		// const fingerprint = 'FF' + ':ff'.repeat(31);
+		// const fingerprint = '6C:D3:E3:87:CB:75:68:5D:45:1A:C7:E7:08:30:C5:85:30:3A:DE:48:FB:5D:37:B1:20:5D:F0:85:D7:D0:59:EE';
+		const fingerprint =
+			'C3:E4:A4:B9:DD:56:08:7E:A6:15:5E:F7:EB:0F:BD:24:EB:C4:D4:AD:92:33:91:31:F4:37:3E:C5:57:44:11:D5';
+		const bytes = fingerprint.split(':').map((s) => parseInt(s, 16));
+		const id = BigInt('0x' + fingerprint.replace(/:/g, ''));
+
+		let actual = '';
+		let rem = 0;
+		for (let i = 0; i < Math.ceil(256 / Math.log2(charset.length)); ++i) {
+			for (let i = 0; i < bytes.length; ++i) {
+				const v = bytes[i] + rem * 256;
+				bytes[i] = Math.trunc(v / charset.length);
+				if (bytes[i] >= 256) debugger;
+				rem = v % charset.length;
+			}
+			actual = charset[rem] + actual;
+			if (bytes.every((i) => i == 0)) break;
+			rem = 0;
+		}
+		const expected = base(id, { pad_length: 43 });
+		console.log(actual, expected, actual == expected);
+</script>
+<script type="_module">
+	import { Addr } from './src/addr.js';
+		const server = new Addr();
+</script>
+<script type="_module">
+	import { state } from './src/util.js';
+		const config = {
+			iceTransportPolicy: 'relay',
+			iceServers: [{
+				urls: 'turn:localhost',
+				username: 'guest',
+				credential: 'password',
+			}],
+		};
+
+		const a = new RTCPeerConnection(config);
+		const b = new RTCPeerConnection(config);
+		a.createDataChannel('');
+
+		await a.setLocalDescription();
+		while (a.iceGatheringState != 'complete') {
+			await state({ 'icegatheringstatechange': a });
+		}
+
+		await b.setRemoteDescription(a.localDescription);
+		await b.setLocalDescription();
+
+		await a.setRemoteDescription(b.localDescription);
+</script>
+<script type="_module">
+	const a = new RTCPeerConnection();
+		const b = new RTCPeerConnection();
+		a.createDataChannel('');
+
+		await a.setLocalDescription();
+		while (a.iceGatheringState != 'complete') {
+			await new Promise((res) =>
+				a.addEventListener('icegatheringstatechange', res, { once: true })
+			);
+		}
+
+		await b.setRemoteDescription(a.localDescription);
+		await b.setLocalDescription();
+		await a.setRemoteDescription(b.localDescription);
+</script>
+<script type="_module">
+	import { Cert } from './src/cert.js';
+		import { Conn } from './src/conn.js';
+
+		// -- Step 1: Get your certificates ready --
+		let certa, certb;
+		//  - Option 1: Reuse a certificate from IndexedDB (generating a new certificate if the existing cert is not present or has expired)
+		certa = await Cert.load('testa');
+		certb = await Cert.load('testb');
+
+		//  - Option 2: Generate fresh certificates
+		// certa = await Cert.generate();
+		// certb = await Cert.generate();
+
+		// -- Step 2: Turn your certificate into an id --
+		const ida = BigInt(certa);
+		const idb = BigInt(certb);
+
+		// -- Step 3: Create each side of the connection using your certificate and your peer's id --
+		const a = new Conn(idb, { cert: certa });
+		const b = new Conn(ida, { cert: certb });
+		// - Log the connection status
+		a.addEventListener(
+			'connectionstatechange',
+			() => console.log('a', a.connectionState),
+		);
+		b.addEventListener(
+			'connectionstatechange',
+			() => console.log('b', b.connectionState),
+		);
+
+		// -- Step 4: Pass ICE candidates (ip+port pairs) --
+		a.addEventListener(
+			'icecandidate',
+			async ({ candidate }) => await b.addIceCandidate(candidate),
+		);
+		b.addEventListener(
+			'icecandidate',
+			async ({ candidate }) => await a.addIceCandidate(candidate),
+		);
+
+		// -- Step 5: Add event listeners for incoming datachannels / tracks --
+		a.addEventListener(
+			'datachannel',
+			({ channel }) => console.log('datachannel from b', channel),
+		);
+		a.addEventListener(
+			'track',
+			({ track }) => console.log('track from b', track),
+		);
+		b.addEventListener(
+			'datachannel',
+			({ channel }) => console.log('datachannel from a', channel),
+		);
+		b.addEventListener(
+			'track',
+			({ track }) => console.log('track from a', track),
+		);
+
+		// -- Step 6: Create your datachannels or add your tracks. --
+		//  - Option 1: Create DataChannels
+		const _data = a.createDataChannel('Hello World', {
+			protocol: 'greeter.json',
 		});
 
-		console.log('answered', conn);
-	}
-</script>
-<script type=_module">
-	const config = {
-		iceTransportPolicy: 'relay',
-		// iceServers: [{ urls: 'turn:localhost', username: 'guest', credential: 'password' }]
-		iceServers: [{ urls: 'turn:stun.evan-brass.net', username: 'guest', credential: 'password' }]
-	};
-	const a = new RTCPeerConnection(config);
-	a.addEventListener('connectionstatechange', () => console.log('a', a.connectionState));
+		//  - Option 2: Add Audio / Video tracks to the connection
+		const _transVid = a.addTransceiver('video');
+		const _transAud = b.addTransceiver('audio');
 
-	await a.setRemoteDescription({
-		type: 'offer',
-		sdp: [
-			'v=0',
-			'o=swbrd 42 0 IN IP4 0.0.0.0',
-			's=-',
-			't=0 0',
-			'a=group:BUNDLE dc',
-			'a=fingerprint:sha-256 C3:E4:A4:B9:DD:56:08:7E:A6:15:5E:F7:EB:0F:BD:24:EB:C4:D4:AD:92:33:91:31:F4:37:3E:C5:57:44:11:D5',
-			'a=ice-ufrag:ucCm6JK3s22XuCRiTZVFpWajUq0tIpB7lDn1Sv8dRv3',
-			'a=ice-pwd:the/ice/password/constant',
-			'm=application 42 UDP/DTLS/SCTP webrtc-datachannel',
-			'c=IN IP4 0.0.0.0',
-			'a=candidate:foundation 1 udp 42 fe80::ffff:ffff:ffff:ffff 3478 typ relay',
-			'a=mid:dc',
-			'a=setup:passive',
-			'a=sctp-port:5000',
-			''
-		].join('\n')
-	});
-	await a.setLocalDescription();
-</script>
-<script type="_module">
-	const config = {
-		iceTransportPolicy: 'relay', // Force relaying because I want to show the TURN server in action.
-		iceServers: [{ urls: 'turn:localhost', username: 'guest', credential: 'password' }],
-	};
-
-	const a = new RTCPeerConnection(config);
-	const b = new RTCPeerConnection(config);
-	a.createDataChannel('');
-
-	// Log connection states
-	a.addEventListener('connectionstatechange', () => console.log('a', a.connectionState));
-	b.addEventListener('connectionstatechange', () => console.log('b', b.connectionState));
-
-	// Negotiate the connection
-	await a.setLocalDescription();
-	while (a.iceGatheringState != 'complete') await new Promise(res => a.addEventListener('icegatheringstatechange', res, { once: true }));
-	await b.setRemoteDescription(a.localDescription);
-	await b.setLocalDescription();
-	// while (b.iceGatheringState != 'complete') await new Promise(res => b.addEventListener('icegatheringstatechange', res, { once: true }));
-	await a.setRemoteDescription(b.localDescription);
-</script>
-<script type="_module">
-import{base} from './src/base.js';
-const charset = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
-
-// const fingerprint = 'FF' + ':ff'.repeat(31);
-// const fingerprint = '6C:D3:E3:87:CB:75:68:5D:45:1A:C7:E7:08:30:C5:85:30:3A:DE:48:FB:5D:37:B1:20:5D:F0:85:D7:D0:59:EE';
-const fingerprint = 'C3:E4:A4:B9:DD:56:08:7E:A6:15:5E:F7:EB:0F:BD:24:EB:C4:D4:AD:92:33:91:31:F4:37:3E:C5:57:44:11:D5';
-const bytes = fingerprint.split(':').map(s => parseInt(s, 16));
-const id = BigInt('0x' + fingerprint.replace(/:/g, ''));
-
-let actual = "";
-let rem = 0;
-for (let i = 0; i < Math.ceil(256 / Math.log2(charset.length)); ++i) {
-	for (let i = 0; i < bytes.length; ++i) {
-		const v = bytes[i] + rem * 256;
-		bytes[i] = Math.trunc(v / charset.length);
-		if (bytes[i] >= 256) { debugger; }
-		rem = v % charset.length;
-	}
-	actual = charset[rem] + actual;
-	if (bytes.every(i => i == 0)) break;
-	rem = 0;
-}
-const expected = base(id, {pad_length: 43});
-console.log(actual, expected, actual == expected);
-</script>
-<script type="_module">
-import { Addr } from './src/addr.js';
-const server = new Addr()
-
-</script>
-<script type="_module">
-import { state } from './src/util.js';
-const config = {
-	iceTransportPolicy: 'relay',
-	iceServers: [{
-		urls: 'turn:localhost',
-		username: 'guest',
-		credential: 'password'
-	}]
-};
-
-const a = new RTCPeerConnection(config);
-const b = new RTCPeerConnection(config);
-a.createDataChannel('');
-
-await a.setLocalDescription();
-while (a.iceGatheringState != 'complete') await state({ 'icegatheringstatechange': a })
-
-await b.setRemoteDescription(a.localDescription);
-await b.setLocalDescription();
-
-await a.setRemoteDescription(b.localDescription);
-</script>
-<script type="_module">
-const a = new RTCPeerConnection();
-const b = new RTCPeerConnection();
-a.createDataChannel('');
-
-await a.setLocalDescription();
-while (a.iceGatheringState != 'complete') await new Promise(res => a.addEventListener('icegatheringstatechange', res, {once: true}));
-
-await b.setRemoteDescription(a.localDescription);
-await b.setLocalDescription();
-await a.setRemoteDescription(b.localDescription);
-</script>
-<script type="_module">
-import { Cert } from './src/cert.js';
-import { Conn } from './src/conn.js';
-
-// -- Step 1: Get your certificates ready --
-let certa, certb;
-//  - Option 1: Reuse a certificate from IndexedDB (generating a new certificate if the existing cert is not present or has expired)
-certa = await Cert.load('testa');
-certb = await Cert.load('testb');
-
-//  - Option 2: Generate fresh certificates
-// certa = await Cert.generate();
-// certb = await Cert.generate();
-
-
-// -- Step 2: Turn your certificate into an id --
-const ida = BigInt(certa);
-const idb = BigInt(certb);
-
-
-// -- Step 3: Create each side of the connection using your certificate and your peer's id --
-const a = new Conn(idb, {cert: certa});
-const b = new Conn(ida, {cert: certb});
-// - Log the connection status
-a.addEventListener('connectionstatechange', () => console.log('a', a.connectionState));
-b.addEventListener('connectionstatechange', () => console.log('b', b.connectionState));
-
-
-// -- Step 4: Pass ICE candidates (ip+port pairs) --
-a.addEventListener('icecandidate', async ({candidate}) => await b.addIceCandidate(candidate));
-b.addEventListener('icecandidate', async ({candidate}) => await a.addIceCandidate(candidate));
-
-
-// -- Step 5: Add event listeners for incoming datachannels / tracks --
-a.addEventListener('datachannel', ({channel}) => console.log('datachannel from b', channel));
-a.addEventListener('track', ({track}) => console.log('track from b', track));
-b.addEventListener('datachannel', ({channel}) => console.log('datachannel from a', channel));
-b.addEventListener('track', ({track}) => console.log('track from a', track));
-
-
-// -- Step 6: Create your datachannels or add your tracks. --
-//  - Option 1: Create DataChannels
-const _data = a.createDataChannel('Hello World', {protocol: 'greeter.json'});
-
-//  - Option 2: Add Audio / Video tracks to the connection
-const _transVid = a.addTransceiver('video');
-const _transAud = b.addTransceiver('audio');
-
-//  - Option 3: Trigger an ICE restart to find new network paths between the peers
-a.restartIce();
+		//  - Option 3: Trigger an ICE restart to find new network paths between the peers
+		a.restartIce();
 </script>
 <script type="_module">
 	import { Listener } from './src/listen.js';
-	import { Cert } from './src/cert.js';
+		import { Cert } from './src/cert.js';
 
-	const certa = await Cert.load('testa');
-	const certb = await Cert.load('testb');
+		const certa = await Cert.load('testa');
+		const certb = await Cert.load('testb');
 
-	const listener = new Listener('turn:ucCm6JK3s22XuCRiTZVFpWajUq0tIpB7lDn1Sv8dRv3@local.evan-brass.net', {cert: certa});
-	listener.ice_pwd = 16; // Generate a random password using 16 random bytes
-	console.log('your address', listener.addr);
+		const listener = new Listener(
+			'turn:ucCm6JK3s22XuCRiTZVFpWajUq0tIpB7lDn1Sv8dRv3@local.evan-brass.net',
+			{ cert: certa },
+		);
+		listener.ice_pwd = 16; // Generate a random password using 16 random bytes
+		console.log('your address', listener.addr);
 
-	// Once the listener is open, make a connection from b
-	listener.dc.addEventListener('open', () => {
-		listener.addr.connect({cert: certb});
-	});
+		// Once the listener is open, make a connection from b
+		listener.dc.addEventListener('open', () => {
+			listener.addr.connect({ cert: certb });
+		});
 
-	// Log incoming connections to a
-	for await (const incoming of listener) {
-		console.log('incoming connection', incoming);
-	}
+		// Log incoming connections to a
+		for await (const incoming of listener) {
+			console.log('incoming connection', incoming);
+		}
 </script>
 <script type="_module">
-import { Addr } from './src/addr.js';
+	import { Addr } from './src/addr.js';
 
-const test = new Addr('turn:ucCm6JK3s22XuCRiTZVFpWajUq0tIpB7lDn1Sv8dRv3@local.evan-brass.net').connect({mung: false});
-test.dc.addEventListener('message', ({data}) => console.log('dc', data));
-// const test = new Addr('turn:RxLSBa3c1ZUuY2FHqKoPDuee91GDA3vDZk36rPk6W73@local.evan-brass.net').connect({cert: false, mung: false});
-test.addEventListener('icecandidate', ({candidate}) => console.log(candidate));
-test.addEventListener('connectionstatechange', console.log);
-setTimeout(async () => console.log(Object.fromEntries((await test.getStats()).entries())), 3000);
+		const test = new Addr(
+			'turn:ucCm6JK3s22XuCRiTZVFpWajUq0tIpB7lDn1Sv8dRv3@local.evan-brass.net',
+		).connect({ mung: false });
+		test.dc.addEventListener('message', ({ data }) =>
+			console.log('dc', data));
+		// const test = new Addr('turn:RxLSBa3c1ZUuY2FHqKoPDuee91GDA3vDZk36rPk6W73@local.evan-brass.net').connect({cert: false, mung: false});
+		test.addEventListener('icecandidate', ({ candidate }) =>
+			console.log(candidate));
+		test.addEventListener('connectionstatechange', console.log);
+		setTimeout(
+			async () =>
+				console.log(
+					Object.fromEntries((await test.getStats()).entries()),
+				),
+			3000,
+		);
 </script>
 <script type="_module">
-import { Addr, Cert, Conn } from './src/index.js';
-import { cert } from './src/cert.js';
-import { Listener } from './src/listen.js';
+	import { Addr, Cert, Conn } from './src/index.js';
+		import { cert } from './src/cert.js';
+		import { Listener } from './src/listen.js';
 
-// -- Step 1: Get your certificates ready --
-//  - Option 1: Generate fresh certificates
-const certa = await Cert.generate();
-const certb = await Cert.generate();
+		// -- Step 1: Get your certificates ready --
+		//  - Option 1: Generate fresh certificates
+		const certa = await Cert.generate();
+		const certb = await Cert.generate();
 
-//  - Option 2: Reuse/generate your certificates from IndexedDB
-// const certa = await Cert.load('testa');
-// const certb = await Cert.load('testb');
+		//  - Option 2: Reuse/generate your certificates from IndexedDB
+		// const certa = await Cert.load('testa');
+		// const certb = await Cert.load('testb');
 
-// Test a cert: false connection to my server
-// const conn = new Addr('turn:RxLSBa3c1ZUuY2FHqKoPDuee91GDA3vDZk36rPk6W73@stun.evan-brass.net').connect({
-// 	cert: false, dont_mung: true
-// });
-// conn.addEventListener('connectionstatechange', () => console.log('cert:false connected', conn.cert));
+		// Test a cert: false connection to my server
+		// const conn = new Addr('turn:RxLSBa3c1ZUuY2FHqKoPDuee91GDA3vDZk36rPk6W73@stun.evan-brass.net').connect({
+		// 	cert: false, dont_mung: true
+		// });
+		// conn.addEventListener('connectionstatechange', () => console.log('cert:false connected', conn.cert));
 
+		// Create outgoing connections to any addr search params.
+		// for (const val of new URL(location).searchParams.getAll('addr')) {
+		// 	const conn = new Addr(decodeURIComponent(val)).connect({cert: false});
+		// 	console.log('outgoing', conn);
+		// }
 
-// Create outgoing connections to any addr search params.
-// for (const val of new URL(location).searchParams.getAll('addr')) {
-// 	const conn = new Addr(decodeURIComponent(val)).connect({cert: false});
-// 	console.log('outgoing', conn);
-// }
+		const a = new Listener(
+			'turn:RxLSBa3c1ZUuY2FHqKoPDuee91GDA3vDZk36rPk6W73@stun.evan-brass.net',
+			{ cert: certa },
+		);
+		// Generate a random password using 5 bytes of entropy:
+		a.ice_pwd = 16;
 
-const a = new Listener('turn:RxLSBa3c1ZUuY2FHqKoPDuee91GDA3vDZk36rPk6W73@stun.evan-brass.net', {cert: certa});
-// Generate a random password using 5 bytes of entropy:
-a.ice_pwd = 16;
+		console.log("a's address is", a.addr);
 
-console.log("a's address is", a.addr);
+		const b = a.addr.connect({ cert: certb });
 
-const b = a.addr.connect({cert: certb});
+		(async () => {
+			for await (const conn of a) {
+				console.log('a incoming', conn);
+			}
+		})();
 
-(async () => {
-	for await (const conn of a) {
-		console.log('a incoming', conn);
-	}
-})();
+		// Make a connection to my server:
+		// const swbrd_addr = new Addr('turn:RxLSBa3c1ZUuY2FHqKoPDuee91GDA3vDZk36rPk6W73@stun.evan-brass.net');
+		// const swbrd_addr = new Addr('turn:stun.evan-brass.net');
+		// await swbrd_addr.resolve_id(); // Cloudflare DNS over HTTPS server
 
-// Make a connection to my server:
-// const swbrd_addr = new Addr('turn:RxLSBa3c1ZUuY2FHqKoPDuee91GDA3vDZk36rPk6W73@stun.evan-brass.net');
-// const swbrd_addr = new Addr('turn:stun.evan-brass.net');
-// await swbrd_addr.resolve_id(); // Cloudflare DNS over HTTPS server
+		// const swbrd = swbrd_addr.connect();
 
-// const swbrd = swbrd_addr.connect();
+		// const ice_pwd = btoa(String.fromCharCode(...crypto.getRandomValues(new Uint8Array(16)))).replace(/=/g, '');
+		// console.log(`turn:${cert}:${encodeURIComponent(ice_pwd)}@stun.evan-brass.net`);
 
-// const ice_pwd = btoa(String.fromCharCode(...crypto.getRandomValues(new Uint8Array(16)))).replace(/=/g, '');
-// console.log(`turn:${cert}:${encodeURIComponent(ice_pwd)}@stun.evan-brass.net`);
+		// console.log(`turn:${cert}@stun.evan-brass.net`);
 
-// console.log(`turn:${cert}@stun.evan-brass.net`);
+		// for await (const test of listen(swbrd.dc)) {
+		// 	console.log('connection test', test);
+		// }
 
-// for await (const test of listen(swbrd.dc)) {
-// 	console.log('connection test', test);
-// }
+		// -- Step 2: Create connections using your certificates
+		//  - Option 1: Simultaneously connect using addresses through a switchboard server
+		// const swbrd = 'switch.evan-brass.net';
+		// const swbrd = '127.0.0.1';
+		// const addra = new Addr(`turn+tcp://${certa}@${swbrd}?setup`);
+		// const addrb = new Addr(`turn+tcp://${certb}@${swbrd}?setup`);
+		// console.log('addresses', addra, addrb);
+		// const a = addrb.connect({ cert: certa });
+		// const b = addra.connect({ cert: certb });
 
+		//  - Option 2: Simultaneously connect without a server, by passing ICE candidates
+		// const a = new Conn(certb, { cert: certa });
+		// const b = new Conn(certa, { cert: certb });
+		// a.addEventListener('icecandidate', async ({ candidate }) => await b.addIceCandidate(candidate));
+		// b.addEventListener('icecandidate', async ({ candidate }) => await a.addIceCandidate(candidate));
 
+		//  - Option 3: Make a connection to a server using a vanity address (This performs an HTTP request, unlike the options)
+		// const addr = new Addr('turn://stun.evan-brass.net');
+		// await addr.resolve_id();
+		// const a = addr.connect({ cert: certa }); const b = new EventTarget();
 
-// -- Step 2: Create connections using your certificates
-//  - Option 1: Simultaneously connect using addresses through a switchboard server
-// const swbrd = 'switch.evan-brass.net';
-// const swbrd = '127.0.0.1';
-// const addra = new Addr(`turn+tcp://${certa}@${swbrd}?setup`);
-// const addrb = new Addr(`turn+tcp://${certb}@${swbrd}?setup`);
-// console.log('addresses', addra, addrb);
-// const a = addrb.connect({ cert: certa });
-// const b = addra.connect({ cert: certb });
+		//  - Option 4: Make a connection to a server using a non-vanity address
+		// const addr = new Addr('turn://ucCm6JK3s22XuCRiTZVFpWajUq0tIpB7lDn1Sv8dRv3@localhost:3478');
+		// const a = addr.connect({ cert: certa });
+		// const b = new Addr(`turn://${certa}@localhost:3478`).connect({ cert: certb });
 
-//  - Option 2: Simultaneously connect without a server, by passing ICE candidates
-// const a = new Conn(certb, { cert: certa });
-// const b = new Conn(certa, { cert: certb });
-// a.addEventListener('icecandidate', async ({ candidate }) => await b.addIceCandidate(candidate));
-// b.addEventListener('icecandidate', async ({ candidate }) => await a.addIceCandidate(candidate));
-
-//  - Option 3: Make a connection to a server using a vanity address (This performs an HTTP request, unlike the options)
-// const addr = new Addr('turn://stun.evan-brass.net');
-// await addr.resolve_id();
-// const a = addr.connect({ cert: certa }); const b = new EventTarget();
-
-//  - Option 4: Make a connection to a server using a non-vanity address
-// const addr = new Addr('turn://ucCm6JK3s22XuCRiTZVFpWajUq0tIpB7lDn1Sv8dRv3@localhost:3478');
-// const a = addr.connect({ cert: certa });
-// const b = new Addr(`turn://${certa}@localhost:3478`).connect({ cert: certb });
-
-
-// -- Step 3: Log the connection states
-a.addEventListener('connectionstatechange', () => console.log('a', a.connectionState));
-b.addEventListener('connectionstatechange', () => console.log('b', b.connectionState));
+		// -- Step 3: Log the connection states
+		a.addEventListener(
+			'connectionstatechange',
+			() => console.log('a', a.connectionState),
+		);
+		b.addEventListener(
+			'connectionstatechange',
+			() => console.log('b', b.connectionState),
+		);
 </script>

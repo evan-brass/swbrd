@@ -26,10 +26,10 @@ over P-256 and expiring in 365 days. You can override those defaults:
 
 ```javascript
 const keygenAlgorithm = {
-	name: "RSASSA-PKCS1-v1_5",
+	name: 'RSASSA-PKCS1-v1_5',
 	modulusLength: 2048,
 	publicExponent: new Uint8Array([1, 0, 1]),
-	hash: "SHA-256",
+	hash: 'SHA-256',
 	expires: Date.now() + 24 * 60 * 60 * 1000,
 };
 await Cert.generate(keygenAlgorithm);
@@ -39,9 +39,9 @@ await Cert.load('special cert', keygetAlgorithm);
 I'm pretty sure that all browsers' DTLS implementations support ECDSA <-> RSA
 key exchanges.
 
-SDP munging might be used to set the ICE ufrag and ICE pwd. The ufrag is set to the
-peer's id (as a base62 number). Unless overridden, the pwd is set to a constant:
-`the/ice/password/constant`.
+SDP munging might be used to set the ICE ufrag and ICE pwd. The ufrag is set to
+the peer's id (as a base62 number). Unless overridden, the pwd is set to a
+constant: `the/ice/password/constant`.
 
 Lots of things are disabled on Conn. Notably, manual signalling is disabled:
 

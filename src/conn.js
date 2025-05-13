@@ -135,7 +135,9 @@ export class Conn extends RTCPeerConnection {
 		return await super.addIceCandidate(candidate);
 	}
 
-	async #signaling_task({ config, adjustment, setup, ice_lite, ice_ufrag, ice_pwd, mung }) {
+	async #signaling_task(
+		{ config, adjustment, setup, ice_lite, ice_ufrag, ice_pwd, mung },
+	) {
 		// Prepare for renegotiation
 		let negotiation_needed = false;
 		this.addEventListener('negotiationneeded', () => negotiation_needed = true);
@@ -168,7 +170,7 @@ export class Conn extends RTCPeerConnection {
 				't=0 0',
 				'a=group:BUNDLE dc',
 				`a=fingerprint:${to_fingerprint(this.pid)}`,
-				`a=ice-ufrag:${ice_ufrag || to_string((this.pid))}`,
+				`a=ice-ufrag:${ice_ufrag || to_string(this.pid)}`,
 				// TODO: ice-pwd would need to be unique if you do broadcasting.  One option: ice_pwd + to_string(this.cert) for theirs and ice_pwd + to_string(this.pid) for ours.
 				`a=ice-pwd:${ice_pwd || default_ice_pwd}`,
 				'a=ice-options:trickle',
@@ -212,7 +214,7 @@ export class Conn extends RTCPeerConnection {
 		// Switchover into handling renegotiation
 		for (;;) {
 			if (this.#dc.readyState == 'connecting') {
-				await state({'open': this.dc, 'close': this.dc});
+				await state({ 'open': this.dc, 'close': this.dc });
 			} else if (this.#dc.readyState == 'closed') {
 				break;
 			} else if (adjustment) {

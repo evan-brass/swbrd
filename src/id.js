@@ -17,7 +17,7 @@ export function from_bytes(arr) {
 	if (arr.length != bytes) return;
 
 	return BigInt(
-		arr.reduce((a, v) => a + v.toString(16).padStart(2, '0'), '0x')
+		arr.reduce((a, v) => a + v.toString(16).padStart(2, '0'), '0x'),
 	);
 }
 
