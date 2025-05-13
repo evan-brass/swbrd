@@ -1,12 +1,6 @@
 {
-	"imports": {
-		"mbedtls": "../mbedtls.js/src/mbedtls.js"
-	},
 	"fmt": {
 		"useTabs": true,
 		"singleQuote": true
-	},
-	"tasks": {
-		"relay": "deno run --watch --unstable-net --unstable-ffi --allow-net --allow-ffi --allow-read relay/main.js"
 	}
 }

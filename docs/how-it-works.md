@@ -30,7 +30,7 @@ const keygenAlgorithm = {
 	modulusLength: 2048,
 	publicExponent: new Uint8Array([1, 0, 1]),
 	hash: "SHA-256",
-	expires: Date.now() + 24 * 60 * 60 * 1000;
+	expires: Date.now() + 24 * 60 * 60 * 1000,
 };
 await Cert.generate(keygenAlgorithm);
 await Cert.load('special cert', keygetAlgorithm);
@@ -39,7 +39,7 @@ await Cert.load('special cert', keygetAlgorithm);
 I'm pretty sure that all browsers' DTLS implementations support ECDSA <-> RSA
 key exchanges.
 
-SDP munging is used to set the ICE ufrag and ICE pwd. The ufrag is set to the
+SDP munging might be used to set the ICE ufrag and ICE pwd. The ufrag is set to the
 peer's id (as a base62 number). Unless overridden, the pwd is set to a constant:
 `the/ice/password/constant`.
 
