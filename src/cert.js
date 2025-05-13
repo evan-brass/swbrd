@@ -18,8 +18,8 @@ export class Cert extends RTCCertificate {
 		let fingerprint;
 		// Try to retreive the fingerprint using getFingerprints
 		if (ret?.getFingerprints) {
-			for (const { algorithm, value } of ret.getFingerprints()) {
-				if (algorithm.toLowerCase() == algorithm) {
+			for (const { algorithm: alg, value } of ret.getFingerprints()) {
+				if (alg.toLowerCase() == algorithm) {
 					fingerprint = value;
 					break;
 				}
@@ -32,11 +32,11 @@ export class Cert extends RTCCertificate {
 			temp.createDataChannel('');
 			const offer = await temp.createOffer();
 			for (
-				const { 1: algorithm, 2: value } of offer.sdp.matchAll(
+				const { 1: alg, 2: value } of offer.sdp.matchAll(
 					/^a=fingerprint:([^ ]+) ([0-9a-f]{2}(:[0-9a-f]{2})+)/img,
 				)
 			) {
-				if (algorithm.toLowerCase() == algorithm) {
+				if (alg.toLowerCase() == algorithm) {
 					fingerprint = value;
 					break;
 				}
