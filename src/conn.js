@@ -49,7 +49,6 @@ export class Conn extends RTCPeerConnection {
 		ice_lite,
 		ice_ufrag,
 		ice_pwd,
-		mung = false,
 		timeout = 10_000,
 		adjustment = null,
 		...config
@@ -86,7 +85,6 @@ export class Conn extends RTCPeerConnection {
 			ice_lite,
 			ice_ufrag,
 			ice_pwd,
-			mung,
 		}).catch((e) => {
 			console.error(e);
 			this.close();
@@ -136,7 +134,7 @@ export class Conn extends RTCPeerConnection {
 	}
 
 	async #signaling_task(
-		{ config, adjustment, setup, ice_lite, ice_ufrag, ice_pwd, mung },
+		{ config, adjustment, setup, ice_lite, ice_ufrag, ice_pwd },
 	) {
 		// Prepare for renegotiation
 		let negotiation_needed = false;
@@ -152,6 +150,7 @@ export class Conn extends RTCPeerConnection {
 			}
 			if (typeof json != 'object') return;
 			if (json?.description) remote_desc = json.description;
+			// TODO: Wait on applying remote candidates until remote_desc == false? Or maybe just catch errors?
 			if (json?.candidate) await this.addIceCandidate(json.candidate);
 		});
 		this.addEventListener('icecandidate', ({ candidate }) => {
@@ -174,7 +173,7 @@ export class Conn extends RTCPeerConnection {
 				// TODO: ice-pwd would need to be unique if you do broadcasting.  One option: ice_pwd + to_string(this.cert) for theirs and ice_pwd + to_string(this.pid) for ours.
 				`a=ice-pwd:${ice_pwd || default_ice_pwd}`,
 				'a=ice-options:trickle',
-				...(ice_lite != undefined ? ['a=ice-lite'] : []),
+				...(ice_lite ? ['a=ice-lite'] : []),
 				'm=application 42 UDP/DTLS/SCTP webrtc-datachannel',
 				'c=IN IP4 0.0.0.0',
 				'a=mid:dc',
@@ -185,32 +184,17 @@ export class Conn extends RTCPeerConnection {
 			].join('\n'),
 		});
 
-		let answer;
-		// Depending on mung, we may need the cert earlier or later. This function is a noop if the cert was provided.
-		const need_cert = () => {
-			this.#cert ||= from_bytes(
-				Array.from(
-					(answer ?? this.localDescription).sdp.matchAll(
-						/^a=fingerprint:([^ ]+) ([0-9a-f]{2}(:[0-9a-f]{2})+)/img,
-					),
-					({ 1: alg, 2: value }) => ({ alg, value }),
-				).find((v) => v.alg.toLowerCase() == algorithm)
-					.value.split(':'),
-			);
-		};
+		await super.setLocalDescription();
+		this.#cert ||= from_bytes(
+			Array.from(
+				this.localDescription.sdp.matchAll(
+					/^a=fingerprint:([^ ]+) ([0-9a-f]{2}(:[0-9a-f]{2})+)/img,
+				),
+				({ 1: alg, 2: value }) => ({ alg, value }),
+			).find((v) => v.alg.toLowerCase() == algorithm)
+				.value.split(':'),
+		);
 
-		// Mung our answer
-		if (mung) {
-			answer = await super.createAnswer();
-			need_cert();
-			answer.sdp = answer.sdp
-				.replace(/^a=ice-ufrag:.+/im, `a=ice-ufrag:${to_string(this.#cert)}`)
-				.replace(/^a=ice-pwd:.+/im, `a=ice-pwd:${ice_pwd || default_ice_pwd}`);
-		}
-		await super.setLocalDescription(answer);
-		need_cert();
-
-		console.log('adjustment', adjustment);
 		// Switchover into handling renegotiation
 		for (;;) {
 			if (this.#dc.readyState == 'connecting') {
@@ -219,28 +203,11 @@ export class Conn extends RTCPeerConnection {
 				break;
 			} else if (adjustment) {
 				adjustment = null;
-				mung = false;
 				this.setConfiguration(config);
 				this.restartIce();
 			} else if (negotiation_needed && this.#dc.readyState != 'closing') {
 				negotiation_needed = false;
 
-				/**
-				 * HACK: Needed because Firefox doesn't preserve munged ICE credentials.
-				 * This causes Firefox to unknowingly trigger an ICE restart and then
-				 * when the answer contains new ICE credentials, it throws an error saying
-				 * it didn't ask for an ICE restart (even though it actually did).
-				 *
-				 * This is now also an issue with dissolve.  You need to set mung = is_firefox for
-				 * dissolve because a remote offer will contain the true ufrag, not the dissolve
-				 * credentials.
-				 *
-				 * ISSUE: https://bugzilla.mozilla.org/show_bug.cgi?id=1916752 (They don't intend to fix)
-				 */
-				if (mung && is_firefox) {
-					super.restartIce();
-					mung = false;
-				}
 				await super.setLocalDescription();
 				try {
 					this.#dc.send(JSON.stringify({ description: this.localDescription }));

@@ -88,9 +88,10 @@ export class Addr extends URL {
 		const pid = this.id;
 
 		// Adjust the config if needed
+		let ice_lite;
+		if (this.searchParams.get('ice-lite') != null) ice_lite = true;
 		let cert = config?.cert;
 		let ice_ufrag = config?.ice_ufrag;
-		let mung = config?.mung;
 		let adjustment = null;
 		const turn_res = /^(turns?)(?:\+(tcp|udp))?:/i.exec(this.protocol);
 		if (turn_res) {
@@ -102,12 +103,38 @@ export class Addr extends URL {
 			ice_ufrag ||= 'dissolve';
 
 			/**
-			 * HACK: Firefox doesn't correctly handle error 487.  So, our TURN server's dissolve implementation
-			 * currently uses a request to get Firefox to switch roles.
+			 * HACK: Firefox refuses to resolve role conflicts more than once.
 			 *
-			 * ISSUE: https://bugzilla.mozilla.org/show_bug.cgi?id=1940001
+			 * CODE: https://searchfox.org/mozilla-central/source/dom/media/webrtc/transport/third_party/nICEr/src/ice/ice_peer_ctx.c#858
+			 *
+			 * I use double-answer connections in Conn because by generating the offer, I can control bundling and mid's
+			 * such that subsequent browser generated offers can be passed directly to the RTCPeerConnection.
+			 *
+			 * Without this, a fixup step would be needed on renegotiated sdp which would be more fragile.
+			 * Another reason for using double-answer instead of double-offer connections is to force added media (audio/
+			 * video transceivers) to be renegotiated over the datachannel using the browsers' normal media signaling paths.
+			 *
+			 * Since the browser is answering it will take the controlled role, but my dissolve system needs the browser
+			 * to be controlling so that it can nominate candidate pairs without needing to receive an incoming request.
+			 *
+			 * This is the first role-conflict.  A second role conflict will occur once the peers renegotiate and start
+			 * pairing non-relay candidates / using new ice credentials.
+			 *
+			 * To get Firefox to be controlling even while it answers, we have to use ice-lite.  Firefox has weird, but
+			 * in our case desirable behavior with ice-lite: thinking the remote peer is ice-lite doesn't stop Firefox
+			 * from switching roles.
+			 *
+			 * In Chrome setting ice-lite does appear to prevent switching roles.  At least that's what I think is going
+			 * on.  Chrome seems to struggle switching off the relay candidate pair in general, but I swear I've seen it
+			 * happen at least once.
+			 *
+			 * In any case, it's only Firefox that is limiting the number of renegotiations, so we'll only set ice-lite
+			 * in Firefox.  This removes the role-conflict from dissolve, leaving a single role-conflict
+			 * during renegotiation.
+			 *
+			 * Hopefully browser behavior doesn't change in the wrong direction 🤞
 			 */
-			mung ??= is_firefox;
+			ice_lite ??= is_firefox;
 
 			adjustment = {
 				/**
@@ -134,21 +161,9 @@ export class Addr extends URL {
 			this.searchParams.get('setup') ?? 'passive',
 		);
 
-		/**
-		 * HACK: Needed because Firefox doesn't switch roles when it receives 487 switch-role errors
-		 * If 487 works, you shouldn't need to explicitly state that you're connecting to
-		 * an ice-lite server, and you shouldn't need to know the credentials of your clients.
-		 *
-		 * When responding to ICE requests you only need to know your own ICE credentials.
-		 *
-		 * ISSUE: https://bugzilla.mozilla.org/show_bug.cgi?id=1940001
-		 */
-		const ice_lite = this.searchParams.get('ice-lite');
-
 		// Create the connection
 		const ret = new Conn(pid, {
 			cert,
-			mung,
 			ice_ufrag,
 			ice_pwd,
 			setup,
