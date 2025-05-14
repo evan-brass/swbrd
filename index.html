@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <script>
 	// Log everything.
-		function log_everything(conn, label = conn.pid) {
+		async function log_everything(conn, label = conn.pid) {
 			const logger = (...args) => console.log(label, ...args);
 			['message', 'open', 'close'].forEach((e) =>
 				conn.dc.addEventListener(e, logger)
@@ -26,6 +26,15 @@
 			].forEach((e) => {
 				conn.addEventListener(e, logger);
 			});
+
+			while (!conn.sctp) {
+				await new Promise(res => conn.addEventListener('signalingstatechange', res, {once: true}));
+			}
+			conn.sctp.addEventListener('statechange', ({target: {state}}) => logger('sctp state', state));
+			conn.sctp.transport.addEventListener('error', ({error}) => logger('dtls error', error));
+			conn.sctp.transport.iceTransport.addEventListener('gatheringstatechange', ({target: {gatheringState}}) => logger('ice transport gatheringState', gatheringState));
+			conn.sctp.transport.iceTransport.addEventListener('statechange', ({target: {state}}) => logger('ice transport state', state));
+			conn.sctp.transport.iceTransport.addEventListener('selectedcandidatepairchange', ({target}) => logger('ice transport selected', target.getSelectedCandidatePair()));
 		}
 </script>
 <script type="_module">
@@ -43,9 +52,12 @@
 		const certa = await Cert.load('peera');
 		const certb = await Cert.load('peerb');
 
-		const a = new Addr(`turn+tcp:${certb}@stun.evan-brass.net?setup`)
+		const host = 'stun.evan-brass.net';
+		// const host = 'localhost';
+
+		const a = new Addr(`turn+tcp:${certb}@${host}?setup`)
 			.connect({ cert: certa });
-		const b = new Addr(`turn+tcp:${certa}@stun.evan-brass.net?setup`)
+		const b = new Addr(`turn+tcp:${certa}@${host}?setup`)
 			.connect({ cert: certb });
 		log_everything(a, 'a');
 		log_everything(b, 'b');
