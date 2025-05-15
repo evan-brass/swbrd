@@ -1,6 +1,6 @@
 import { cert as default_cert } from './cert.js';
 import { default_ice_pwd } from './const.js';
-import { algorithm, from_bytes, to_fingerprint, to_string } from './id.js';
+import { to_fingerprint, to_string } from './id.js';
 import { is_firefox, state } from './util.js';
 
 export const defaults = {
@@ -35,31 +35,23 @@ export class Conn extends RTCPeerConnection {
 		return this.#pid;
 	}
 
-	get polite() {
-		if (!this.#cert) {
-			throw new Error(
-				'Connection failed: cert was overridden, but other parameters required politeness prior to generating the local answer. Perhaps you needed to also override the setup.',
-			);
-		}
-		return (BigInt(this.cert) < this.pid);
-	}
-
 	constructor(peerid, {
-		setup,
-		ice_lite,
-		ice_ufrag,
-		ice_pwd,
+		cert = default_cert,
+		polite = BigInt(cert) < BigInt(peerid),
+		// Read the following line as: "If I am polite, then the remote peer will be active therefore I must be passive": unless overridden, the polite peer is the DTLS server.
+		setup = polite ? 'active' : 'passive',
+		ice_lite = false,
+		ice_ufrag = to_string(peerid),
+		ice_pwd = default_ice_pwd,
 		timeout = 10_000,
 		adjustment = null,
 		...config
 	} = {}) {
-		const cert = config?.cert ?? default_cert;
-
 		super({
 			...defaults,
 			...config,
 			...adjustment,
-			certificates: cert ? [cert] : [],
+			certificates: [cert],
 			...overrides,
 		});
 		this.#pid = BigInt(peerid);
@@ -79,6 +71,7 @@ export class Conn extends RTCPeerConnection {
 		}
 
 		this.#signaling_task({
+			polite,
 			config,
 			adjustment,
 			setup,
@@ -134,7 +127,7 @@ export class Conn extends RTCPeerConnection {
 	}
 
 	async #signaling_task(
-		{ config, adjustment, setup, ice_lite, ice_ufrag, ice_pwd },
+		{ polite, config, adjustment, setup, ice_lite, ice_ufrag, ice_pwd },
 	) {
 		// Prepare for renegotiation
 		let negotiation_needed = false;
@@ -169,31 +162,22 @@ export class Conn extends RTCPeerConnection {
 				't=0 0',
 				'a=group:BUNDLE dc',
 				`a=fingerprint:${to_fingerprint(this.pid)}`,
-				`a=ice-ufrag:${ice_ufrag || to_string(this.pid)}`,
+				`a=ice-ufrag:${ice_ufrag}`,
 				// TODO: ice-pwd would need to be unique if you do broadcasting.  One option: ice_pwd + to_string(this.cert) for theirs and ice_pwd + to_string(this.pid) for ours.
-				`a=ice-pwd:${ice_pwd || default_ice_pwd}`,
+				`a=ice-pwd:${ice_pwd}`,
 				'a=ice-options:trickle',
 				...(ice_lite ? ['a=ice-lite'] : []),
 				'm=application 42 UDP/DTLS/SCTP webrtc-datachannel',
 				'c=IN IP4 0.0.0.0',
 				'a=mid:dc',
 				// Read the following line as: "If I am polite, then the remote peer will be active therefore I must be passive": unless overridden, the polite peer is the DTLS server.
-				`a=setup:${setup || (this.polite ? 'active' : 'passive')}`,
+				`a=setup:${setup}`,
 				'a=sctp-port:5000',
 				'',
 			].join('\n'),
 		});
 
 		await super.setLocalDescription();
-		this.#cert ||= from_bytes(
-			Array.from(
-				this.localDescription.sdp.matchAll(
-					/^a=fingerprint:([^ ]+) ([0-9a-f]{2}(:[0-9a-f]{2})+)/img,
-				),
-				({ 1: alg, 2: value }) => ({ alg, value }),
-			).find((v) => v.alg.toLowerCase() == algorithm)
-				.value.split(':'),
-		);
 
 		// Switchover into handling renegotiation
 		for (;;) {
@@ -218,7 +202,7 @@ export class Conn extends RTCPeerConnection {
 				// Ignore incoming offers if we have a local offer and are also impolite
 				if (
 					desc?.type == 'offer' && this.signalingState == 'have-local-offer' &&
-					!this.polite
+					!polite
 				) continue;
 
 				await super.setRemoteDescription(desc);
@@ -255,7 +239,7 @@ export class Conn extends RTCPeerConnection {
 			...defaults,
 			...config,
 			...overrides,
-			certificates: this.#cert instanceof RTCCertificate ? [this.#cert] : [],
+			certificates: [this.#cert],
 		});
 	}
 

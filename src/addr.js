@@ -2,8 +2,8 @@ import { algorithm, from_string, to_string } from './id.js';
 import { cert as default_cert } from './cert.js';
 import { Conn } from './conn.js';
 import { query_txt } from './dns.js';
-import { default_turn_credential, default_turn_username } from './const.js';
-import { is_firefox, state } from './util.js';
+import { default_turn_credential } from './const.js';
+import { is_firefox } from './util.js';
 /**
  * Example Addr-esses:
  * const a = new Addr('udp:seed.evan-brass.net'); await a.resolve_id(); const conn = a.connect();
@@ -89,7 +89,7 @@ export class Addr extends URL {
 
 		// Adjust the config if needed
 		let ice_lite;
-		if (this.searchParams.get('ice-lite') != null) ice_lite = true;
+		if (this.searchParams.has('ice-lite')) ice_lite = true;
 		let cert = config?.cert;
 		let ice_ufrag = config?.ice_ufrag;
 		let adjustment = null;
@@ -126,7 +126,9 @@ export class Addr extends URL {
 			 *
 			 * In Chrome setting ice-lite does appear to prevent switching roles.  At least that's what I think is going
 			 * on.  Chrome seems to struggle switching off the relay candidate pair in general, but I swear I've seen it
-			 * happen at least once.
+			 * happen at least once.  If Chrome uses latency to select candidate pairs, then dissolve has an advantage
+			 * because it is halfway between the two peers.  Hopefully I can make dissolve suck enough to improve Chrome's
+			 * selection behavior over time.
 			 *
 			 * In any case, it's only Firefox that is limiting the number of renegotiations, so we'll only set ice-lite
 			 * in Firefox.  This removes the role-conflict from dissolve, leaving a single role-conflict
@@ -156,10 +158,13 @@ export class Addr extends URL {
 			};
 		}
 
-		const { password: ice_pwd } = this.authority;
-		const setup = decodeURIComponent(
+		let { password: ice_pwd } = this.authority;
+		if (ice_pwd === '') ice_pwd = undefined;
+
+		let setup = decodeURIComponent(
 			this.searchParams.get('setup') ?? 'passive',
 		);
+		if (setup === '') setup = undefined;
 
 		// Create the connection
 		const ret = new Conn(pid, {
