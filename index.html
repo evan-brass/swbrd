@@ -1,4 +1,9 @@
 <!DOCTYPE html>
+<script type="importmap">{
+	"imports": {
+		"swbrd/": "./src/"
+	}
+}</script>
 <script>
 	// Log everything.
 		async function log_everything(conn, label = conn.pid) {
@@ -38,7 +43,7 @@
 		}
 </script>
 <script type="_module">
-	import { Addr } from './src/addr.js';
+	import { Addr } from 'swbrd/addr.js';
 
 		const host = new Addr(
 			'turn+tcp:ucCm6JK3s22XuCRiTZVFpWajUq0tIpB7lDn1Sv8dRv3@localhost?setup=active',
@@ -46,8 +51,8 @@
 		log_everything(host, 'host');
 </script>
 <script type="module">
-	import { Cert, cert } from './src/cert.js';
-		import { Addr } from './src/addr.js';
+	import { Cert } from 'swbrd/cert.js';
+		import { Addr } from 'swbrd/addr.js';
 
 		const certa = await Cert.load('peera');
 		const certb = await Cert.load('peerb');
@@ -63,7 +68,7 @@
 		log_everything(b, 'b');
 </script>
 <script type="_module">
-	import { state } from './src/util.js';
+	import { state } from 'swbrd/util.js';
 
 		const config = {
 			iceTransportPolicy: 'relay',
@@ -86,8 +91,8 @@
 		await a.setRemoteDescription(b.localDescription);
 </script>
 <script type="_module">
-	import { Addr } from './src/addr.js';
-		import { listen } from './src/listen.js';
+	import { Addr } from 'swbrd/addr.js';
+		import { listen } from 'swbrd/listen.js';
 
 		// Connect to my server
 		const server_addr = new Addr(
@@ -217,7 +222,7 @@
 		await a.setRemoteDescription(b.localDescription);
 </script>
 <script type="_module">
-	import { base } from './src/base.js';
+	import { base } from 'swbrd/base.js';
 		const charset =
 			'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
 
@@ -245,11 +250,11 @@
 		console.log(actual, expected, actual == expected);
 </script>
 <script type="_module">
-	import { Addr } from './src/addr.js';
+	import { Addr } from 'swbrd/addr.js';
 		const server = new Addr();
 </script>
 <script type="_module">
-	import { state } from './src/util.js';
+	import { state } from 'swbrd/util.js';
 		const config = {
 			iceTransportPolicy: 'relay',
 			iceServers: [{
@@ -290,8 +295,8 @@
 		await a.setRemoteDescription(b.localDescription);
 </script>
 <script type="_module">
-	import { Cert } from './src/cert.js';
-		import { Conn } from './src/conn.js';
+	import { Cert } from 'swbrd/cert.js';
+		import { Conn } from 'swbrd/conn.js';
 
 		// -- Step 1: Get your certificates ready --
 		let certa, certb;
@@ -362,8 +367,8 @@
 		a.restartIce();
 </script>
 <script type="_module">
-	import { Listener } from './src/listen.js';
-		import { Cert } from './src/cert.js';
+	import { Listener } from 'swbrd/listen.js';
+		import { Cert } from 'swbrd/cert.js';
 
 		const certa = await Cert.load('testa');
 		const certb = await Cert.load('testb');
@@ -386,7 +391,7 @@
 		}
 </script>
 <script type="_module">
-	import { Addr } from './src/addr.js';
+	import { Addr } from 'swbrd/addr.js';
 
 		const test = new Addr(
 			'turn:ucCm6JK3s22XuCRiTZVFpWajUq0tIpB7lDn1Sv8dRv3@local.evan-brass.net',
@@ -406,9 +411,9 @@
 		);
 </script>
 <script type="_module">
-	import { Addr, Cert, Conn } from './src/index.js';
-		import { cert } from './src/cert.js';
-		import { Listener } from './src/listen.js';
+	import { Addr, Cert, Conn } from 'swbrd/index.js';
+		import { cert } from 'swbrd/cert.js';
+		import { Listener } from 'swbrd/listen.js';
 
 		// -- Step 1: Get your certificates ready --
 		//  - Option 1: Generate fresh certificates
