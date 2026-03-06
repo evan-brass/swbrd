@@ -1,13 +1,14 @@
 import { cert as default_cert } from './cert.js';
-import { default_ice_pwd } from './const.js';
-import { to_fingerprint, to_string } from './id.js';
+import { to_fingerprint } from './id.js';
 import { is_firefox, state } from './util.js';
 
 export const defaults = {
 	iceServers: [{
 		urls: [
-			'turn:stun.evan-brass.net',
-			'turn:stun.evan-brass.net?transport=tcp',
+			'turn:turn.evan-brass.net',
+			'turn:turn.evan-brass.net?transport=tcp',
+			'turns:turn.evan-brass.net?transport=tcp',
+			'turns:turn.evan-brass.net:443?transport=tcp',
 		],
 		username: 'guest',
 		credential: 'password',
@@ -41,8 +42,6 @@ export class Conn extends RTCPeerConnection {
 		// Read the following line as: "If I am polite, then the remote peer will be active therefore I must be passive": unless overridden, the polite peer is the DTLS server.
 		setup = polite ? 'active' : 'passive',
 		ice_lite = false,
-		ice_ufrag = to_string(peerid),
-		ice_pwd = default_ice_pwd,
 		timeout = 10_000,
 		adjustment = null,
 		...config
@@ -76,8 +75,6 @@ export class Conn extends RTCPeerConnection {
 			adjustment,
 			setup,
 			ice_lite,
-			ice_ufrag,
-			ice_pwd,
 		}).catch((e) => {
 			console.error(e);
 			this.close();
@@ -103,8 +100,7 @@ export class Conn extends RTCPeerConnection {
 			await state({ 'signalingstatechange': this });
 		}
 
-		candidate.usernameFragment ??=
-			/a=ice-ufrag:(.+)/i.exec(super.remoteDescription.sdp)[1];
+		const { 1: ufrag } = /a=ice-ufrag:(.+)/i.exec(super.remoteDescription.sdp);
 		candidate.candidate ??= 'candidate:' + [
 			candidate.foundation || 'foundation',
 			candidate.component || '1',
@@ -127,7 +123,7 @@ export class Conn extends RTCPeerConnection {
 	}
 
 	async #signaling_task(
-		{ polite, config, adjustment, setup, ice_lite, ice_ufrag, ice_pwd },
+		{ polite, config, adjustment, setup, ice_lite, },
 	) {
 		// Prepare for renegotiation
 		let negotiation_needed = false;
@@ -162,25 +158,24 @@ export class Conn extends RTCPeerConnection {
 				't=0 0',
 				'a=group:BUNDLE dc',
 				`a=fingerprint:${to_fingerprint(this.pid)}`,
-				`a=ice-ufrag:${ice_ufrag}`,
-				// TODO: ice-pwd would need to be unique if you do broadcasting.  One option: ice_pwd + to_string(this.cert) for theirs and ice_pwd + to_string(this.pid) for ours.
-				`a=ice-pwd:${ice_pwd}`,
-				'a=ice-options:trickle',
+				`a=ice-ufrag:dissolve`,
+				`a=ice-pwd:the/ice/password/constant`,
 				...(ice_lite ? ['a=ice-lite'] : []),
-				'm=application 42 UDP/DTLS/SCTP webrtc-datachannel',
+				'm=application 0 UDP/DTLS/SCTP webrtc-datachannel',
 				'c=IN IP4 0.0.0.0',
+				'a=bundle-only',
 				'a=mid:dc',
-				// Read the following line as: "If I am polite, then the remote peer will be active therefore I must be passive": unless overridden, the polite peer is the DTLS server.
 				`a=setup:${setup}`,
 				'a=sctp-port:5000',
 				'',
 			].join('\n'),
 		});
 
+		// TODO: I'm worried that the sctp-port in the local description might change in the future...  Currently this is the only assumption that I'm aware of, everything else has been setup in the original offer.
 		await super.setLocalDescription();
 
 		// Switchover into handling renegotiation
-		for (;;) {
+		for (; ;) {
 			if (this.#dc.readyState == 'connecting') {
 				await state({ 'open': this.dc, 'close': this.dc });
 			} else if (this.#dc.readyState == 'closed') {

@@ -5,67 +5,67 @@
 	}
 }</script>
 <script>
-	// Log everything.
-		async function log_everything(conn, label = conn.pid) {
-			const logger = (...args) => console.log(label, ...args);
-			['message', 'open', 'close'].forEach((e) =>
-				conn.dc.addEventListener(e, logger)
-			);
-			[
-				'connectionState',
-				'iceConnectionState',
-				'iceGatheringState',
-				'signalingState',
-			].forEach((p) => {
-				conn.addEventListener(
-					p.toLowerCase() + 'change',
-					() => logger(p, conn[p]),
-				);
-			});
-			[
-				'icecandidate',
-				'datachannel',
-				'icecandidateerror',
-				'negotiationneeded',
-				'track',
-			].forEach((e) => {
-				conn.addEventListener(e, logger);
-			});
+// Log everything.
+async function log_everything(conn, label = conn.pid) {
+	const logger = (...args) => console.log(label, ...args);
+	['message', 'open', 'close'].forEach((e) =>
+		conn.dc.addEventListener(e, logger)
+	);
+	[
+		'connectionState',
+		'iceConnectionState',
+		'iceGatheringState',
+		'signalingState',
+	].forEach((p) => {
+		conn.addEventListener(
+			p.toLowerCase() + 'change',
+			() => logger(p, conn[p]),
+		);
+	});
+	[
+		'icecandidate',
+		'datachannel',
+		'icecandidateerror',
+		'negotiationneeded',
+		'track',
+	].forEach((e) => {
+		conn.addEventListener(e, logger);
+	});
 
-			while (!conn.sctp) {
-				await new Promise(res => conn.addEventListener('signalingstatechange', res, {once: true}));
-			}
-			conn.sctp.addEventListener('statechange', ({target: {state}}) => logger('sctp state', state));
-			conn.sctp.transport.addEventListener('error', ({error}) => logger('dtls error', error));
-			conn.sctp.transport.iceTransport.addEventListener('gatheringstatechange', ({target: {gatheringState}}) => logger('ice transport gatheringState', gatheringState));
-			conn.sctp.transport.iceTransport.addEventListener('statechange', ({target: {state}}) => logger('ice transport state', state));
-			conn.sctp.transport.iceTransport.addEventListener('selectedcandidatepairchange', ({target}) => logger('ice transport selected', target.getSelectedCandidatePair()));
-		}
+	while (!conn.sctp) {
+		await new Promise(res => conn.addEventListener('signalingstatechange', res, { once: true }));
+	}
+	conn.sctp.addEventListener('statechange', ({ target: { state } }) => logger('sctp state', state));
+	conn.sctp.transport.addEventListener('error', ({ error }) => logger('dtls error', error));
+	conn.sctp.transport.iceTransport.addEventListener('gatheringstatechange', ({ target: { gatheringState } }) => logger('ice transport gatheringState', gatheringState));
+	conn.sctp.transport.iceTransport.addEventListener('statechange', ({ target: { state } }) => logger('ice transport state', state));
+	conn.sctp.transport.iceTransport.addEventListener('selectedcandidatepairchange', ({ target }) => logger('ice transport selected', target.getSelectedCandidatePair()));
+}
 </script>
 <script type="_module">
-	import { Addr } from 'swbrd/addr.js';
+import { Addr } from 'swbrd/addr.js';
 
-		const host = new Addr(
-			'turn+tcp:ucCm6JK3s22XuCRiTZVFpWajUq0tIpB7lDn1Sv8dRv3@localhost?setup=active',
-		).connect();
-		log_everything(host, 'host');
+const host = new Addr(
+	'turn+tcp:ucCm6JK3s22XuCRiTZVFpWajUq0tIpB7lDn1Sv8dRv3@localhost?setup=active',
+).connect();
+log_everything(host, 'host');
 </script>
-<script type="module">
-	import { Cert } from 'swbrd/cert.js';
-		import { Addr } from 'swbrd/addr.js';
+<script type="_module">
+import { Cert } from 'swbrd/cert.js';
+import { Addr } from 'swbrd/addr.js';
 
-		const certa = await Cert.load('peera');
-		const certb = await Cert.load('peerb');
+const certa = await Cert.load('peera');
+const certb = await Cert.load('peerb');
 
-		const host = 'stun.evan-brass.net';
-		// const host = 'localhost';
+const host = 'stun.evan-brass.net';
+// const host = 'localhost';
 
-		const a = new Addr(`turn+tcp:${certb}@${host}?setup`)
-			.connect({ cert: certa });
-		const b = new Addr(`turn+tcp:${certa}@${host}?setup`)
-			.connect({ cert: certb });
-		log_everything(a, 'a');
-		log_everything(b, 'b');
+const a = new Addr(`turn+tcp:${certb}@${host}?setup`)
+	.connect({ cert: certa });
+const b = new Addr(`turn+tcp:${certa}@${host}?setup`)
+	.connect({ cert: certb });
+log_everything(a, 'a');
+log_everything(b, 'b');
 </script>
 <script type="_module">
 	import { state } from 'swbrd/util.js';
@@ -294,77 +294,68 @@
 		await b.setLocalDescription();
 		await a.setRemoteDescription(b.localDescription);
 </script>
-<script type="_module">
-	import { Cert } from 'swbrd/cert.js';
-		import { Conn } from 'swbrd/conn.js';
+<script type="module">
+import { Cert } from 'swbrd/cert.js';
+import { Conn } from 'swbrd/conn.js';
 
-		// -- Step 1: Get your certificates ready --
-		let certa, certb;
-		//  - Option 1: Reuse a certificate from IndexedDB (generating a new certificate if the existing cert is not present or has expired)
-		certa = await Cert.load('testa');
-		certb = await Cert.load('testb');
+// -- Step 1: Get your certificates ready --
+let certa, certb;
+//  - Option 1: Reuse a certificate from IndexedDB (generating a new certificate if the existing cert is not present or has expired)
+certa = await Cert.load('testa');
+certb = await Cert.load('testb');
 
-		//  - Option 2: Generate fresh certificates
-		// certa = await Cert.generate();
-		// certb = await Cert.generate();
+//  - Option 2: Generate fresh certificates
+// certa = await Cert.generate();
+// certb = await Cert.generate();
 
-		// -- Step 2: Turn your certificate into an id --
-		const ida = BigInt(certa);
-		const idb = BigInt(certb);
+// -- Step 2: Turn your certificate into an id --
+const ida = BigInt(certa);
+const idb = BigInt(certb);
 
-		// -- Step 3: Create each side of the connection using your certificate and your peer's id --
-		const a = new Conn(idb, { cert: certa });
-		const b = new Conn(ida, { cert: certb });
-		// - Log the connection status
-		a.addEventListener(
-			'connectionstatechange',
-			() => console.log('a', a.connectionState),
-		);
-		b.addEventListener(
-			'connectionstatechange',
-			() => console.log('b', b.connectionState),
-		);
+// -- Step 3: Create each side of the connection using your certificate and your peer's id --
+const a = new Conn(idb, { cert: certa });
+const b = new Conn(ida, { cert: certb });
 
-		// -- Step 4: Pass ICE candidates (ip+port pairs) --
-		a.addEventListener(
-			'icecandidate',
-			async ({ candidate }) => await b.addIceCandidate(candidate),
-		);
-		b.addEventListener(
-			'icecandidate',
-			async ({ candidate }) => await a.addIceCandidate(candidate),
-		);
+// -- Step 4: Pass ICE candidates (ip+port pairs) --
+a.addEventListener(
+	'icecandidate',
+	async ({ candidate }) => await b.addIceCandidate(candidate),
+);
+b.addEventListener(
+	'icecandidate',
+	async ({ candidate }) => await a.addIceCandidate(candidate),
+);
 
-		// -- Step 5: Add event listeners for incoming datachannels / tracks --
-		a.addEventListener(
-			'datachannel',
-			({ channel }) => console.log('datachannel from b', channel),
-		);
-		a.addEventListener(
-			'track',
-			({ track }) => console.log('track from b', track),
-		);
-		b.addEventListener(
-			'datachannel',
-			({ channel }) => console.log('datachannel from a', channel),
-		);
-		b.addEventListener(
-			'track',
-			({ track }) => console.log('track from a', track),
-		);
+// -- Step 5: Add event listeners for incoming datachannels / tracks --
+a.addEventListener(
+	'datachannel',
+	({ channel }) => console.log('datachannel from b', channel),
+);
+a.addEventListener(
+	'track',
+	({ track }) => console.log('track from b', track),
+);
+b.addEventListener(
+	'datachannel',
+	({ channel }) => console.log('datachannel from a', channel),
+);
+b.addEventListener(
+	'track',
+	({ track }) => console.log('track from a', track),
+);
 
-		// -- Step 6: Create your datachannels or add your tracks. --
-		//  - Option 1: Create DataChannels
-		const _data = a.createDataChannel('Hello World', {
-			protocol: 'greeter.json',
-		});
+// -- Step 6: Create your datachannels or add your tracks. --
+//  - Option 1: Create DataChannels
+const _data = a.createDataChannel('Hello World', {
+	protocol: 'greeter.json',
+});
 
-		//  - Option 2: Add Audio / Video tracks to the connection
-		const _transVid = a.addTransceiver('video');
-		const _transAud = b.addTransceiver('audio');
+//  - Option 2: Add Audio / Video tracks to the connection
+const _transVid = a.addTransceiver('video');
+const _transAud = b.addTransceiver('audio');
 
-		//  - Option 3: Trigger an ICE restart to find new network paths between the peers
-		a.restartIce();
+//  - Option 3: Trigger an ICE restart to find new network paths between the peers
+a.restartIce();
 </script>
 <script type="_module">
 	import { Listener } from 'swbrd/listen.js';
