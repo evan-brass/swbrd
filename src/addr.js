@@ -1,4 +1,4 @@
-import { algorithm, from_string, to_string } from './id.js';
+import { Id } from './id.js';
 import { cert as default_cert } from './cert.js';
 import { Conn } from './conn.js';
 import { query_txt } from './dns.js';
@@ -15,7 +15,7 @@ export class Addr extends URL {
 	get id() {
 		if (!this.#id) {
 			const { username } = this.authority;
-			this.#id = from_string(username);
+			this.#id = new Id(username);
 		}
 		return this.#id;
 	}
@@ -26,7 +26,7 @@ export class Addr extends URL {
 		for await (
 			const txt of query_txt(hostname, { prefix: `swbrd(${algorithm})=` })
 		) {
-			this.#id ??= from_string(txt);
+			this.#id ??= new Id(txt);
 		}
 		return this.#id;
 	}

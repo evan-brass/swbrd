@@ -18,3 +18,17 @@ export function state(transitions = {}) {
 		}
 	});
 }
+
+// Like parseInt, but chunks the string into chunks that are smaller than MAX_SAFE_INTEGER (in that radix) and returns a BigInt instead of a Number.
+export function parseBigInt(s, radix = 10) {
+	const { length } = Number.MAX_SAFE_INTEGER.toString(radix);
+	const splitter = new RegExp(`[0-9a-z]{1,${length - 1}}`, 'gi');
+	let res = 0n;
+	for (const { 0: chunk, index } of s.matchAll(splitter)) {
+		const n = parseInt(chunk, radix);
+		// How right shifted is this chunk within the total string?
+		const exp = s.length - index - chunk.length;
+		res += BigInt(n) * (BigInt(radix) ** BigInt(exp));
+	}
+	return res;
+}

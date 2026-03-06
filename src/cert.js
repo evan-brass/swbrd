@@ -1,4 +1,4 @@
-import { algorithm, from_bytes, to_string } from './id.js';
+import { Id } from './id.js';
 
 const day_in_ms = 24 * 60 * 60 * 1000;
 const year_in_ms = 365 * day_in_ms;
@@ -18,8 +18,8 @@ export class Cert extends RTCCertificate {
 		let fingerprint;
 		// Try to retreive the fingerprint using getFingerprints
 		if (ret?.getFingerprints) {
-			for (const { algorithm: alg, value } of ret.getFingerprints()) {
-				if (alg.toLowerCase() == algorithm) {
+			for (const { algorithm, value } of ret.getFingerprints()) {
+				if (algorithm.toLowerCase() == Id.hash) {
 					fingerprint = value;
 					break;
 				}
@@ -32,11 +32,11 @@ export class Cert extends RTCCertificate {
 			temp.createDataChannel('');
 			const offer = await temp.createOffer();
 			for (
-				const { 1: alg, 2: value } of offer.sdp.matchAll(
+				const { 1: algorithm, 2: value } of offer.sdp.matchAll(
 					/^a=fingerprint:([^ ]+) ([0-9a-f]{2}(:[0-9a-f]{2})+)/img,
 				)
 			) {
-				if (alg.toLowerCase() == algorithm) {
+				if (algorithm.toLowerCase() == Id.hash) {
 					fingerprint = value;
 					break;
 				}
@@ -47,7 +47,8 @@ export class Cert extends RTCCertificate {
 		// If we didn't get the required fingerprint, then return nothing
 		if (!fingerprint) return;
 
-		ret.id = from_bytes(fingerprint.split(':'));
+		const val = BigInt('0x' + fingerprint.replace(/:/g, ''));
+		ret.id = new Id(val);
 		Object.freeze(ret);
 
 		return ret;
@@ -81,29 +82,28 @@ export class Cert extends RTCCertificate {
 		const cursor_req = certs.openCursor(key);
 		let cursor;
 		while ((cursor = await wrap(cursor_req))) {
-			const { cert, id, algorithm: alg } = cursor.value;
+			const { cert, id, algorithm } = cursor.value;
 			if (cert.expires - Date.now() < 2 * day_in_ms) {
 				cursor.delete();
-			} else if (alg != algorithm) {
+			} else if (algorithm != Id.hash) {
 				cursor.continue();
 			} else {
 				Object.setPrototypeOf(cert, this.prototype);
-				cert.id = id;
+				cert.id = new Id(id);
 				Object.freeze(cert);
 				return cert;
 			}
 		}
 		await wrap(certs.put({
 			cert: candidate,
-			id: candidate.id,
-			algorithm,
+			id: String(candidate.id),
+			algorithm: Id.hash,
 		}, key));
 
 		return candidate;
 	}
 	[Symbol.toPrimitive](hint) {
-		if (hint == 'number') return this.id;
-		return to_string(this.id);
+		return this.id[Symbol.toPrimitive](hint);
 	}
 }
 

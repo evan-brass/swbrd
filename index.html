@@ -42,6 +42,18 @@ async function log_everything(conn, label = conn.pid) {
 	conn.sctp.transport.iceTransport.addEventListener('selectedcandidatepairchange', ({ target }) => logger('ice transport selected', target.getSelectedCandidatePair()));
 }
 </script>
+<script type="module">
+import { Conn } from 'swbrd/conn.js';
+
+const h = new Conn('1ojd5dagg0kn2x8kdqxw6oh636avpoi900shxmp21azh4imks0', { setup: 'passive' });
+log_everything(h, 'h');
+const [port, ...segments] = crypto.getRandomValues(new Uint16Array(4))
+const address = `2a01:4ff:1f0:7e46:${(h.pid & 0xffffn).toString(16)}:${segments.map(v=>v.toString(16)).join(':')}`;
+h.addIceCandidate({
+	address,
+	port: port | 0x8000
+});
+</script>
 <script type="_module">
 import { Addr } from 'swbrd/addr.js';
 
@@ -294,7 +306,7 @@ log_everything(b, 'b');
 		await b.setLocalDescription();
 		await a.setRemoteDescription(b.localDescription);
 </script>
-<script type="module">
+<script type="_module">
 import { Cert } from 'swbrd/cert.js';
 import { Conn } from 'swbrd/conn.js';
 

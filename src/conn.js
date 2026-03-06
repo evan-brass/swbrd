@@ -1,5 +1,5 @@
 import { cert as default_cert } from './cert.js';
-import { to_fingerprint } from './id.js';
+import { Id } from './id.js';
 import { is_firefox, state } from './util.js';
 
 export const defaults = {
@@ -37,8 +37,9 @@ export class Conn extends RTCPeerConnection {
 	}
 
 	constructor(peerid, {
+		pid = new Id(peerid),
 		cert = default_cert,
-		polite = BigInt(cert) < BigInt(peerid),
+		polite = cert.id < pid,
 		// Read the following line as: "If I am polite, then the remote peer will be active therefore I must be passive": unless overridden, the polite peer is the DTLS server.
 		setup = polite ? 'active' : 'passive',
 		ice_lite = false,
@@ -53,7 +54,7 @@ export class Conn extends RTCPeerConnection {
 			certificates: [cert],
 			...overrides,
 		});
-		this.#pid = BigInt(peerid);
+		this.#pid = pid;
 		this.#cert = cert;
 
 		this.#dc.binaryType = 'arraybuffer';
@@ -157,10 +158,11 @@ export class Conn extends RTCPeerConnection {
 				's=-',
 				't=0 0',
 				'a=group:BUNDLE dc',
-				`a=fingerprint:${to_fingerprint(this.pid)}`,
-				`a=ice-ufrag:dissolve`,
-				`a=ice-pwd:the/ice/password/constant`,
-				...(ice_lite ? ['a=ice-lite'] : []),
+				`a=fingerprint:${this.pid.fingerprint()}`,
+				'a=ice-ufrag:dissolve',
+				'a=ice-pwd:the/ice/password/constant',
+				'a=ice-lite',
+				// ...(ice_lite ? ['a=ice-lite'] : []),
 				'm=application 0 UDP/DTLS/SCTP webrtc-datachannel',
 				'c=IN IP4 0.0.0.0',
 				'a=bundle-only',
