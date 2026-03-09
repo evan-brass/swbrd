@@ -48,7 +48,7 @@ export class Cert extends RTCCertificate {
 		if (!fingerprint) return;
 
 		const val = BigInt('0x' + fingerprint.replace(/:/g, ''));
-		ret.id = new Id(val);
+		ret.id = Id.from(val);
 		Object.freeze(ret);
 
 		return ret;
@@ -89,7 +89,7 @@ export class Cert extends RTCCertificate {
 				cursor.continue();
 			} else {
 				Object.setPrototypeOf(cert, this.prototype);
-				cert.id = new Id(id);
+				cert.id = Id.from(id);
 				Object.freeze(cert);
 				return cert;
 			}

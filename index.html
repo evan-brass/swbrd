@@ -47,12 +47,6 @@ import { Conn } from 'swbrd/conn.js';
 
 const h = new Conn('1ojd5dagg0kn2x8kdqxw6oh636avpoi900shxmp21azh4imks0', { setup: 'passive' });
 log_everything(h, 'h');
-const [port, ...segments] = crypto.getRandomValues(new Uint16Array(4))
-const address = `2a01:4ff:1f0:7e46:${(h.pid & 0xffffn).toString(16)}:${segments.map(v=>v.toString(16)).join(':')}`;
-h.addIceCandidate({
-	address,
-	port: port | 0x8000
-});
 </script>
 <script type="_module">
 import { Addr } from 'swbrd/addr.js';

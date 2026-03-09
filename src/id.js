@@ -6,20 +6,22 @@ export class Id {
 	static hash = 'sha-256';
 	static bits = 256;
 	static MAX_ID = 2n ** BigInt(this.bits);
-	constructor(val) {
-		if (typeof val == 'string') {
-			this.#value = parseBigInt(val, Id.radix);
-		} else {
-			this.#value = BigInt(val);
+	static from(val) {
+		try {
+			if (typeof val == 'string') {
+				val = parseBigInt(val, Id.radix);
+			} else {
+				val = BigInt(val);
+			}
+		} catch {
+			return;
 		}
-		if (this.#value > Id.MAX_ID) throw new Error("Id is too large.");
+		if (val > Id.MAX_ID) return;
+		return new this(val);
 	}
-	fingerprint() {
-		return `${Id.hash} ${this.#value.toString(16).padStart(Id.bits / 4, '0').replace(
-			/[0-9a-f]{2}/ig,
-			':$&',
-		).slice(1)
-			}`;
+	constructor(val) { this.#value = val; }
+	get fingerprint() {
+		return this.constructor.hash + ' ' + Array.from(this.#value.toString(16).padStart(Id.bits / 4, '0').matchAll(/[0-9a-f]{2}/ig)).join(':');
 	}
 	[Symbol.toPrimitive](hint) {
 		if (hint == "string") {

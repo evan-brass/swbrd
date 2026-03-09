@@ -37,14 +37,14 @@ export class Conn extends RTCPeerConnection {
 	}
 
 	constructor(peerid, {
-		pid = new Id(peerid),
+		pid = Id.from(peerid),
 		cert = default_cert,
 		polite = cert.id < pid,
 		// Read the following line as: "If I am polite, then the remote peer will be active therefore I must be passive": unless overridden, the polite peer is the DTLS server.
 		setup = polite ? 'active' : 'passive',
-		ice_lite = false,
 		timeout = 10_000,
 		adjustment = null,
+		fd01 = true,
 		...config
 	} = {}) {
 		super({
@@ -75,11 +75,111 @@ export class Conn extends RTCPeerConnection {
 			config,
 			adjustment,
 			setup,
-			ice_lite,
+			fd01,
 		}).catch((e) => {
 			console.error(e);
 			this.close();
 		});
+	}
+
+	async #signaling_task(
+		{ polite, config, adjustment, setup, fd01 },
+	) {
+		// Prepare for renegotiation
+		let negotiation_needed = false;
+		this.addEventListener('negotiationneeded', () => negotiation_needed = true);
+		let remote_desc = false;
+		this.#dc.addEventListener('message', async ({ data }) => {
+			if (typeof data != 'string') return;
+			let json;
+			try {
+				json = JSON.parse(data);
+			} catch {
+				return;
+			}
+			if (typeof json != 'object') return;
+			if (json?.description) remote_desc = json.description;
+			// TODO: Wait on applying remote candidates until remote_desc == false? Or maybe just catch errors?
+			if (json?.candidate) await this.addIceCandidate(json.candidate);
+		});
+		this.addEventListener('icecandidate', ({ candidate }) => {
+			if (candidate && this.#dc.readyState == 'open') {
+				this.#dc.send(JSON.stringify({ candidate }));
+			}
+		});
+
+		// First pass of signaling
+		await super.setRemoteDescription({
+			type: 'offer',
+			sdp: [
+				'v=0',
+				'o=swbrd 42 0 IN IP4 0.0.0.0',
+				's=-',
+				't=0 0',
+				'a=group:BUNDLE dc',
+				`a=fingerprint:${this.pid.fingerprint}`,
+				'a=ice-ufrag:dissolve',
+				'a=ice-pwd:the/ice/password/constant',
+				'a=ice-lite',
+				'm=application 0 UDP/DTLS/SCTP webrtc-datachannel',
+				'c=IN IP4 0.0.0.0',
+				'a=bundle-only',
+				'a=mid:dc',
+				`a=setup:${setup}`,
+				'a=sctp-port:5000',
+				'',
+			].join('\n'),
+		});
+
+		// TODO: I'm worried that the sctp-port in the local description might change in the future...  Currently this is the only assumption that I'm aware of, everything else has been setup in the original offer.
+		await super.setLocalDescription();
+
+		// We combine the low 16 bits of the pid with fd01::/64 to get a /80 to talk to this certificate
+		if (fd01) {
+			const [port, ...segments] = crypto.getRandomValues(new Uint16Array(4));
+			const prefix = 'fd01::' + (this.pid & 0xffffn).toString(16);
+			const address = segments.reduce((a, v) => a + ':' + v.toString(16), prefix);
+			this.addIceCandidate({ address, port: port | 0x8000 });
+		}
+
+		// Switchover into handling renegotiation
+		for (; ;) {
+			if (this.#dc.readyState == 'connecting') {
+				await state({ 'open': this.dc, 'close': this.dc });
+			} else if (this.#dc.readyState == 'closed') {
+				break;
+			} else if (adjustment) {
+				adjustment = null;
+				this.setConfiguration(config);
+				this.restartIce();
+			} else if (negotiation_needed && this.#dc.readyState != 'closing') {
+				negotiation_needed = false;
+
+				await super.setLocalDescription();
+				try {
+					this.#dc.send(JSON.stringify({ description: this.localDescription }));
+				} catch { /* noop */ }
+			} else if (remote_desc) {
+				const desc = remote_desc;
+				remote_desc = false;
+				// Ignore incoming offers if we have a local offer and are also impolite
+				if (
+					desc?.type == 'offer' && this.signalingState == 'have-local-offer' &&
+					!polite
+				) continue;
+
+				await super.setRemoteDescription(desc);
+
+				if (desc?.type == 'offer') negotiation_needed = true; // Call setLocalDescription.
+			} else {
+				// Wait for something to happen
+				await state({
+					'negotiationneeded': this,
+					'message': this.dc,
+					'close': this.dc,
+				});
+			}
+		}
 	}
 
 	async addIceCandidate(candidate) {
@@ -123,97 +223,14 @@ export class Conn extends RTCPeerConnection {
 		return await super.addIceCandidate(candidate);
 	}
 
-	async #signaling_task(
-		{ polite, config, adjustment, setup, ice_lite, },
-	) {
-		// Prepare for renegotiation
-		let negotiation_needed = false;
-		this.addEventListener('negotiationneeded', () => negotiation_needed = true);
-		let remote_desc = false;
-		this.#dc.addEventListener('message', async ({ data }) => {
-			if (typeof data != 'string') return;
-			let json;
-			try {
-				json = JSON.parse(data);
-			} catch {
-				return;
-			}
-			if (typeof json != 'object') return;
-			if (json?.description) remote_desc = json.description;
-			// TODO: Wait on applying remote candidates until remote_desc == false? Or maybe just catch errors?
-			if (json?.candidate) await this.addIceCandidate(json.candidate);
+	// Re-provide defaults when calling setConfiguration
+	setConfiguration(config = null) {
+		super.setConfiguration({
+			...defaults,
+			...config,
+			...overrides,
+			certificates: [this.#cert],
 		});
-		this.addEventListener('icecandidate', ({ candidate }) => {
-			if (candidate && this.#dc.readyState == 'open') {
-				this.#dc.send(JSON.stringify({ candidate }));
-			}
-		});
-
-		// First pass of signaling
-		await super.setRemoteDescription({
-			type: 'offer',
-			sdp: [
-				'v=0',
-				'o=swbrd 42 0 IN IP4 0.0.0.0',
-				's=-',
-				't=0 0',
-				'a=group:BUNDLE dc',
-				`a=fingerprint:${this.pid.fingerprint()}`,
-				'a=ice-ufrag:dissolve',
-				'a=ice-pwd:the/ice/password/constant',
-				'a=ice-lite',
-				// ...(ice_lite ? ['a=ice-lite'] : []),
-				'm=application 0 UDP/DTLS/SCTP webrtc-datachannel',
-				'c=IN IP4 0.0.0.0',
-				'a=bundle-only',
-				'a=mid:dc',
-				`a=setup:${setup}`,
-				'a=sctp-port:5000',
-				'',
-			].join('\n'),
-		});
-
-		// TODO: I'm worried that the sctp-port in the local description might change in the future...  Currently this is the only assumption that I'm aware of, everything else has been setup in the original offer.
-		await super.setLocalDescription();
-
-		// Switchover into handling renegotiation
-		for (; ;) {
-			if (this.#dc.readyState == 'connecting') {
-				await state({ 'open': this.dc, 'close': this.dc });
-			} else if (this.#dc.readyState == 'closed') {
-				break;
-			} else if (adjustment) {
-				adjustment = null;
-				this.setConfiguration(config);
-				this.restartIce();
-			} else if (negotiation_needed && this.#dc.readyState != 'closing') {
-				negotiation_needed = false;
-
-				await super.setLocalDescription();
-				try {
-					this.#dc.send(JSON.stringify({ description: this.localDescription }));
-				} catch { /* noop */ }
-			} else if (remote_desc) {
-				const desc = remote_desc;
-				remote_desc = false;
-				// Ignore incoming offers if we have a local offer and are also impolite
-				if (
-					desc?.type == 'offer' && this.signalingState == 'have-local-offer' &&
-					!polite
-				) continue;
-
-				await super.setRemoteDescription(desc);
-
-				if (desc?.type == 'offer') negotiation_needed = true; // Call setLocalDescription.
-			} else {
-				// Wait for something to happen
-				await state({
-					'negotiationneeded': this,
-					'message': this.dc,
-					'close': this.dc,
-				});
-			}
-		}
 	}
 
 	// Disable manual signaling:
@@ -228,16 +245,6 @@ export class Conn extends RTCPeerConnection {
 	}
 	setRemoteDescription() {
 		throw new Error('Manual signaling is disabled on Conn');
-	}
-
-	// Re-provide defaults when calling setConfiguration
-	setConfiguration(config = null) {
-		super.setConfiguration({
-			...defaults,
-			...config,
-			...overrides,
-			certificates: [this.#cert],
-		});
 	}
 
 	// Disable things:
