@@ -7,16 +7,10 @@ export class Id {
 	static bits = 256;
 	static MAX_ID = 2n ** BigInt(this.bits);
 	static from(val) {
-		try {
-			if (typeof val == 'string') {
-				val = parseBigInt(val, Id.radix);
-			} else {
-				val = BigInt(val);
-			}
-		} catch {
-			return;
-		}
-		if (val > Id.MAX_ID) return;
+		if (typeof val == 'string') val = parseBigInt(val, this.radix);
+		if (typeof val != 'bigint') return;
+		if (val > this.MAX_ID) return;
+
 		return new this(val);
 	}
 	constructor(val) { this.#value = val; }
