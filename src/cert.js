@@ -16,34 +16,12 @@ export class Cert extends RTCCertificate {
 		Object.setPrototypeOf(ret, this.prototype);
 
 		let fingerprint;
-		// Try to retreive the fingerprint using getFingerprints
-		if (ret?.getFingerprints) {
-			for (const { algorithm, value } of ret.getFingerprints()) {
-				if (algorithm.toLowerCase() == Id.hash) {
-					fingerprint = value;
-					break;
-				}
+		for (const { algorithm, value } of ret.getFingerprints()) {
+			if (algorithm.toLowerCase() == Id.hash) {
+				fingerprint = value;
+				break;
 			}
 		}
-
-		// Try to retreive the fingerprint using a temporary connection
-		if (!fingerprint) {
-			const temp = new RTCPeerConnection({ certificates: [ret] });
-			temp.createDataChannel('');
-			const offer = await temp.createOffer();
-			for (
-				const { 1: algorithm, 2: value } of offer.sdp.matchAll(
-					/^a=fingerprint:([^ ]+) ([0-9a-f]{2}(:[0-9a-f]{2})+)/img,
-				)
-			) {
-				if (algorithm.toLowerCase() == Id.hash) {
-					fingerprint = value;
-					break;
-				}
-			}
-			temp.close();
-		}
-
 		// If we didn't get the required fingerprint, then return nothing
 		if (!fingerprint) return;
 
