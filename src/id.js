@@ -8,7 +8,7 @@ export class Id {
 	static MAX_ID = 2n ** BigInt(this.bits);
 	static from(val) {
 		if (typeof val == 'string') val = parseBigInt(val, this.radix);
-		if (typeof val != 'bigint') return;
+		if (typeof val != 'bigint') val = BigInt(val);
 		if (val > this.MAX_ID) return;
 
 		return new this(val);

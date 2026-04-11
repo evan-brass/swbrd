@@ -20,6 +20,14 @@ const overrides = {
 	peerIdentity: null,
 };
 
+class CandidateEvent extends CustomEvent {
+	candidate;
+	constructor(candidate) {
+		super('candidate');
+		this.candidate = candidate;
+	}
+}
+
 export class Conn extends RTCPeerConnection {
 	#dc = this.createDataChannel('', { negotiated: true, id: 0 });
 	get dc() {
@@ -69,6 +77,9 @@ export class Conn extends RTCPeerConnection {
 				},
 			);
 		}
+
+		// Fixup the ICE candidates
+		this.addEventListener('icecandidate', this.#fixup_candidates);
 
 		this.#signaling_task({
 			polite,
@@ -182,11 +193,44 @@ export class Conn extends RTCPeerConnection {
 		}
 	}
 
+	#fixup_candidates(e) {
+		const { candidate } = e;
+		e.stopImmediatePropagation();
+
+		if (!(candidate?.candidate)) {
+			this.dispatchEvent(new CandidateEvent(null));
+			return;
+		}
+
+		// Parse the candidate
+		const [prefix, rest] = candidate?.candidate.split(/(?=typ)/i);
+		const props = new Map();
+		for (const { 1: key, 2: val } of rest.matchAll(/([^ ]+) ([^ ]+)/ig)) {
+			props.set(key, val);
+		}
+
+		// Adjust the props to include our full ICE credentials
+		const { 1: ufrag } = /a=ice-ufrag:(.+)/im.exec(this.localDescription.sdp);
+		const { 1: pwd } = /a=ice-pwd:(.+)/im.exec(this.localDescription.sdp);
+		props.set('ufrag', ufrag);
+		props.set('pwd', pwd);
+
+		const suffix = Array.from(props.entries()).flat(1).join(' ');
+
+		const fixed = new RTCIceCandidate({
+			...candidate.toJSON(),
+			candidate: prefix + suffix,
+		});
+		this.dispatchEvent(new CandidateEvent(fixed));
+	}
+
 	async addIceCandidate(candidate) {
 		if (candidate == null) return;
 
 		if (typeof candidate != 'object') {
 			candidate = { candidate: candidate };
+		} else if (candidate instanceof RTCIceCandidate) {
+			candidate = candidate.toJSON();
 		} else if (Array.isArray(candidate)) {
 			const [address, port, type] = candidate;
 			candidate = { address, port, type };
@@ -201,7 +245,12 @@ export class Conn extends RTCPeerConnection {
 			await state({ 'signalingstatechange': this });
 		}
 
-		const { 1: ufrag } = /a=ice-ufrag:(.+)/i.exec(super.remoteDescription.sdp);
+		// WEIRD: For some reason, Firefox won't pair the candidate unless it has a related address and port (which are supposed to be optional?)
+		const firefox_hack1 = is_firefox ? ['raddr', '::', 'rport', '0'] : [];
+		// This removes an error in Firefox when the usernameFragment is not recognized
+		const firefox_hack2 = is_firefox ? { usernameFragment: null } : {}
+		// Please Firefox, I beg you to deprecate your impl and just fucking switch to libwebrtc like Safari
+
 		candidate.candidate ??= 'candidate:' + [
 			candidate.foundation || 'foundation',
 			candidate.component || '1',
@@ -211,16 +260,15 @@ export class Conn extends RTCPeerConnection {
 			candidate.port || candidate.p,
 			'typ',
 			candidate.type || 'relay',
+			...firefox_hack1,
 			// WEIRD: Best as I can tell, Firefox has strange behavior around 'localhost' or '::1' candidate addresses
-			// WEIRD: For some reason, Firefox won't pair the candidate unless it has a related address and port (which are supposed to be optional?)
-			'raddr',
-			'::',
-			'rport',
-			'0',
-			// 'ufrag', candidate.usernameFragment,
+			,
 		].join(' ');
 		candidate.sdpMid ??= 'dc';
-		return await super.addIceCandidate(candidate);
+		return await super.addIceCandidate({
+			...candidate,
+			...firefox_hack2,
+		});
 	}
 
 	// Re-provide defaults when calling setConfiguration
