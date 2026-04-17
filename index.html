@@ -51,10 +51,10 @@ async function log_everything(conns) {
 <script type="_module">
 import { Conn } from 'swbrd/conn.js';
 
-const h = new Conn('1ojd5dagg0kn2x8kdqxw6oh636avpoi900shxmp21azh4imks0', { setup: 'passive' });
+const h = new Conn('1ojd5dagg0kn2x8kdqxw6oh636avpoi900shxmp21azh4imks0', { setup: 'passive', adjustment: false });
 log_everything({ h });
 </script>
-<script type="module">
+<script type="_module">
 import { Cert } from 'swbrd/cert.js';
 import { Conn } from 'swbrd/conn.js';
 

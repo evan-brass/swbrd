@@ -51,7 +51,11 @@ export class Conn extends RTCPeerConnection {
 		// Read the following line as: "If I am polite, then the remote peer will be active therefore I must be passive": unless overridden, the polite peer is the DTLS server.
 		setup = polite ? 'active' : 'passive',
 		timeout = 10_000,
-		adjustment = null,
+		// HACK: Firefox is just such a pain in the ass.  In order for ICE-dissolve to work, both sides must pair the same candidates.  The reason for this is because Firefox enforces TURN permissions locally and if it gets successful ICE responses from one pair it likely won't add permissions for the other ICE pairs.  Then when data is received over a different pair it gets dropped.  We can ensure that we only pair 1 candidate by forcing both sides to only generate 1 candidate.  We do this by only allowing relaying and only using 1 ipv4 address for the TURN server.  This fucking sucks.  Ideally this restriction should only be imposed if one or the other peers is a Firefox chud, but you would need to encode that into the peer id or pass it as another argument... lame.
+		adjustment = {
+			iceTransportPolicy: 'relay',
+			iceServers: [{ urls: 'turns:turn-4only.evan-brass.net:443?transport=tcp', username: 'guest', credential: 'password' }]
+		},
 		fd01 = true,
 		...config
 	} = {}) {
