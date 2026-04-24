@@ -48,10 +48,11 @@ async function log_everything(conns) {
 	}
 }
 </script>
-<script type="_module">
+<script type="module">
 import { Conn } from 'swbrd/conn.js';
+import { pid } from 'swbrd/deter.js';
 
-const h = new Conn('1ojd5dagg0kn2x8kdqxw6oh636avpoi900shxmp21azh4imks0', { setup: 'passive', adjustment: false });
+const h = new Conn(pid, { setup: 'passive', adjustment: false });
 log_everything({ h });
 </script>
 <script type="_module">
