@@ -1,6 +1,7 @@
 import { cert as default_cert } from './cert.js';
 import { Id } from './id.js';
 import { is_firefox, state } from './util.js';
+import { pid as server_pid } from './deter.js';
 
 export const defaults = {
 	iceServers: [{
@@ -44,6 +45,54 @@ export class Conn extends RTCPeerConnection {
 		return this.#pid;
 	}
 
+	// Make a connection to a TURN server, then use cert prefix mechanism using private ipv6 address space fd01::/64
+	// - TURN can be multiplexed with HTTP
+	// - IPv6 not require for either client or server
+	// - Server doesn't need ipv6 prefix, /128 would
+	static to_server(urls = "turns:turn.evan-brass.net:443?transport=tcp", config = null) {
+		return new this(server_pid, {
+			iceTransportPolicy: 'relay',
+			iceServers: [{ urls, username: 'guest', credential: 'password' }],
+			setup: 'passive',
+			cert_prefix: 'fd01::',
+			...config,
+		});
+	}
+	// Make a direct connection to a server using the cert-prefix mechanism
+	// - Client must have IPv6
+	// - Server must have IPv6 /64
+	static to_server_direct(cert_prefix = '2a01:4ff:1f0:7e46:', config = null) {
+		return new this(server_pid, {
+			iceServers: [],
+			setup: 'passive',
+			cert_prefix,
+			...config,
+		});
+	}
+	// Make a connection between two Chrome browsers
+	// - Chrome <-> Chrome via fixup
+	static with_candidates(peerid, config = null) {
+		return new this(peerid, {
+			// The default parameters in Conn match with_candidates
+			...config,
+		});
+	}
+	// Make a connection between two browsers using a TURN server that intercepts ICE connection tests
+	// - IPv4 only to ensure 1 candidate pair
+	// - Chrome <-> Chrome
+	// - Firefox <-> Firefox
+	// - Chrome <-> Firefox
+	static with_candidates_dissolved(peerid, config = null) {
+		return new this(peerid, {
+			// HACK: Firefox is just such a pain in the ass.  In order for ICE-dissolve to work, both sides must pair the same candidates.  The reason for this is because Firefox enforces TURN permissions locally and if it gets successful ICE responses from one pair it likely won't add permissions for the other ICE pairs.  Then when data is received over a different pair it gets dropped.  We can ensure that we only pair 1 candidate by forcing both sides to only generate 1 candidate.  We do this by only allowing relaying and only using 1 ipv4 address for the TURN server.  This fucking sucks.  Ideally this restriction should only be imposed if one or the other peers is a Firefox chud, but you would need to encode that into the peer id or pass it as another argument... lame.
+			adjustment: {
+				iceTransportPolicy: 'relay',
+				iceServers: [{ urls: 'turns:turn-4only.evan-brass.net:443?transport=tcp', username: 'guest', credential: 'password' }]
+			},
+			...config,
+		});
+	}
+
 	constructor(peerid, {
 		pid = Id.from(peerid),
 		cert = default_cert,
@@ -51,12 +100,8 @@ export class Conn extends RTCPeerConnection {
 		// Read the following line as: "If I am polite, then the remote peer will be active therefore I must be passive": unless overridden, the polite peer is the DTLS server.
 		setup = polite ? 'active' : 'passive',
 		timeout = 10_000,
-		// HACK: Firefox is just such a pain in the ass.  In order for ICE-dissolve to work, both sides must pair the same candidates.  The reason for this is because Firefox enforces TURN permissions locally and if it gets successful ICE responses from one pair it likely won't add permissions for the other ICE pairs.  Then when data is received over a different pair it gets dropped.  We can ensure that we only pair 1 candidate by forcing both sides to only generate 1 candidate.  We do this by only allowing relaying and only using 1 ipv4 address for the TURN server.  This fucking sucks.  Ideally this restriction should only be imposed if one or the other peers is a Firefox chud, but you would need to encode that into the peer id or pass it as another argument... lame.
-		adjustment = {
-			iceTransportPolicy: 'relay',
-			iceServers: [{ urls: 'turns:turn-4only.evan-brass.net:443?transport=tcp', username: 'guest', credential: 'password' }]
-		},
-		fd01 = true,
+		adjustment = null,
+		cert_prefix = false,
 		...config
 	} = {}) {
 		super({
@@ -90,7 +135,7 @@ export class Conn extends RTCPeerConnection {
 			config,
 			adjustment,
 			setup,
-			fd01,
+			cert_prefix,
 		}).catch((e) => {
 			console.error(e);
 			this.close();
@@ -98,7 +143,7 @@ export class Conn extends RTCPeerConnection {
 	}
 
 	async #signaling_task(
-		{ polite, config, adjustment, setup, fd01 },
+		{ polite, config, adjustment, setup, cert_prefix },
 	) {
 		// Prepare for renegotiation
 		let negotiation_needed = false;
@@ -149,10 +194,11 @@ export class Conn extends RTCPeerConnection {
 		// TODO: I'm worried that the sctp-port in the local description might change in the future...  Currently this is the only assumption that I'm aware of, everything else has been setup in the original offer.
 		await super.setLocalDescription();
 
-		// We combine the low 16 bits of the pid with fd01::/64 to get a /80 to talk to this certificate
-		if (fd01) {
+		// The cert prefix mechanism combines 16 bits from the pid with a /64 to get a /80 within which we add a random ip+port ICE candidate.
+		// Why would you do this?  Because the destination ip+port can act as a connection identifier since WebRTC doesn't support DTLS CID
+		if (cert_prefix) {
 			const [port, ...segments] = crypto.getRandomValues(new Uint16Array(4));
-			const prefix = 'fd01::' + (this.pid & 0xffffn).toString(16);
+			const prefix = cert_prefix + (this.pid & 0xffffn).toString(16);
 			const address = segments.reduce((a, v) => a + ':' + v.toString(16), prefix);
 			this.addIceCandidate({ address, port: port | 0x8000 });
 		}

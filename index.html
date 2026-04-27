@@ -48,24 +48,26 @@ async function log_everything(conns) {
 	}
 }
 </script>
-<script type="module">
+<script type="_module">
 import { Conn } from 'swbrd/conn.js';
-import { pid } from 'swbrd/deter.js';
 
-const h = new Conn(pid, { setup: 'passive', adjustment: false });
+const h = Conn.to_server();
+// const h = Conn.to_server_direct();
 log_everything({ h });
 </script>
-<script type="_module">
+<script type="module">
 import { Cert } from 'swbrd/cert.js';
 import { Conn } from 'swbrd/conn.js';
 
 const certa = await Cert.generate();
 const certb = await Cert.generate();
 
-const a = new Conn(certb, { fd01: false, cert: certa, /* iceServers: [] */ });
-const b = new Conn(certa, { fd01: false, cert: certb, /* iceServers: [] */ });
-log_everything({a, b});
-
+const a = Conn.with_candidates(certb, { cert: certa });
+const b = Conn.with_candidates(certa, { cert: certb });
+// const a = Conn.with_candidates_dissolved(certb, { cert: certa });
+// const b = Conn.with_candidates_dissolved(certa, { cert: certb });
 a.addEventListener('candidate', ({candidate}) => b.addIceCandidate(candidate));
 b.addEventListener('candidate', ({candidate}) => a.addIceCandidate(candidate));
+
+log_everything({a, b});
 </script>
