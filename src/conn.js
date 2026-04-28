@@ -218,7 +218,13 @@ export class Conn extends RTCPeerConnection {
 
 				await super.setLocalDescription();
 				try {
-					this.#dc.send(JSON.stringify({ description: this.localDescription }));
+					// HACK: Looks like Chrome is the dumbass in this situation.  It's advertising 'a=setup:actpass' even though the DTLS handshake has already been completed.  Firefox doesn't help us in this situation because it seems to pick 'a=setup:active' by default even though it was passive during setup.
+					// Fuck my life.  We need to replace 'a=setup:actpass' with the actual value as taken from the current description.
+					const description = this.localDescription;
+					const { 0: current_setup } = this.currentLocalDescription.sdp.match(/a=setup:.+/img);
+					description.sdp = description.sdp.replace(/a=setup:actpass/img, current_setup);
+
+					this.#dc.send(JSON.stringify({ description }));
 				} catch { /* noop */ }
 			} else if (remote_desc) {
 				const desc = remote_desc;
