@@ -68,8 +68,15 @@ pub struct Txid {
 }
 impl Txid {
 	pub fn new() -> Self {
-		// TODO: Randomize id
+		#[cfg(feature = "rand")]
+		let id = {
+			use core::array::from_fn;
+			use rand::{RngExt, distr::Alphanumeric, rng};
+			from_fn(|_| unsafe { NonZero::new_unchecked(rng().sample(Alphanumeric)) })
+		};
+		#[cfg(not(feature = "rand"))]
 		let id = unsafe { [NonZero::new_unchecked(0x99); 12] };
+
 		Self {
 			cookie: Cookie::Magic,
 			id,

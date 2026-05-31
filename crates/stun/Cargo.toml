@@ -4,4 +4,11 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+rand = { version = "0.10.1", default-features = false, optional = true }
 zerocopy = { version = "0.8.50", default-features = false, features = ["derive"] }
+
+[features]
+std = ["zerocopy/std", "rand/std"]
+rand = ["dep:rand", "rand/thread_rng"]
+
+default = ["std", "rand"]

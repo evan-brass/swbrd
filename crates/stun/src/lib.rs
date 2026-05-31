@@ -3,8 +3,8 @@
 use core::{cell::Cell, marker::PhantomData, mem::offset_of};
 
 use zerocopy::{
-	FromBytes, Immutable, IntoBytes, KnownLayout, SplitAt, TryFromBytes, Unaligned,
-	network_endian::U16,
+	AlignedTryCastError, FromBytes, Immutable, IntoBytes, KnownLayout, SizeError, SplitAt,
+	TryFromBytes, Unaligned, network_endian::U16,
 };
 
 pub use crate::typ::*;
@@ -29,6 +29,31 @@ pub struct Stun<M = ()> {
 impl Stun<()> {
 	pub const HEADROOM: usize = offset_of!(Self, class);
 	pub const MAX_LENGTH: u16 = 0xff00;
+	pub fn new(
+		class: Class,
+		method: Method,
+		buffer: &mut [u8],
+	) -> Result<&mut Self, SizeError<&mut [u8], Self>> {
+		// Write valid bytes into the buffer before trying to read it as a &mut Stun
+		if buffer.len() >= (Self::HEADROOM + 20) {
+			// This is less then ideal.  1.8 billion slice indexes instead of 3 raw pointers... is maybe less than ideal.
+			class
+				.write_to(&mut buffer[offset_of!(Self, class)..][..size_of_val(&class)])
+				.unwrap();
+			method
+				.write_to(&mut buffer[offset_of!(Self, method)..][..size_of_val(&method)])
+				.unwrap();
+			let txid = Txid::new();
+			txid.write_to(&mut buffer[offset_of!(Self, txid)..][..size_of_val(&txid)])
+				.unwrap();
+		}
+		match Self::try_mut_from_bytes(buffer).map_err(AlignedTryCastError::from) {
+			Ok(v) => Ok(v),
+			Err(AlignedTryCastError::Alignment(a)) => match a {},
+			Err(AlignedTryCastError::Size(s)) => Err(s),
+			Err(AlignedTryCastError::Validity(_)) => unreachable!(),
+		}
+	}
 }
 
 #[repr(C, packed)]
