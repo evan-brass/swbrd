@@ -32,11 +32,20 @@ impl Stun {
 	pub const HEADROOM: usize = offset_of!(Self, class);
 	pub const MAX_LENGTH: u16 = 0xff00;
 	pub fn frame_length(&self) -> usize {
+		size_of_val(self.trim()) - Self::HEADROOM
+	}
+	pub fn trim(&self) -> &Self {
 		let length = self.length.get().get();
-		if length & 0b11 != 0 {
-			return usize::MAX;
-		}
-		20 + length as usize
+		let offset = if length.is_multiple_of(4) {
+			length as usize >> 2
+		} else {
+			0
+		};
+		let (ret, _) = self
+			.split_at(usize::min(offset, self.body.len()))
+			.unwrap()
+			.via_into_bytes();
+		ret
 	}
 	pub fn new(
 		class: Class,

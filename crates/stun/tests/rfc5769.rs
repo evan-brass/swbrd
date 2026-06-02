@@ -84,8 +84,6 @@ fn vector_2_1_decode() {
 
 #[test]
 fn vector_2_1_encode() {
-	use bytes::BufMut;
-
 	let mut buffer = vec![0x20; Stun::HEADROOM + size_of_val(VECTOR_2_1)];
 	let msg = Stun::new(Class::Request, Method::Bind, &mut buffer).unwrap();
 	msg.txid.id = [
@@ -99,14 +97,11 @@ fn vector_2_1_encode() {
 	msg.append_val(known::PRIORITY, &U32::new(0x6e0001ff));
 	msg.append_val(known::ICE_CONTROLLED, &U64::new(0x932ff9b151263b36));
 	msg.append_val(known::USERNAME, "evtj:h6vY");
-	msg.append_once(|prefix, dst| {
-		dst.typ = known::MESSAGE_INTEGRITY;
-		dst.put_slice(&prefix.expected_message_integrity());
-	});
-	msg.append_once(|prefix, dst| {
-		dst.typ = known::FINGERPRINT;
-		dst.put_u32(prefix.expected_fingerprint().get());
-	});
+	msg.append_val(
+		known::MESSAGE_INTEGRITY,
+		&msg.trim().expected_message_integrity(),
+	);
+	msg.append_val(known::FINGERPRINT, &msg.trim().expected_fingerprint());
 
 	assert_eq!(&buffer[Stun::HEADROOM..], VECTOR_2_1);
 }
