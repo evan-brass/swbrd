@@ -10,6 +10,7 @@ use zerocopy::{
 pub use crate::parse::*;
 pub use crate::typ::*;
 
+pub mod addr;
 mod encode;
 mod integrity;
 pub mod known;

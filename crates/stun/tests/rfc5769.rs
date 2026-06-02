@@ -1,6 +1,9 @@
-use std::num::NonZero;
+use std::{net::Ipv4Addr, num::NonZero};
 
-use stun::*;
+use stun::{
+	addr::{Addr4, Family, Xor},
+	*,
+};
 use zerocopy::{
 	TryFromBytes,
 	network_endian::{U16, U32, U64},
@@ -133,6 +136,69 @@ pub const VECTOR_2_2: &[u8] = &[
 	0x80, 0x28, 0x00, 0x04, //    FINGERPRINT attribute header
 	0xc0, 0x7d, 0x4c, 0x96, //    CRC32 fingerprint
 ];
+
+#[test]
+fn vector_2_2_decode() {
+	let mut buffer = vec![0; Stun::HEADROOM];
+	buffer.extend_from_slice(VECTOR_2_2);
+
+	let msg = Stun::try_mut_from_bytes(&mut buffer).unwrap();
+	assert_eq!(msg.class, Class::Response);
+	assert_eq!(msg.method, Method::Bind);
+
+	msg.set_authkey(b"VOkJxbRl1RmTxUk/WvJxBt");
+	msg.length.set(U16::new(0));
+
+	let mut software = Parsed::NotPresent;
+	let mut mapped = Parsed::NotPresent;
+
+	let mut attrs = msg
+		.parse::<{ known::SOFTWARE }, str>(&mut software)
+		.parse::<{ known::XOR_MAPPED_ADDRESS }, Addr4<Xor>>(&mut mapped);
+	while let Some((prefix, attr)) = attrs.next() {
+		match attr.typ {
+			known::MESSAGE_INTEGRITY => {
+				assert_eq!(prefix.expected_message_integrity(), attr.value);
+				break;
+			}
+			_ => panic!("Unexpected attribute"),
+		}
+	}
+
+	assert_eq!(software, Parsed::Valid("test vector"));
+	let Parsed::Valid(mapped) = mapped else {
+		panic!("Failed to pull the mapped")
+	};
+	let mapped = mapped.xor(&msg.txid);
+	assert_eq!(mapped.family, Family::IPv4);
+	assert_eq!(mapped.ip(), Ipv4Addr::new(192, 0, 2, 1));
+	assert_eq!(mapped.port(), 32853);
+}
+
+#[test]
+fn vector_2_2_encode() {
+	let mut buffer = vec![0x20; Stun::HEADROOM + size_of_val(VECTOR_2_2)];
+	let msg = Stun::new(Class::Response, Method::Bind, &mut buffer).unwrap();
+	msg.txid.id = [
+		0xb7, 0xe7, 0xa7, 0x01, 0xbc, 0x34, 0xd6, 0x86, 0xfa, 0x87, 0xdf, 0xae,
+	]
+	.map(NonZero::new)
+	.map(Option::unwrap);
+
+	msg.set_authkey(b"VOkJxbRl1RmTxUk/WvJxBt");
+	msg.append_val(known::SOFTWARE, "test vector");
+	msg.append_val(
+		known::XOR_MAPPED_ADDRESS,
+		&Addr4::new(Ipv4Addr::new(192, 0, 2, 1), 32853).xor(&msg.txid),
+	);
+	msg.append_val(
+		known::MESSAGE_INTEGRITY,
+		&msg.trim().expected_message_integrity(),
+	);
+	msg.append_val(known::FINGERPRINT, &msg.trim().expected_fingerprint());
+
+	assert_eq!(&buffer[Stun::HEADROOM..], VECTOR_2_2);
+}
 
 /// 2.3.  Sample IPv6 Response
 ///    This response uses the following parameter:
