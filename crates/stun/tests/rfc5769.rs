@@ -1,5 +1,8 @@
-use stun::{known::Integrity, *};
-use zerocopy::TryFromBytes;
+use stun::*;
+use zerocopy::{
+	TryFromBytes,
+	network_endian::{U16, U32, U64},
+};
 
 /// 2.1.  Sample Request
 ///    This request uses the following parameters:
@@ -46,35 +49,35 @@ fn vector_2_1_decode() {
 	assert_eq!(msg.method, Method::Bind);
 
 	msg.set_authkey(b"VOkJxbRl1RmTxUk/WvJxBt");
+	msg.length.set(U16::new(0));
 
 	let mut software = Parsed::NotPresent;
 	let mut priority = Parsed::NotPresent;
 	let mut ice_controlled = Parsed::NotPresent;
 	let mut ice_controlling = Parsed::NotPresent;
 	let mut username = Parsed::NotPresent;
-	let mut integrity = Parsed::NotPresent;
-	let mut checksum = Parsed::NotPresent;
 
-	let attrs = msg.into_iter();
-	let unknown = attrs
-		.parse::<{ known::SOFTWARE }, &str>(&mut software)
-		.parse::<{ known::PRIORITY }, u32>(&mut priority)
-		.parse::<{ known::ICE_CONTROLLED }, u64>(&mut ice_controlled)
-		.parse::<{ known::ICE_CONTROLLING }, u64>(&mut ice_controlling)
-		.parse::<{ known::USERNAME }, &str>(&mut username)
-		.parse::<{ known::MESSAGE_INTEGRITY }, Integrity>(&mut integrity)
-		.parse::<{ known::FINGERPRINT }, Integrity>(&mut checksum)
-		.collect_unknown();
+	let mut attrs = msg
+		.parse::<{ known::SOFTWARE }, str>(&mut software)
+		.parse::<{ known::PRIORITY }, U32>(&mut priority)
+		.parse::<{ known::ICE_CONTROLLED }, U64>(&mut ice_controlled)
+		.parse::<{ known::ICE_CONTROLLING }, U64>(&mut ice_controlling)
+		.parse::<{ known::USERNAME }, str>(&mut username);
+	while let Some((prefix, attr)) = attrs.next() {
+		match attr.typ {
+			known::MESSAGE_INTEGRITY => {
+				assert_eq!(prefix.expected_message_integrity(), attr.value);
+				break;
+			}
+			_ => panic!("Unexpected attribute"),
+		}
+	}
 
 	assert_eq!(software, Parsed::Valid("STUN test client"));
-	assert_eq!(priority, Parsed::Valid(0x6e0001ff));
-	assert_eq!(ice_controlled, Parsed::Valid(0x932ff9b151263b36));
+	assert_eq!(priority, Parsed::Valid(&U32::new(0x6e0001ff)));
+	assert_eq!(ice_controlled, Parsed::Valid(&U64::new(0x932ff9b151263b36)));
 	assert_eq!(ice_controlling, Parsed::NotPresent);
 	assert_eq!(username, Parsed::Valid("evtj:h6vY"));
-	assert_eq!(integrity, Parsed::Valid(Integrity));
-	assert_eq!(checksum, Parsed::Valid(Integrity));
-
-	assert!(unknown.is_empty());
 }
 
 /// 2.2.  Sample IPv4 Response

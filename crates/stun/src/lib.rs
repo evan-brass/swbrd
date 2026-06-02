@@ -1,6 +1,6 @@
 #![no_std]
 
-use core::{cell::Cell, marker::PhantomData, mem::offset_of};
+use core::{cell::Cell, mem::offset_of};
 
 use zerocopy::{
 	AlignedTryCastError, FromBytes, Immutable, IntoBytes, KnownLayout, SizeError, SplitAt,
@@ -10,28 +10,33 @@ use zerocopy::{
 pub use crate::parse::*;
 pub use crate::typ::*;
 
+mod integrity;
 pub mod known;
 mod parse;
 mod typ;
 
-#[derive(Debug)]
-pub struct Iterating;
-
 #[repr(C)]
 #[derive(Debug, PartialEq, Eq, KnownLayout, Unaligned, TryFromBytes, IntoBytes, SplitAt)]
-pub struct Stun<M = ()> {
-	iter: PhantomData<M>,
+pub struct Stun {
 	opad: [u8; 64],
 	ipad: [u8; 64],
 	pub class: Class,
 	pub method: Method,
-	pub(crate) length: Cell<U16>,
+	#[doc(hidden)]
+	pub length: Cell<U16>,
 	pub txid: Txid,
 	pub(crate) body: [[u8; 4]],
 }
-impl Stun<()> {
+impl Stun {
 	pub const HEADROOM: usize = offset_of!(Self, class);
 	pub const MAX_LENGTH: u16 = 0xff00;
+	pub fn frame_length(&self) -> usize {
+		let length = self.length.get().get();
+		if length & 0b11 != 0 {
+			return usize::MAX;
+		}
+		20 + length as usize
+	}
 	pub fn new(
 		class: Class,
 		method: Method,
@@ -39,7 +44,7 @@ impl Stun<()> {
 	) -> Result<&mut Self, SizeError<&mut [u8], Self>> {
 		// Write valid bytes into the buffer before trying to read it as a &mut Stun
 		if buffer.len() >= (Self::HEADROOM + 20) {
-			// This is less then ideal.  1.8 billion slice indexes instead of 3 raw pointers... is maybe less than ideal.
+			// This is less then ideal.  1.8 billion slice indexes instead of 3 raw pointers... sux
 			class
 				.write_to(&mut buffer[offset_of!(Self, class)..][..size_of_val(&class)])
 				.unwrap();
