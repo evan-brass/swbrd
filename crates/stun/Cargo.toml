@@ -8,7 +8,8 @@ rand = { version = "0.10.1", default-features = false, optional = true }
 zerocopy = { version = "0.8.50", default-features = false, features = ["derive"] }
 
 [features]
-std = ["zerocopy/std", "rand/std"]
+alloc = []
+std = ["zerocopy/std", "rand/std", "alloc"]
 rand = ["dep:rand", "rand/thread_rng"]
 
 default = ["std", "rand"]

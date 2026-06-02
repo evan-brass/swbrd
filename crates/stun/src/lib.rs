@@ -7,8 +7,11 @@ use zerocopy::{
 	TryFromBytes, Unaligned, network_endian::U16,
 };
 
+pub use crate::parse::*;
 pub use crate::typ::*;
 
+pub mod known;
+mod parse;
 mod typ;
 
 #[derive(Debug)]
@@ -65,4 +68,7 @@ pub struct Attr {
 }
 impl Attr {
 	pub const MAX_LENGTH: u16 = Stun::MAX_LENGTH - 4;
+	pub fn is_optional(&self) -> bool {
+		self.typ & u16::to_be(0x8000) != 0
+	}
 }
