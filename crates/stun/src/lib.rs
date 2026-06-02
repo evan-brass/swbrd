@@ -10,6 +10,7 @@ use zerocopy::{
 pub use crate::parse::*;
 pub use crate::typ::*;
 
+mod encode;
 mod integrity;
 pub mod known;
 mod parse;
@@ -50,6 +51,9 @@ impl Stun {
 				.unwrap();
 			method
 				.write_to(&mut buffer[offset_of!(Self, method)..][..size_of_val(&method)])
+				.unwrap();
+			U16::new(0)
+				.write_to(&mut buffer[offset_of!(Self, length)..][..size_of::<U16>()])
 				.unwrap();
 			let txid = Txid::new();
 			txid.write_to(&mut buffer[offset_of!(Self, txid)..][..size_of_val(&txid)])

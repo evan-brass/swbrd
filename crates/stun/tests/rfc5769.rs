@@ -1,3 +1,5 @@
+use std::num::NonZero;
+
 use stun::*;
 use zerocopy::{
 	TryFromBytes,
@@ -78,6 +80,35 @@ fn vector_2_1_decode() {
 	assert_eq!(ice_controlled, Parsed::Valid(&U64::new(0x932ff9b151263b36)));
 	assert_eq!(ice_controlling, Parsed::NotPresent);
 	assert_eq!(username, Parsed::Valid("evtj:h6vY"));
+}
+
+#[test]
+fn vector_2_1_encode() {
+	use bytes::BufMut;
+
+	let mut buffer = vec![0x20; Stun::HEADROOM + size_of_val(VECTOR_2_1)];
+	let msg = Stun::new(Class::Request, Method::Bind, &mut buffer).unwrap();
+	msg.txid.id = [
+		0xb7, 0xe7, 0xa7, 0x01, 0xbc, 0x34, 0xd6, 0x86, 0xfa, 0x87, 0xdf, 0xae,
+	]
+	.map(NonZero::new)
+	.map(Option::unwrap);
+
+	msg.set_authkey(b"VOkJxbRl1RmTxUk/WvJxBt");
+	msg.append_val(known::SOFTWARE, "STUN test client");
+	msg.append_val(known::PRIORITY, &U32::new(0x6e0001ff));
+	msg.append_val(known::ICE_CONTROLLED, &U64::new(0x932ff9b151263b36));
+	msg.append_val(known::USERNAME, "evtj:h6vY");
+	msg.append_once(|prefix, dst| {
+		dst.typ = known::MESSAGE_INTEGRITY;
+		dst.put_slice(&prefix.expected_message_integrity());
+	});
+	msg.append_once(|prefix, dst| {
+		dst.typ = known::FINGERPRINT;
+		dst.put_u32(prefix.expected_fingerprint().get());
+	});
+
+	assert_eq!(&buffer[Stun::HEADROOM..], VECTOR_2_1);
 }
 
 /// 2.2.  Sample IPv4 Response
