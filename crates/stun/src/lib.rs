@@ -57,6 +57,15 @@ impl Stun<()> {
 			Err(AlignedTryCastError::Validity(_)) => unreachable!(),
 		}
 	}
+	pub fn set_authkey(&mut self, key: &[u8]) {
+		assert!(key.len() <= 64);
+		self.ipad.fill(0x36);
+		self.opad.fill(0x5c);
+		for (i, b) in key.iter().enumerate() {
+			self.ipad[i] ^= b;
+			self.opad[i] ^= b;
+		}
+	}
 }
 
 #[repr(C, packed)]

@@ -5,11 +5,13 @@ edition = "2024"
 
 [dependencies]
 rand = { version = "0.10.1", default-features = false, optional = true }
+sha1 = { version = "0.11.0", default-features = false, optional = true }
 zerocopy = { version = "0.8.50", default-features = false, features = ["derive"] }
 
 [features]
-alloc = []
+alloc = ["sha1/alloc"]
 std = ["zerocopy/std", "rand/std", "alloc"]
 rand = ["dep:rand", "rand/thread_rng"]
+sha1 = ["dep:sha1"]
 
-default = ["std", "rand"]
+default = ["std", "rand", "sha1"]

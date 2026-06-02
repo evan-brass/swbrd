@@ -72,3 +72,45 @@ num_attr! {
 	ICE_CONTROLLED U64:u64
 	ICE_CONTROLLING U64:u64
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Integrity;
+
+#[cfg(feature = "sha1")]
+mod message_integrity {
+	use super::*;
+	use crate::{Iterating, Stun};
+	use sha1::{Digest, Sha1};
+	use zerocopy::IntoBytes;
+	fn expected<M>(prefix: &Stun<M>) -> [u8; 20] {
+		// This is just a manual HMAC
+		let mut hash1 = Sha1::new();
+		hash1.update(&prefix.ipad);
+		hash1.update(&[prefix.class as u8, prefix.method as u8]);
+		hash1.update(&u16::to_be_bytes(size_of_val(&prefix.body) as u16 + 24));
+		hash1.update(prefix.txid.as_bytes());
+		hash1.update(prefix.body.as_flattened());
+
+		let sum1 = hash1.finalize().0;
+
+		let mut hash2 = Sha1::new();
+		hash2.update(&prefix.opad);
+		hash2.update(&sum1);
+		let sum2 = hash2.finalize().0;
+
+		sum2
+	}
+	impl Value<'_, MESSAGE_INTEGRITY> for Integrity {
+		type Wire = [u8; 20];
+		fn decode(prefix: &Stun<Iterating>, value: &Self::Wire) -> Option<Self> {
+			let expected = expected(prefix);
+			if value == &expected {
+				return Some(Self);
+			}
+			None
+		}
+		fn must_precede(typ: u16) -> bool {
+			matches!(typ, MESSAGE_INTEGRITY_SHA256 | FINGERPRINT)
+		}
+	}
+}

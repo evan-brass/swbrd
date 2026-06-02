@@ -1,4 +1,4 @@
-use stun::*;
+use stun::{known::Integrity, *};
 use zerocopy::TryFromBytes;
 
 /// 2.1.  Sample Request
@@ -45,11 +45,14 @@ fn vector_2_1_decode() {
 	assert_eq!(msg.class, Class::Request);
 	assert_eq!(msg.method, Method::Bind);
 
+	msg.set_authkey(b"VOkJxbRl1RmTxUk/WvJxBt");
+
 	let mut software = Parsed::NotPresent;
 	let mut priority = Parsed::NotPresent;
 	let mut ice_controlled = Parsed::NotPresent;
 	let mut ice_controlling = Parsed::NotPresent;
 	let mut username = Parsed::NotPresent;
+	let mut integrity = Parsed::NotPresent;
 
 	let attrs = msg.into_iter();
 	let unknown = attrs
@@ -58,6 +61,7 @@ fn vector_2_1_decode() {
 		.parse::<{ known::ICE_CONTROLLED }, u64>(&mut ice_controlled)
 		.parse::<{ known::ICE_CONTROLLING }, u64>(&mut ice_controlling)
 		.parse::<{ known::USERNAME }, &str>(&mut username)
+		.parse::<{ known::MESSAGE_INTEGRITY }, Integrity>(&mut integrity)
 		.collect_unknown();
 
 	assert_eq!(software, Parsed::Valid("STUN test client"));
@@ -65,8 +69,9 @@ fn vector_2_1_decode() {
 	assert_eq!(ice_controlled, Parsed::Valid(0x932ff9b151263b36));
 	assert_eq!(ice_controlling, Parsed::NotPresent);
 	assert_eq!(username, Parsed::Valid("evtj:h6vY"));
+	assert_eq!(integrity, Parsed::Valid(Integrity));
 
-	assert_eq!(unknown, vec![known::MESSAGE_INTEGRITY]);
+	assert!(unknown.is_empty());
 }
 
 /// 2.2.  Sample IPv4 Response
