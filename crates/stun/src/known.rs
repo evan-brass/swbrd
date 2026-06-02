@@ -1,3 +1,4 @@
+use zerocopy::IntoBytes;
 use zerocopy::network_endian::{U32, U64};
 
 use crate::Value;
@@ -81,7 +82,6 @@ mod message_integrity {
 	use super::*;
 	use crate::{Iterating, Stun};
 	use sha1::{Digest, Sha1};
-	use zerocopy::IntoBytes;
 	fn expected<M>(prefix: &Stun<M>) -> [u8; 20] {
 		// This is just a manual HMAC
 		let mut hash1 = Sha1::new();
@@ -111,6 +111,40 @@ mod message_integrity {
 		}
 		fn must_precede(typ: u16) -> bool {
 			matches!(typ, MESSAGE_INTEGRITY_SHA256 | FINGERPRINT)
+		}
+	}
+}
+
+#[cfg(feature = "crc")]
+mod fingerprint {
+	use super::*;
+	use crate::{Iterating, Stun};
+	use crc::Crc;
+
+	const FINGERPRINT_MAGIC: u32 = 0x5354554e;
+	const CRC: Crc<u32> = Crc::<u32>::new(&crc::CRC_32_ISO_HDLC);
+
+	fn expected<M>(prefix: &Stun<M>) -> U32 {
+		let mut hash = CRC.digest();
+		hash.update(&[prefix.class as u8, prefix.method as u8]);
+		hash.update(&u16::to_be_bytes(size_of_val(&prefix.body) as u16 + 8));
+		hash.update(prefix.txid.as_bytes());
+		hash.update(prefix.body.as_flattened());
+
+		U32::new(hash.finalize() ^ FINGERPRINT_MAGIC)
+	}
+	impl Value<'_, FINGERPRINT> for Integrity {
+		type Wire = U32;
+		fn decode(prefix: &Stun<Iterating>, value: &Self::Wire) -> Option<Self> {
+			let expected = expected(prefix);
+			if value == &expected {
+				return Some(Self);
+			}
+			None
+		}
+		fn must_precede(_: u16) -> bool {
+			// FINGERPRINT is supposed to be the last attribute of the message
+			false
 		}
 	}
 }

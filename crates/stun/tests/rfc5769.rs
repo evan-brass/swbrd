@@ -53,6 +53,7 @@ fn vector_2_1_decode() {
 	let mut ice_controlling = Parsed::NotPresent;
 	let mut username = Parsed::NotPresent;
 	let mut integrity = Parsed::NotPresent;
+	let mut checksum = Parsed::NotPresent;
 
 	let attrs = msg.into_iter();
 	let unknown = attrs
@@ -62,6 +63,7 @@ fn vector_2_1_decode() {
 		.parse::<{ known::ICE_CONTROLLING }, u64>(&mut ice_controlling)
 		.parse::<{ known::USERNAME }, &str>(&mut username)
 		.parse::<{ known::MESSAGE_INTEGRITY }, Integrity>(&mut integrity)
+		.parse::<{ known::FINGERPRINT }, Integrity>(&mut checksum)
 		.collect_unknown();
 
 	assert_eq!(software, Parsed::Valid("STUN test client"));
@@ -70,6 +72,7 @@ fn vector_2_1_decode() {
 	assert_eq!(ice_controlling, Parsed::NotPresent);
 	assert_eq!(username, Parsed::Valid("evtj:h6vY"));
 	assert_eq!(integrity, Parsed::Valid(Integrity));
+	assert_eq!(checksum, Parsed::Valid(Integrity));
 
 	assert!(unknown.is_empty());
 }
