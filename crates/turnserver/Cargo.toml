@@ -7,5 +7,4 @@ edition = "2024"
 bytes = "1.11.1"
 eyre = "0.6.12"
 stun = { path = "../stun" }
-tun-rs = "2.8.3"
-zerocopy = "0.8.50"
+zerocopy = { version = "0.8.50", features = ["derive"] }

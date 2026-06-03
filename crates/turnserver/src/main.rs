@@ -11,6 +11,7 @@ use zerocopy::{
 };
 
 type Never = core::convert::Infallible;
+mod wire;
 
 /// md5('user:none:password')
 const TURNKEY: &[u8] = &[
