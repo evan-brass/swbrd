@@ -47,6 +47,9 @@ impl Method {
 	pub fn to_err(self) -> Self {
 		try_transmute!(self as u8 ^ 0x10).unwrap()
 	}
+	pub fn is_err(&self) -> bool {
+		!matches!(self, Self::Send | Self::Recv) && *self as u8 & 0x10 != 0
+	}
 }
 
 #[repr(u32)]

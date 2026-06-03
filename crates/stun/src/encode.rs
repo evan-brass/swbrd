@@ -22,7 +22,7 @@ impl Stun {
 			.checked_sub(4)
 			.expect("No more attributes can fit in this buffer");
 
-		let attr = Attr::mut_from_bytes_with_elems(
+		let (attr, _) = Attr::mut_from_prefix_with_elems(
 			rest.as_flattened_mut(),
 			usize::min(max1 as usize, max2),
 		)

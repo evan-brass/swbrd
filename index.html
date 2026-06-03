@@ -12,9 +12,11 @@ async function log_everything(conns) {
 		function logger(...args) {
 			console.log(key, ...args);
 		}
-		['message', 'open', 'close'].forEach((e) =>
-			conn.dc.addEventListener(e, logger)
-		);
+		if (conn.dc) {
+			['message', 'open', 'close'].forEach((e) =>
+				conn.dc.addEventListener(e, logger)
+			);
+		}
 		[
 			'connectionState',
 			'iceConnectionState',

@@ -11,7 +11,7 @@ export const defaults = {
 			'turns:turn.evan-brass.net?transport=tcp',
 			'turns:turn.evan-brass.net:443?transport=tcp',
 		],
-		username: 'guest',
+		username: 'user',
 		credential: 'password',
 	}],
 };
@@ -47,12 +47,12 @@ export class Conn extends RTCPeerConnection {
 
 	// Make a connection to a TURN server, then use cert prefix mechanism using private ipv6 address space fd01::/64
 	// - TURN can be multiplexed with HTTP
-	// - IPv6 not require for either client or server
-	// - Server doesn't need ipv6 prefix, /128 would
+	// - IPv6 not required for either client or server
+	// - Server doesn't need ipv6 prefix, /128 would work
 	static to_server(urls = "turns:turn.evan-brass.net:443?transport=tcp", config = null) {
 		return new this(server_pid, {
 			iceTransportPolicy: 'relay',
-			iceServers: [{ urls, username: 'guest', credential: 'password' }],
+			iceServers: [{ urls, username: 'user', credential: 'password' }],
 			setup: 'passive',
 			cert_prefix: 'fd01::',
 			...config,
@@ -87,7 +87,7 @@ export class Conn extends RTCPeerConnection {
 			// HACK: Firefox is just such a pain in the ass.  In order for ICE-dissolve to work, both sides must pair the same candidates.  The reason for this is because Firefox enforces TURN permissions locally and if it gets successful ICE responses from one pair it likely won't add permissions for the other ICE pairs.  Then when data is received over a different pair it gets dropped.  We can ensure that we only pair 1 candidate by forcing both sides to only generate 1 candidate.  We do this by only allowing relaying and only using 1 ipv4 address for the TURN server.  This fucking sucks.  Ideally this restriction should only be imposed if one or the other peers is a Firefox chud, but you would need to encode that into the peer id or pass it as another argument... lame.
 			adjustment: {
 				iceTransportPolicy: 'relay',
-				iceServers: [{ urls: 'turns:turn-4only.evan-brass.net:443?transport=tcp', username: 'guest', credential: 'password' }]
+				iceServers: [{ urls: 'turns:turn-4only.evan-brass.net:443?transport=tcp', username: 'user', credential: 'password' }]
 			},
 			...config,
 		});
