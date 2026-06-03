@@ -57,7 +57,7 @@ const h = Conn.to_server();
 // const h = Conn.to_server_direct();
 log_everything({ h });
 </script>
-<script type="module">
+<script type="_module">
 import { Cert } from 'swbrd/cert.js';
 import { Conn } from 'swbrd/conn.js';
 
@@ -72,4 +72,29 @@ a.addEventListener('candidate', ({candidate}) => b.addIceCandidate(candidate));
 b.addEventListener('candidate', ({candidate}) => a.addIceCandidate(candidate));
 
 log_everything({a, b});
+</script>
+<script type="module">
+import { state } from './src/util.js';
+const config = {
+	iceServers: [{
+		urls: 'turn:localhost',
+		username: 'user',
+		credential: 'password',
+	}],
+	iceTransportPolicy: 'relay',
+};
+
+const a = new RTCPeerConnection(config);
+const b = new RTCPeerConnection(config);
+
+log_everything({a, b});
+
+a.createDataChannel('');
+
+await a.setLocalDescription();
+while (a.iceGatheringState != 'complete') await state({ icegatheringstatechange: a });
+await b.setRemoteDescription(a.localDescription);
+await b.setLocalDescription();
+while (b.iceGatheringState != 'complete') await state({ icegatheringstatechange: b });
+await a.setRemoteDescription(b.localDescription);
 </script>
