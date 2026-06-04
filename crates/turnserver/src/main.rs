@@ -1,19 +1,22 @@
 use eyre::Result;
 use std::{
 	io::IoSlice,
-	net::{IpAddr, SocketAddr, UdpSocket},
+	net::{IpAddr, Ipv6Addr, SocketAddr, SocketAddrV6, UdpSocket},
+	thread::{Builder as ThreadBuilder, scope},
 };
 use stun::{
 	Class, Method, Parse, Parsed, Stun,
 	addr::{Addr4, Addr6, Xor},
 	known,
 };
-use tun_rs::DeviceBuilder;
+use tun_rs::{DeviceBuilder, SyncDevice};
 use zerocopy::{
-	IntoBytes, TryFromBytes,
+	FromBytes, IntoBytes, TryFromBytes,
 	network_endian::{U16, U32},
 };
 
+#[cfg(target_os = "linux")]
+use crate::wire::VirtioNet;
 use crate::wire::{Ip6, Udp, full_checksum, partial_checksum};
 
 type Never = core::convert::Infallible;
@@ -24,15 +27,7 @@ const TURNKEY: &[u8] = &[
 	0x9a, 0xc1, 0x33, 0x6a, 0xc2, 0xef, 0x12, 0xb8, 0xa1, 0x06, 0x00, 0x7a, 0xab, 0x74, 0x25, 0xf3,
 ];
 
-fn main() -> Result<Never> {
-	let socket = UdpSocket::bind("[::]:3478")?;
-	let network = {
-		let builder = DeviceBuilder::new();
-		#[cfg(target_os = "linux")]
-		let builder = builder.offload(true); // I'm not trying to do segmentation offloading, I'm only trying to do checksum offloading, but...
-		builder.build_sync()?
-	};
-
+fn handle_turn(socket: &UdpSocket, network: &SyncDevice) -> Result<Never> {
 	let mut buffer = vec![0; 65536];
 	loop {
 		let Ok((20.., SocketAddr::V6(sender))) = socket.recv_from(&mut buffer[Stun::HEADROOM..])
@@ -186,6 +181,7 @@ fn main() -> Result<Never> {
 			Method::UseChannel => {
 				msg.class = Class::Response;
 				msg.method = msg.method.to_err();
+				msg.length.get_mut().set(0);
 				msg.append_val(known::ERROR_CODE, &[0u8, 0, 4, 38]);
 			}
 			_ => continue,
@@ -201,4 +197,79 @@ fn main() -> Result<Never> {
 		let end = size_of_val(msg.trim());
 		socket.send_to(&buffer[Stun::HEADROOM..end], sender)?;
 	}
+}
+
+fn handle_tun(socket: &UdpSocket, network: &SyncDevice) -> Result<Never> {
+	let mut buffer = vec![0; 65536];
+
+	#[cfg(target_os = "linux")]
+	const VNET: usize = size_of::<VirtioNet>();
+	#[cfg(not(target_os = "linux"))]
+	const VNET: usize = 0;
+
+	const HEADROOM: usize = (Stun::HEADROOM + 20 + 24 + 4) - (VNET + 40 + 8);
+
+	loop {
+		let 40.. = network.recv(&mut buffer[HEADROOM..])? else {
+			continue;
+		};
+
+		let Ok((ip, rest)) = Ip6::read_from_prefix(&buffer[HEADROOM + VNET..]) else {
+			continue;
+		};
+		println!("{ip:?}");
+		if u32::from_be(ip.flags) >> 28 != 6 {
+			continue;
+		}
+		// TODO: Handle ICMP?
+		if ip.next_header != 17 {
+			continue;
+		}
+		if ip.length.get() < 8 {
+			continue;
+		}
+		let Ok((udp, _rest)) = Udp::read_from_prefix(rest) else {
+			continue;
+		};
+
+		println!("{udp:?}");
+		if ip.length != udp.length {
+			continue;
+		}
+
+		let data_length = udp.length.get() - 8;
+		let receiver = SocketAddrV6::new(Ipv6Addr::from_octets(ip.dst), udp.dst_port.get(), 0, 0);
+		let sender = Addr6::new(Ipv6Addr::from_octets(ip.src), udp.src_port.get());
+		let msg = Stun::new(Class::Request, Method::Recv, &mut buffer).unwrap();
+		msg.append_val(known::XOR_PEER_ADDRESS, &sender.xor(&msg.txid));
+		msg.append_once(|_, a| {
+			a.typ = known::DATA;
+			a.length.set(data_length); // If my headroom calculations are correct, the UDP data is already in the correct position.
+		});
+
+		let end = size_of_val(msg.trim());
+		socket.send_to(&buffer[Stun::HEADROOM..end], receiver)?;
+	}
+}
+
+fn main() -> Result<()> {
+	let socket = UdpSocket::bind("[::]:3478")?;
+	let network = {
+		let builder = DeviceBuilder::new();
+		#[cfg(target_os = "linux")]
+		let builder = builder.offload(true); // I'm not trying to do segmentation offloading, I'm only trying to do checksum offloading, but...
+		builder.build_sync()?
+	};
+
+	let turn_handler = ThreadBuilder::new().name("TURN handler".into());
+	let tun_handler = ThreadBuilder::new().name("TUN handler".into());
+
+	scope(|s| -> Result<()> {
+		turn_handler.spawn_scoped(s, || handle_turn(&socket, &network))?;
+		tun_handler.spawn_scoped(s, || handle_tun(&socket, &network))?;
+
+		Ok(())
+	})?;
+
+	Ok(())
 }

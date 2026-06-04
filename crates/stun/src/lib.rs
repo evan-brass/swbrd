@@ -91,7 +91,8 @@ impl Stun {
 #[derive(KnownLayout, Immutable, Unaligned, FromBytes, IntoBytes)]
 pub struct Attr {
 	pub typ: u16,
-	length: U16,
+	#[doc(hidden)]
+	pub length: U16,
 	pub value: [u8],
 }
 impl Attr {
