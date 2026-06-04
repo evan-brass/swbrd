@@ -1,14 +1,20 @@
 use eyre::Result;
-use std::net::{IpAddr, SocketAddr, UdpSocket};
+use std::{
+	io::IoSlice,
+	net::{IpAddr, SocketAddr, UdpSocket},
+};
 use stun::{
 	Class, Method, Parse, Parsed, Stun,
 	addr::{Addr4, Addr6, Xor},
 	known,
 };
+use tun_rs::DeviceBuilder;
 use zerocopy::{
-	TryFromBytes,
+	IntoBytes, TryFromBytes,
 	network_endian::{U16, U32},
 };
+
+use crate::wire::{Ip6, Udp, full_checksum, partial_checksum};
 
 type Never = core::convert::Infallible;
 mod wire;
@@ -20,6 +26,12 @@ const TURNKEY: &[u8] = &[
 
 fn main() -> Result<Never> {
 	let socket = UdpSocket::bind("[::]:3478")?;
+	let network = {
+		let builder = DeviceBuilder::new();
+		#[cfg(target_os = "linux")]
+		let builder = builder.offload(true); // I'm not trying to do segmentation offloading, I'm only trying to do checksum offloading, but...
+		builder.build_sync()?
+	};
 
 	let mut buffer = vec![0; 65536];
 	loop {
@@ -98,9 +110,42 @@ fn main() -> Result<Never> {
 				add_mapped(msg);
 			}
 			Method::Send => {
-				let (Parsed::Valid(_peer), Parsed::Valid(_data)) = (peer, data) else {
+				let (Parsed::Valid(peer), Parsed::Valid(data)) = (peer, data) else {
 					continue;
 				};
+				let peer = peer.xor(&msg.txid);
+				let ip = Ip6 {
+					flags: Ip6::FLAGS,
+					length: U16::new((size_of::<Udp>() + data.len()) as u16),
+					next_header: 17,
+					hop_limit: 64,
+					src: sender.ip().octets(),
+					dst: peer.ip().octets(),
+				};
+				let mut udp = Udp {
+					src_port: U16::new(sender.port()),
+					dst_port: U16::new(peer.port()),
+					length: ip.length,
+					checksum: 0,
+				};
+
+				if cfg!(target_os = "linux") {
+					let vnet = partial_checksum(&ip, &mut udp);
+					network.send_vectored(&[
+						IoSlice::new(vnet.as_bytes()),
+						IoSlice::new(ip.as_bytes()),
+						IoSlice::new(udp.as_bytes()),
+						IoSlice::new(data),
+					])
+				} else {
+					full_checksum(&ip, &mut udp, data);
+					network.send_vectored(&[
+						IoSlice::new(ip.as_bytes()),
+						IoSlice::new(udp.as_bytes()),
+						IoSlice::new(data),
+					])
+				}?;
+
 				continue;
 			}
 			m if realm != Parsed::Valid("none") => {

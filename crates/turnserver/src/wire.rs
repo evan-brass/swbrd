@@ -6,12 +6,15 @@ use zerocopy::{
 #[repr(C, align(4))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, KnownLayout, Immutable, FromBytes, IntoBytes)]
 pub struct Ip6 {
-	flags: u32,
+	pub flags: u32,
 	pub length: U16,
 	pub next_header: u8,
 	pub hop_limit: u8,
 	pub src: [u8; 16],
 	pub dst: [u8; 16],
+}
+impl Ip6 {
+	pub const FLAGS: u32 = u32::to_be(0b0110__0000_0000__0000_0000_0000_0000_0000);
 }
 
 #[repr(C, align(4))]
@@ -72,6 +75,29 @@ pub fn partial_checksum(ip: &Ip6, udp: &mut Udp) -> VirtioNet {
 		csum_start: size_of::<Ip6>() as u16,
 		csum_offset: offset_of!(Udp, checksum) as u16,
 	}
+}
+#[allow(unused)]
+pub fn full_checksum(ip: &Ip6, udp: &mut Udp, data: &[u8]) {
+	partial_checksum(ip, udp);
+
+	let (chunks, rest) = data.as_chunks();
+	let mut last = [0; 4];
+	last[4 - rest.len()..].copy_from_slice(rest);
+
+	let [u1, u2]: &[u32; 2] = transmute_ref!(udp);
+
+	let mut sum: u64 = *u1 as u64 + *u2 as u64;
+	for c in chunks {
+		sum += u32::from_ne_bytes(*c) as u64;
+	}
+	sum += u32::from_ne_bytes(last) as u64;
+
+	while sum > 0xFFFF {
+		sum = (sum & 0xffff) + (sum >> 16);
+	}
+
+	let ip_sum = !(sum as u16);
+	udp.checksum = if ip_sum == 0 { 0xffff } else { ip_sum };
 }
 
 #[test]
