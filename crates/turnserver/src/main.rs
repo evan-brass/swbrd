@@ -23,7 +23,6 @@ use zerocopy::{
 use crate::wire::VirtioNet;
 use crate::wire::{Ip6, Udp, full_checksum, partial_checksum};
 
-type Never = core::convert::Infallible;
 mod wire;
 
 /// md5('user:none:password')
@@ -78,8 +77,54 @@ impl Mapping {
 	}
 }
 
-fn handle_turn(mappings: &Vec<Mapping>, socket: &UdpSocket, network: &SyncDevice) -> Result<Never> {
+fn main() -> Result<()> {
+	// Parse command line arguments
+	let args = Args::try_parse()?;
+
+	// Parse/split the net mappings
+	let mut mappings = Vec::new();
+	for s in args.mapping.into_iter() {
+		mappings.push(Mapping::from_str(&s)?)
+	}
+
+	// Listen for TURN traffic
+	let socket = UdpSocket::bind(args.address)?;
+
+	// Setup the TUN interface
+	let network = {
+		let mut builder = DeviceBuilder::new();
+		#[cfg(target_os = "linux")]
+		{
+			builder = builder.offload(true); // I'm not trying to do segmentation offloading, I'm only trying to do checksum offloading, but...
+		}
+
+		if let Some(if_name) = args.if_name {
+			builder = builder.name(if_name);
+		}
+
+		builder.build_sync()?
+	};
+
+	let turn_handler = ThreadBuilder::new().name("UDP listener".into());
+	let tun_handler = ThreadBuilder::new().name("TUN listener".into());
+
+	scope(|s| -> Result<()> {
+		turn_handler.spawn_scoped(s, || handle_turn(&mappings, &socket, &network))?;
+		tun_handler.spawn_scoped(s, || handle_tun(&mappings, &socket, &network))?;
+
+		Ok(())
+	})?;
+
+	Ok(())
+}
+
+fn handle_turn(mappings: &Vec<Mapping>, socket: &UdpSocket, network: &SyncDevice) {
 	let mut buffer = vec![0; 65536];
+
+	// Preload the authkey into the buffer.  As long as we never touch bellow the HEADROOM of the buffer then this data will stay in place
+	let t = Stun::new(Class::Request, Method::Bind, &mut buffer).unwrap();
+	t.set_authkey(TURNKEY);
+
 	loop {
 		let Ok((20.., SocketAddr::V6(sender))) = socket.recv_from(&mut buffer[Stun::HEADROOM..])
 		else {
@@ -91,8 +136,6 @@ fn handle_turn(mappings: &Vec<Mapping>, socket: &UdpSocket, network: &SyncDevice
 		if msg.class != Class::Request || msg.method == Method::Recv || msg.method.is_err() {
 			continue;
 		}
-		msg.set_authkey(TURNKEY);
-		println!("{sender}");
 
 		// Apply our subnet mappings to the sender/source ip
 		let mut src_ip = *sender.ip();
@@ -199,7 +242,8 @@ fn handle_turn(mappings: &Vec<Mapping>, socket: &UdpSocket, network: &SyncDevice
 						IoSlice::new(udp.as_bytes()),
 						IoSlice::new(data),
 					])
-				}?;
+				}
+				.unwrap();
 
 				continue;
 			}
@@ -255,11 +299,13 @@ fn handle_turn(mappings: &Vec<Mapping>, socket: &UdpSocket, network: &SyncDevice
 		}
 
 		let end = size_of_val(msg.trim());
-		socket.send_to(&buffer[Stun::HEADROOM..end], sender)?;
+		socket
+			.send_to(&buffer[Stun::HEADROOM..end], sender)
+			.unwrap();
 	}
 }
 
-fn handle_tun(mappings: &Vec<Mapping>, socket: &UdpSocket, network: &SyncDevice) -> Result<Never> {
+fn handle_tun(mappings: &Vec<Mapping>, socket: &UdpSocket, network: &SyncDevice) {
 	let mut buffer = vec![0; 65536];
 
 	#[cfg(target_os = "linux")]
@@ -270,7 +316,7 @@ fn handle_tun(mappings: &Vec<Mapping>, socket: &UdpSocket, network: &SyncDevice)
 	const HEADROOM: usize = (Stun::HEADROOM + 20 + 24 + 4) - (VNET + 40 + 8);
 
 	loop {
-		let 40.. = network.recv(&mut buffer[HEADROOM..])? else {
+		let 40.. = network.recv(&mut buffer[HEADROOM..]).unwrap() else {
 			continue;
 		};
 
@@ -314,47 +360,8 @@ fn handle_tun(mappings: &Vec<Mapping>, socket: &UdpSocket, network: &SyncDevice)
 		});
 
 		let end = size_of_val(msg.trim());
-		socket.send_to(&buffer[Stun::HEADROOM..end], receiver)?;
+		socket
+			.send_to(&buffer[Stun::HEADROOM..end], receiver)
+			.unwrap();
 	}
-}
-
-fn main() -> Result<()> {
-	// Parse command line arguments
-	let args = Args::try_parse()?;
-
-	// Parse/split the net mappings
-	let mut mappings = Vec::new();
-	for s in args.mapping.into_iter() {
-		mappings.push(Mapping::from_str(&s)?)
-	}
-
-	// Listen for TURN traffic
-	let socket = UdpSocket::bind(args.address)?;
-
-	// Setup the TUN interface
-	let network = {
-		let mut builder = DeviceBuilder::new();
-		#[cfg(target_os = "linux")]
-		{
-			builder = builder.offload(true); // I'm not trying to do segmentation offloading, I'm only trying to do checksum offloading, but...
-		}
-
-		if let Some(if_name) = args.if_name {
-			builder = builder.name(if_name);
-		}
-
-		builder.build_sync()?
-	};
-
-	let turn_handler = ThreadBuilder::new().name("UDP listener".into());
-	let tun_handler = ThreadBuilder::new().name("TUN listener".into());
-
-	scope(|s| -> Result<()> {
-		turn_handler.spawn_scoped(s, || handle_turn(&mappings, &socket, &network))?;
-		tun_handler.spawn_scoped(s, || handle_tun(&mappings, &socket, &network))?;
-
-		Ok(())
-	})?;
-
-	Ok(())
 }
