@@ -1,0 +1,19 @@
+[Match]
+Name=ice-dissolve
+
+[Network]
+ConfigureWithoutCarrier=yes
+IgnoreCarrierLoss=yes
+
+[Link]
+RequiredForOnline=no
+
+# redirect all fwmark 0x1 to ice-dissolve
+[RoutingPolicyRule]
+Family=ipv6
+FirewallMark=0x1
+Table=ice-dissolve
+
+[Route]
+Destination=::/0
+Table=ice-dissolve

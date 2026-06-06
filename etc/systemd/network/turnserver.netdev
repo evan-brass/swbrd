@@ -1,0 +1,8 @@
+[NetDev]
+Name=turnserver
+Kind=tun
+
+[Tun]
+#MultiQueue=yes
+#VNetHeader=yes
+User=swbrd

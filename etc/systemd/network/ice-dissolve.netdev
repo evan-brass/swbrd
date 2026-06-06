@@ -1,0 +1,6 @@
+[NetDev]
+Name=ice-dissolve
+Kind=tun
+
+[Tun]
+User=swbrd

@@ -1,7 +1,11 @@
-use eyre::Result;
+use clap::Parser;
+use eyre::{Result, eyre};
+use ipnet::Ipv6Net;
 use std::{
 	io::IoSlice,
 	net::{IpAddr, Ipv6Addr, SocketAddr, SocketAddrV6, UdpSocket},
+	ops::{BitAnd, BitOr},
+	str::FromStr,
 	thread::{Builder as ThreadBuilder, scope},
 };
 use stun::{
@@ -27,7 +31,54 @@ const TURNKEY: &[u8] = &[
 	0x9a, 0xc1, 0x33, 0x6a, 0xc2, 0xef, 0x12, 0xb8, 0xa1, 0x06, 0x00, 0x7a, 0xab, 0x74, 0x25, 0xf3,
 ];
 
-fn handle_turn(socket: &UdpSocket, network: &SyncDevice) -> Result<Never> {
+#[derive(Parser)]
+#[command(version, about)]
+struct Args {
+	#[arg(long, short, default_value = "[::]:3478")]
+	address: String,
+
+	#[arg(long, short)]
+	mapping: Vec<String>,
+
+	#[arg(long, short)]
+	if_name: Option<String>,
+}
+
+// 1-to-1 IPv6 subnet mappings.  Primarily intended for mapping ::ffff:0.0.0.0/96<->[a network that you control], and potentially for mapping 2000::/3<->A000::/3 to statelessly differentiate between TURN/UDP packets from normal UDP packets received from IPv6 peers.
+struct Mapping {
+	udp: Ipv6Net,
+	tun: Ipv6Net,
+}
+impl FromStr for Mapping {
+	type Err = eyre::Report;
+	fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+		let (udp, tun) = s.split_once("<->").ok_or(eyre!("stuff"))?;
+		let udp = Ipv6Net::from_str(udp)?;
+		let tun = Ipv6Net::from_str(tun)?;
+		if udp.prefix_len() != tun.prefix_len() {
+			return Err(eyre!("subnets need to have the same size"));
+		}
+		Ok(Self { udp, tun })
+	}
+}
+impl Mapping {
+	fn to_net(&self, addr: &mut Ipv6Addr) -> bool {
+		if self.udp.contains(&*addr) {
+			*addr = self.tun.network().bitor(self.udp.hostmask().bitand(*addr));
+			return true;
+		}
+		false
+	}
+	fn to_udp(&self, addr: &mut Ipv6Addr) -> bool {
+		if self.tun.contains(&*addr) {
+			*addr = self.udp.network().bitor(self.tun.hostmask().bitand(*addr));
+			return true;
+		}
+		false
+	}
+}
+
+fn handle_turn(mappings: &Vec<Mapping>, socket: &UdpSocket, network: &SyncDevice) -> Result<Never> {
 	let mut buffer = vec![0; 65536];
 	loop {
 		let Ok((20.., SocketAddr::V6(sender))) = socket.recv_from(&mut buffer[Stun::HEADROOM..])
@@ -41,6 +92,15 @@ fn handle_turn(socket: &UdpSocket, network: &SyncDevice) -> Result<Never> {
 			continue;
 		}
 		msg.set_authkey(TURNKEY);
+		println!("{sender}");
+
+		// Apply our subnet mappings to the sender/source ip
+		let mut src_ip = *sender.ip();
+		for m in mappings {
+			if m.to_net(&mut src_ip) {
+				break;
+			}
+		}
 
 		let mut username = Parsed::NotPresent;
 		let mut software = Parsed::NotPresent;
@@ -114,7 +174,7 @@ fn handle_turn(socket: &UdpSocket, network: &SyncDevice) -> Result<Never> {
 					length: U16::new((size_of::<Udp>() + data.len()) as u16),
 					next_header: 17,
 					hop_limit: 64,
-					src: sender.ip().octets(),
+					src: src_ip.octets(),
 					dst: peer.ip().octets(),
 				};
 				let mut udp = Udp {
@@ -163,7 +223,7 @@ fn handle_turn(socket: &UdpSocket, network: &SyncDevice) -> Result<Never> {
 				add_mapped(msg);
 				msg.append_val(
 					known::XOR_RELAYED_ADDRESS,
-					&Addr6::new(*sender.ip(), sender.port()).xor(&msg.txid),
+					&Addr6::new(src_ip, sender.port()).xor(&msg.txid),
 				);
 				msg.append_val(known::LIFETIME, &lifetime);
 			}
@@ -199,7 +259,7 @@ fn handle_turn(socket: &UdpSocket, network: &SyncDevice) -> Result<Never> {
 	}
 }
 
-fn handle_tun(socket: &UdpSocket, network: &SyncDevice) -> Result<Never> {
+fn handle_tun(mappings: &Vec<Mapping>, socket: &UdpSocket, network: &SyncDevice) -> Result<Never> {
 	let mut buffer = vec![0; 65536];
 
 	#[cfg(target_os = "linux")]
@@ -217,7 +277,6 @@ fn handle_tun(socket: &UdpSocket, network: &SyncDevice) -> Result<Never> {
 		let Ok((ip, rest)) = Ip6::read_from_prefix(&buffer[HEADROOM + VNET..]) else {
 			continue;
 		};
-		println!("{ip:?}");
 		if u32::from_be(ip.flags) >> 28 != 6 {
 			continue;
 		}
@@ -232,13 +291,20 @@ fn handle_tun(socket: &UdpSocket, network: &SyncDevice) -> Result<Never> {
 			continue;
 		};
 
-		println!("{udp:?}");
 		if ip.length != udp.length {
 			continue;
 		}
 
+		// Unmap the destination ip address
+		let mut peer_ip = Ipv6Addr::from(ip.dst);
+		for m in mappings {
+			if m.to_udp(&mut peer_ip) {
+				break;
+			}
+		}
+
 		let data_length = udp.length.get() - 8;
-		let receiver = SocketAddrV6::new(Ipv6Addr::from_octets(ip.dst), udp.dst_port.get(), 0, 0);
+		let receiver = SocketAddrV6::new(peer_ip, udp.dst_port.get(), 0, 0);
 		let sender = Addr6::new(Ipv6Addr::from_octets(ip.src), udp.src_port.get());
 		let msg = Stun::new(Class::Request, Method::Recv, &mut buffer).unwrap();
 		msg.append_val(known::XOR_PEER_ADDRESS, &sender.xor(&msg.txid));
@@ -253,20 +319,39 @@ fn handle_tun(socket: &UdpSocket, network: &SyncDevice) -> Result<Never> {
 }
 
 fn main() -> Result<()> {
-	let socket = UdpSocket::bind("[::]:3478")?;
+	// Parse command line arguments
+	let args = Args::try_parse()?;
+
+	// Parse/split the net mappings
+	let mut mappings = Vec::new();
+	for s in args.mapping.into_iter() {
+		mappings.push(Mapping::from_str(&s)?)
+	}
+
+	// Listen for TURN traffic
+	let socket = UdpSocket::bind(args.address)?;
+
+	// Setup the TUN interface
 	let network = {
-		let builder = DeviceBuilder::new();
+		let mut builder = DeviceBuilder::new();
 		#[cfg(target_os = "linux")]
-		let builder = builder.offload(true); // I'm not trying to do segmentation offloading, I'm only trying to do checksum offloading, but...
+		{
+			builder = builder.offload(true); // I'm not trying to do segmentation offloading, I'm only trying to do checksum offloading, but...
+		}
+
+		if let Some(if_name) = args.if_name {
+			builder = builder.name(if_name);
+		}
+
 		builder.build_sync()?
 	};
 
-	let turn_handler = ThreadBuilder::new().name("TURN handler".into());
-	let tun_handler = ThreadBuilder::new().name("TUN handler".into());
+	let turn_handler = ThreadBuilder::new().name("UDP listener".into());
+	let tun_handler = ThreadBuilder::new().name("TUN listener".into());
 
 	scope(|s| -> Result<()> {
-		turn_handler.spawn_scoped(s, || handle_turn(&socket, &network))?;
-		tun_handler.spawn_scoped(s, || handle_tun(&socket, &network))?;
+		turn_handler.spawn_scoped(s, || handle_turn(&mappings, &socket, &network))?;
+		tun_handler.spawn_scoped(s, || handle_tun(&mappings, &socket, &network))?;
 
 		Ok(())
 	})?;

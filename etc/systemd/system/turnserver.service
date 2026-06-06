@@ -1,0 +1,12 @@
+[Unit]
+Description=Stateless relay using the TURN wire format over UDP
+After=network-online.target
+
+[Install]
+WantedBy=multi-user.target
+
+[Service]
+User=swbrd
+Restart=never
+Environment=RUST_BACKTRACE="full"
+ExecStart=/opt/turnserver -i turnserver -m "::ffff:0:0/96<->2a01:4ff:1f0:7e46:0:1::/96" -m "::3478:0:0/96<->2a01:4ff:1f0:7e46:0:2::/96"
