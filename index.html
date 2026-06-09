@@ -77,7 +77,10 @@ log_everything({a, b});
 import { state } from './src/util.js';
 const config = {
 	iceServers: [{
-		urls: 'turn:turn.evan-brass.net',
+		urls: [
+			'turn:turn.evan-brass.net',
+			'turn:turn.evan-brass.net?transport=tcp',
+		],
 		username: 'user',
 		credential: 'password',
 	}],

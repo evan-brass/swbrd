@@ -1,7 +1,5 @@
 use core::mem::{offset_of, size_of};
-use zerocopy::{
-	FromBytes, Immutable, IntoBytes, KnownLayout, TryFromBytes, network_endian::U16, transmute_ref,
-};
+use zerocopy::{FromBytes, Immutable, IntoBytes, KnownLayout, network_endian::U16, transmute_ref};
 
 #[repr(C, align(4))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, KnownLayout, Immutable, FromBytes, IntoBytes)]
@@ -27,7 +25,7 @@ pub struct Udp {
 }
 
 #[repr(C)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, KnownLayout, Immutable, TryFromBytes, IntoBytes)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, KnownLayout, Immutable, FromBytes, IntoBytes)]
 pub struct VirtioNet {
 	pub flags: u8,
 	pub gso_type: u8,
@@ -78,8 +76,6 @@ pub fn partial_checksum(ip: &Ip6, udp: &mut Udp) -> VirtioNet {
 }
 #[allow(unused)]
 pub fn full_checksum(ip: &Ip6, udp: &mut Udp, data: &[u8]) {
-	partial_checksum(ip, udp);
-
 	let (chunks, rest) = data.as_chunks();
 	let mut last = [0; 4];
 	last[4 - rest.len()..].copy_from_slice(rest);

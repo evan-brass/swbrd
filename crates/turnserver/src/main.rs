@@ -1,27 +1,32 @@
 use clap::Parser;
 use eyre::{Result, eyre};
 use ipnet::Ipv6Net;
+use mio::{
+	Events, Interest, Poll, Token,
+	net::{TcpListener, TcpStream, UdpSocket},
+	unix::SourceFd,
+};
+use slab::Slab;
 use std::{
-	io::IoSlice,
-	net::{IpAddr, Ipv6Addr, SocketAddr, SocketAddrV6, UdpSocket},
+	io::{ErrorKind, IoSlice, IoSliceMut, Read, Write},
+	net::{IpAddr, Ipv6Addr, SocketAddr, SocketAddrV6},
 	ops::{BitAnd, BitOr},
+	os::fd::AsRawFd,
 	str::FromStr,
-	thread::{Builder as ThreadBuilder, scope},
 };
 use stun::{
 	Class, Method, Parse, Parsed, Stun,
 	addr::{Addr4, Addr6, Xor},
 	known,
 };
+use tracing_subscriber::EnvFilter;
 use tun_rs::{DeviceBuilder, SyncDevice};
 use zerocopy::{
-	FromBytes, IntoBytes, TryFromBytes,
+	AlignedTryCastError, FromBytes, FromZeros, IntoBytes, TryFromBytes,
 	network_endian::{U16, U32},
 };
 
-#[cfg(target_os = "linux")]
-use crate::wire::VirtioNet;
-use crate::wire::{Ip6, Udp, full_checksum, partial_checksum};
+use crate::wire::{Ip6, Udp, VirtioNet, full_checksum, partial_checksum};
 
 mod wire;
 
@@ -41,6 +46,9 @@ struct Args {
 
 	#[arg(long, short)]
 	if_name: Option<String>,
+
+	#[arg(long, short, default_value = "::6666:0:0/96")]
+	tcpnet: String,
 }
 
 // 1-to-1 IPv6 subnet mappings.  Primarily intended for mapping ::ffff:0.0.0.0/96<->[a network that you control], and potentially for mapping 2000::/3<->A000::/3 to statelessly differentiate between TURN/UDP packets from normal UDP packets received from IPv6 peers.
@@ -77,7 +85,59 @@ impl Mapping {
 	}
 }
 
-fn main() -> Result<()> {
+// Holder for a tcpstream and any partial data waiting to be written to it
+struct Conn {
+	partial: Option<(usize, Box<[u8]>)>,
+	stream: TcpStream,
+}
+
+// Tokens used by everything that isn't a TcpStream
+const UDP: Token = Token(usize::MAX);
+const TCP: Token = Token(usize::MAX - 1);
+const TUN: Token = Token(usize::MAX - 2);
+
+// Checksum offloading support
+#[cfg(target_os = "linux")]
+const VNET: usize = size_of::<VirtioNet>();
+#[cfg(not(target_os = "linux"))]
+const VNET: usize = 0;
+
+struct TcpNet {
+	subnet: Ipv6Net,
+}
+impl TcpNet {
+	fn from_index(&self, index: usize) -> Option<SocketAddrV6> {
+		// The least 15 bits become the port
+		let port = (index & 0x7fff | 0x8000) as u16;
+
+		// The remaining 17 or 49 bits are the host
+		let host = Ipv6Addr::from_bits(index as u128 >> 15);
+		let ip = self.subnet.network() | host;
+
+		// Check if we've exceeded our subnet
+		if !self.subnet.contains(&ip) {
+			return None;
+		}
+
+		Some(SocketAddrV6::new(ip, port, 0, 0))
+	}
+	fn to_index(&self, addr: SocketAddrV6) -> Option<usize> {
+		if !self.subnet.contains(addr.ip()) {
+			return None;
+		};
+		let host = addr.ip() & self.subnet.hostmask();
+		let ret = (host.to_bits() << 15) | (0x7FFF & addr.port()) as u128;
+		Some(ret as usize)
+	}
+}
+
+type Never = core::convert::Infallible;
+fn main() -> Result<Never> {
+	// Enable logging
+	tracing_subscriber::fmt()
+		.with_env_filter(EnvFilter::from_default_env())
+		.init();
+
 	// Parse command line arguments
 	let args = Args::try_parse()?;
 
@@ -87,8 +147,26 @@ fn main() -> Result<()> {
 		mappings.push(Mapping::from_str(&s)?)
 	}
 
+	// This is silly, it's just saying "what subnet should tcp streams be mapped to" in the same way that ipv4 udp is mapped to ::ffff:0:0/96
+	let tcpnet = TcpNet {
+		subnet: Ipv6Net::from_str(&args.tcpnet)?,
+	};
+
+	// Setup async
+	let mut poll = Poll::new()?;
+
 	// Listen for TURN traffic
-	let socket = UdpSocket::bind(args.address)?;
+	let socket = std::net::UdpSocket::bind(&args.address)?;
+	socket.set_nonblocking(true)?;
+	let mut socket = UdpSocket::from_std(socket);
+	poll.registry()
+		.register(&mut socket, UDP, Interest::READABLE)?;
+
+	let listener = std::net::TcpListener::bind(&args.address)?;
+	listener.set_nonblocking(true)?;
+	let mut listener = TcpListener::from_std(listener);
+	poll.registry()
+		.register(&mut listener, TCP, Interest::READABLE)?;
 
 	// Setup the TUN interface
 	let network = {
@@ -104,45 +182,264 @@ fn main() -> Result<()> {
 
 		builder.build_sync()?
 	};
+	network.set_nonblocking(true)?;
+	poll.registry()
+		.register(&mut SourceFd(&network.as_raw_fd()), TUN, Interest::READABLE)?;
 
-	let turn_handler = ThreadBuilder::new().name("UDP listener".into());
-	let tun_handler = ThreadBuilder::new().name("TUN listener".into());
+	let mut events = Events::with_capacity(128);
+	let mut buffer = vec![0; 65536];
 
-	scope(|s| -> Result<()> {
-		turn_handler.spawn_scoped(s, || {
-			let mut buffer = vec![0; 65536];
+	let mut streams = Slab::new();
 
-			// Preload the authkey into the buffer.  As long as we never touch bellow the HEADROOM of the buffer then this data will stay in place
-			let t = Stun::new(Class::Request, Method::Bind, &mut buffer).unwrap();
-			t.set_authkey(TURNKEY);
+	// Preload the authkey into the buffer.  As long as we never touch bellow the HEADROOM of the buffer then this data will stay in place
+	{
+		let t = Stun::new(Class::Request, Method::Bind, buffer.as_mut_slice())
+			.map_err(|e| eyre!("{e:?}"))?;
+		t.set_authkey(TURNKEY);
+	}
 
-			loop {
-				let Ok((20.., SocketAddr::V6(sender))) =
-					socket.recv_from(&mut buffer[Stun::HEADROOM..])
-				else {
-					continue;
-				};
-				let Ok(msg) = Stun::try_mut_from_bytes(&mut buffer) else {
-					continue;
-				};
-				if msg.class != Class::Request || msg.method == Method::Recv || msg.method.is_err()
-				{
-					continue;
-				}
-				if let Some(resp) = handle_turn(&mappings, sender, msg, &network) {
-					let end = size_of_val(resp.trim());
-					socket
-						.send_to(&buffer[Stun::HEADROOM..end], sender)
-						.unwrap();
+	loop {
+		for e in events.into_iter() {
+			match e.token() {
+				TCP => loop {
+					let mut stream = match listener.accept() {
+						Ok((stream, _sender)) => stream,
+						Err(e) if e.kind() == ErrorKind::WouldBlock => break,
+						Err(e) => return Err(e.into()),
+					};
+					stream.set_nodelay(true)?;
+					let entry = streams.vacant_entry();
+					poll.registry().register(
+						&mut stream,
+						Token(entry.key()),
+						Interest::READABLE | Interest::WRITABLE,
+					)?;
+					entry.insert(Conn {
+						partial: None,
+						stream,
+					});
+				},
+				UDP => loop {
+					let sender = match socket.recv_from(&mut buffer[Stun::HEADROOM..]) {
+						Ok((20.., SocketAddr::V6(sender))) => sender,
+						Ok(_) => continue,
+						Err(e) if e.kind() == ErrorKind::WouldBlock => break,
+						Err(e) => return Err(e.into()),
+					};
+					let Ok(msg) = Stun::try_mut_from_bytes(&mut buffer).map_err(|_| ()) else {
+						continue;
+					};
+					if msg.class != Class::Request
+						|| msg.method == Method::Recv
+						|| msg.method.is_err()
+					{
+						continue;
+					}
+					if let Some(resp) = handle_turn(&mappings, sender, msg, &network)? {
+						let end = size_of_val(resp.trim());
+						socket.send_to(&buffer[Stun::HEADROOM..end], sender.into())?;
+					}
+				},
+				TUN => loop {
+					let mut vnet = VirtioNet::new_zeroed();
+					match network.recv_vectored(&mut [
+						// TODO: This will sometimes be an empty slice... Is that a bad?
+						IoSliceMut::new(&mut vnet.as_mut_bytes()[..VNET]),
+						IoSliceMut::new(&mut buffer[Stun::HEADROOM..]),
+					]) {
+						Ok(len) if len >= (VNET + 40) => {}
+						Ok(_) => continue,
+						Err(e) if e.kind() == ErrorKind::WouldBlock => break,
+						Err(e) => return Err(e.into()),
+					};
+
+					let Ok((ip, rest)) = Ip6::read_from_prefix(&buffer[Stun::HEADROOM..]) else {
+						continue;
+					};
+					if u32::from_be(ip.flags) >> 28 != 6 {
+						continue;
+					}
+					// TODO: Handle ICMP?
+					if ip.next_header != 17 {
+						continue;
+					}
+					if ip.length.get() < 8 {
+						continue;
+					}
+					let Ok((udp, _rest)) = Udp::read_from_prefix(rest) else {
+						continue;
+					};
+
+					if ip.length != udp.length {
+						continue;
+					}
+
+					// Unmap the destination ip address
+					let mut peer_ip = Ipv6Addr::from(ip.dst);
+					for m in &mappings {
+						if m.to_udp(&mut peer_ip) {
+							break;
+						}
+					}
+
+					let data_length = udp.length.get() - 8;
+					let receiver = SocketAddrV6::new(peer_ip, udp.dst_port.get(), 0, 0);
+					let sender = Addr6::new(Ipv6Addr::from_octets(ip.src), udp.src_port.get());
+					let msg = Stun::new(Class::Request, Method::Recv, &mut buffer)
+						.map_err(|e| eyre!("{e:?}"))?;
+					msg.append_val(known::XOR_PEER_ADDRESS, &sender.xor(&msg.txid));
+					msg.append_once(|_, a| {
+						a.typ = known::DATA;
+						a.length.set(data_length); // If my headroom calculations are correct, the UDP data is already in the correct position.
+					});
+
+					let end = size_of_val(msg.trim());
+					let frame = &buffer[Stun::HEADROOM..end];
+					// Send to TCP clients
+					if let Some(key) = tcpnet.to_index(receiver) {
+						let Some(Conn { partial, stream }) = streams.get_mut(key) else {
+							continue;
+						};
+						if partial.is_some() {
+							continue;
+						}
+
+						let mut offset = 0;
+						loop {
+							let rest = &buffer[Stun::HEADROOM + offset..end];
+							match stream.write(rest) {
+								Ok(written) if written >= rest.len() => break,
+								Ok(written) => offset += written,
+								Err(e) if e.kind() == ErrorKind::WouldBlock => {
+									*partial = Some((0, Box::from(rest)));
+								}
+								Err(_) => {
+									// Cleanup
+									poll.registry().deregister(stream)?;
+									streams.remove(key);
+									break;
+								}
+							}
+						}
+					}
+					// Send to UDP clients
+					else {
+						socket.send_to(frame, receiver.into())?;
+					}
+				},
+				Token(key) => 'event: {
+					let Some(Conn { stream, partial }) = streams.get_mut(key) else {
+						break 'event;
+					};
+
+					// NOTE: For cleanup, there's no need to finish writing partial data or anything like that, we just close.
+					if e.is_read_closed() || e.is_error() {
+						// Cleanup
+						poll.registry().deregister(stream)?;
+						streams.remove(key);
+						break 'event;
+					}
+
+					// Continue writing previous partial frame
+					if e.is_writable() {
+						loop {
+							let Some((offset, buffer)) = partial.take() else {
+								break;
+							};
+							let rest = &buffer[offset..];
+
+							match stream.write(rest) {
+								Ok(written) if written >= rest.len() => break,
+								Ok(written) => *partial = Some((offset + written, buffer)),
+								Err(e) if e.kind() == ErrorKind::WouldBlock => {
+									*partial = Some((offset, buffer));
+									break;
+								}
+								Err(_) => {
+									// Cleanup
+									poll.registry().deregister(stream)?;
+									streams.remove(key);
+									break 'event;
+								}
+							}
+						}
+					}
+
+					// Handle reading
+					if e.is_readable() {
+						loop {
+							let available = match stream.peek(&mut buffer[Stun::HEADROOM..]) {
+								Ok(n) => Stun::HEADROOM + n,
+								Err(e) if e.kind() == ErrorKind::WouldBlock => break,
+								Err(_) => {
+									// Cleanup
+									poll.registry().deregister(stream)?;
+									streams.remove(key);
+									break;
+								}
+							};
+							let msg = match Stun::try_mut_from_bytes(&mut buffer)
+								.map_err(AlignedTryCastError::from)
+							{
+								Err(AlignedTryCastError::Validity(_v)) if available >= 20 => {
+									// Cleanup
+									poll.registry().deregister(stream)?;
+									streams.remove(key);
+									break;
+								}
+								Ok(m) => {
+									let end = size_of_val(m.trim());
+									if available < end {
+										break;
+									}
+									// TODO: If read is less than what we peek'd then we're fucked
+									let n = stream.read(&mut buffer[Stun::HEADROOM..end])?;
+									if (Stun::HEADROOM + n) < n {
+										panic!("Read short of peek'd!");
+									}
+									Stun::try_mut_from_bytes(&mut buffer).unwrap()
+								}
+								_ => break,
+							};
+
+							// Drop the TURN message if we have partial data waiting to be written out
+							if partial.is_some() {
+								continue;
+							};
+
+							let Some(sender) = tcpnet.from_index(key) else {
+								continue;
+							};
+							let Some(resp) = handle_turn(&mappings, sender, msg, &network)? else {
+								continue;
+							};
+
+							let end = size_of_val(resp.trim());
+							let mut offset = 0;
+							loop {
+								let rest = &buffer[Stun::HEADROOM + offset..end];
+								match stream.write(rest) {
+									Ok(written) if written >= rest.len() => break,
+									Ok(written) => offset += written,
+									Err(e) if e.kind() == ErrorKind::WouldBlock => {
+										*partial = Some((0, Box::from(rest)));
+									}
+									Err(_) => {
+										// Cleanup
+										poll.registry().deregister(stream)?;
+										streams.remove(key);
+										break 'event;
+									}
+								}
+							}
+						}
+					}
 				}
 			}
-		})?;
-		tun_handler.spawn_scoped(s, || handle_tun(&mappings, &socket, &network))?;
+		}
 
-		Ok(())
-	})?;
-
-	Ok(())
+		poll.poll(&mut events, None)?;
+	}
 }
 
 fn handle_turn<'i>(
@@ -150,7 +447,7 @@ fn handle_turn<'i>(
 	sender: SocketAddrV6,
 	msg: &'i mut Stun,
 	network: &SyncDevice,
-) -> Option<&'i mut Stun> {
+) -> Result<Option<&'i mut Stun>> {
 	// Apply our subnet mappings to the sender/source ip
 	let mut src_ip = *sender.ip();
 	for m in mappings {
@@ -223,7 +520,7 @@ fn handle_turn<'i>(
 		}
 		Method::Send => {
 			let (Parsed::Valid(peer), Parsed::Valid(data)) = (peer, data) else {
-				return None;
+				return Ok(None);
 			};
 			let peer = peer.xor(&msg.txid);
 			let ip = Ip6 {
@@ -241,25 +538,19 @@ fn handle_turn<'i>(
 				checksum: 0,
 			};
 
-			if cfg!(target_os = "linux") {
-				let vnet = partial_checksum(&ip, &mut udp);
-				network.send_vectored(&[
-					IoSlice::new(vnet.as_bytes()),
-					IoSlice::new(ip.as_bytes()),
-					IoSlice::new(udp.as_bytes()),
-					IoSlice::new(data),
-				])
-			} else {
+			let vnet = partial_checksum(&ip, &mut udp);
+			if VNET == 0 {
 				full_checksum(&ip, &mut udp, data);
-				network.send_vectored(&[
-					IoSlice::new(ip.as_bytes()),
-					IoSlice::new(udp.as_bytes()),
-					IoSlice::new(data),
-				])
 			}
-			.unwrap();
+			let vnet = &vnet.as_bytes()[..VNET];
+			network.send_vectored(&[
+				IoSlice::new(vnet),
+				IoSlice::new(ip.as_bytes()),
+				IoSlice::new(udp.as_bytes()),
+				IoSlice::new(data),
+			])?;
 
-			return None;
+			return Ok(None);
 		}
 		m if realm != Parsed::Valid("none") => {
 			msg.class = Class::Response;
@@ -286,7 +577,7 @@ fn handle_turn<'i>(
 			msg.append_val(known::LIFETIME, &lifetime);
 		}
 		// Close notification, just drop
-		Method::Refresh if lifetime.get() == 0 => return None,
+		Method::Refresh if lifetime.get() == 0 => return Ok(None),
 		Method::Refresh => {
 			msg.class = Class::Response;
 			msg.length.get_mut().set(0);
@@ -302,7 +593,7 @@ fn handle_turn<'i>(
 			msg.length.get_mut().set(0);
 			msg.append_val(known::ERROR_CODE, &[0u8, 0, 4, 38]);
 		}
-		_ => return None,
+		_ => return Ok(None),
 	}
 
 	if integrity {
@@ -312,66 +603,5 @@ fn handle_turn<'i>(
 		);
 	}
 
-	Some(msg)
-}
-
-fn handle_tun(mappings: &Vec<Mapping>, socket: &UdpSocket, network: &SyncDevice) {
-	let mut buffer = vec![0; 65536];
-
-	#[cfg(target_os = "linux")]
-	const VNET: usize = size_of::<VirtioNet>();
-	#[cfg(not(target_os = "linux"))]
-	const VNET: usize = 0;
-
-	const HEADROOM: usize = (Stun::HEADROOM + 20 + 24 + 4) - (VNET + 40 + 8);
-
-	loop {
-		let 40.. = network.recv(&mut buffer[HEADROOM..]).unwrap() else {
-			continue;
-		};
-
-		let Ok((ip, rest)) = Ip6::read_from_prefix(&buffer[HEADROOM + VNET..]) else {
-			continue;
-		};
-		if u32::from_be(ip.flags) >> 28 != 6 {
-			continue;
-		}
-		// TODO: Handle ICMP?
-		if ip.next_header != 17 {
-			continue;
-		}
-		if ip.length.get() < 8 {
-			continue;
-		}
-		let Ok((udp, _rest)) = Udp::read_from_prefix(rest) else {
-			continue;
-		};
-
-		if ip.length != udp.length {
-			continue;
-		}
-
-		// Unmap the destination ip address
-		let mut peer_ip = Ipv6Addr::from(ip.dst);
-		for m in mappings {
-			if m.to_udp(&mut peer_ip) {
-				break;
-			}
-		}
-
-		let data_length = udp.length.get() - 8;
-		let receiver = SocketAddrV6::new(peer_ip, udp.dst_port.get(), 0, 0);
-		let sender = Addr6::new(Ipv6Addr::from_octets(ip.src), udp.src_port.get());
-		let msg = Stun::new(Class::Request, Method::Recv, &mut buffer).unwrap();
-		msg.append_val(known::XOR_PEER_ADDRESS, &sender.xor(&msg.txid));
-		msg.append_once(|_, a| {
-			a.typ = known::DATA;
-			a.length.set(data_length); // If my headroom calculations are correct, the UDP data is already in the correct position.
-		});
-
-		let end = size_of_val(msg.trim());
-		socket
-			.send_to(&buffer[Stun::HEADROOM..end], receiver)
-			.unwrap();
-	}
+	Ok(Some(msg))
 }
