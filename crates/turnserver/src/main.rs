@@ -26,9 +26,7 @@ use zerocopy::{
 	network_endian::{U16, U32},
 };
 
-use crate::wire::{Ip6, Udp, VirtioNet, full_checksum, partial_checksum};
-
-mod wire;
+use common::{Ip6, Udp, VNET, VirtioNet, full_checksum, partial_checksum};
 
 /// md5('user:none:password')
 const TURNKEY: &[u8] = &[
@@ -95,12 +93,6 @@ struct Conn {
 const UDP: Token = Token(usize::MAX);
 const TCP: Token = Token(usize::MAX - 1);
 const TUN: Token = Token(usize::MAX - 2);
-
-// Checksum offloading support
-#[cfg(target_os = "linux")]
-const VNET: usize = size_of::<VirtioNet>();
-#[cfg(not(target_os = "linux"))]
-const VNET: usize = 0;
 
 struct TcpNet {
 	subnet: Ipv6Net,

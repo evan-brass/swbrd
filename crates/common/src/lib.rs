@@ -1,6 +1,12 @@
 use core::mem::{offset_of, size_of};
 use zerocopy::{FromBytes, Immutable, IntoBytes, KnownLayout, network_endian::U16, transmute_ref};
 
+// Checksum offloading support
+#[cfg(target_os = "linux")]
+pub const VNET: usize = size_of::<VirtioNet>();
+#[cfg(not(target_os = "linux"))]
+pub const VNET: usize = 0;
+
 #[repr(C, align(4))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, KnownLayout, Immutable, FromBytes, IntoBytes)]
 pub struct Ip6 {

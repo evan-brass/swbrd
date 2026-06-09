@@ -7,7 +7,7 @@ WantedBy=multi-user.target
 
 [Service]
 User=swbrd
-Restart=never
+Restart=no
 Environment=RUST_BACKTRACE="full"
 Environment=RUST_LOG="trace"
 ExecStart=/opt/turnserver -i turnserver -m "::ffff:0:0/96<->2a01:4ff:1f0:7e46:0:1::/96" -m "::3478:0:0/96<->2a01:4ff:1f0:7e46:0:2::/96" -m "::6666:0:0/96<->2a01:4ff:1f0:7e46:0:3::/96"

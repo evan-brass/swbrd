@@ -1,0 +1,13 @@
+[Unit]
+Description=Stateless ICE interception
+After=network-online.target
+
+[Install]
+WantedBy=multi-user.target
+
+[Service]
+User=swbrd
+Restart=no
+Environment=RUST_BACKTRACE="full"
+Environment=RUST_LOG="trace"
+ExecStart=/opt/ice-dissolve

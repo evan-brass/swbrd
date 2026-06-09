@@ -197,6 +197,13 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1d07550c9036bf2ae0c684c4297d503f838287c83c53686d05370d0e139ae570"
 
 [[package]]
+name = "common"
+version = "0.1.0"
+dependencies = [
+ "zerocopy",
+]
+
+[[package]]
 name = "core-foundation"
 version = "0.10.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -386,6 +393,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9155a582abd142abc056962c29e3ce5ff2ad5469f4246b537ed42c5deba857da"
 dependencies = [
  "typenum",
+]
+
+[[package]]
+name = "ice-dissolve"
+version = "0.1.0"
+dependencies = [
+ "common",
+ "eyre",
+ "stun",
+ "tun-rs",
+ "zerocopy",
 ]
 
 [[package]]
@@ -991,6 +1009,7 @@ version = "0.1.0"
 dependencies = [
  "bytes",
  "clap",
+ "common",
  "eyre",
  "ipnet",
  "mio",
