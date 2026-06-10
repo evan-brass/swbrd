@@ -78,8 +78,17 @@ import { state } from './src/util.js';
 const config = {
 	iceServers: [{
 		urls: [
+			// This was the old domain I used.
+			// 'turns:stun.evan-brass.net:443?transport=tcp',
+
+			// This domain only has an A dns record, it's only use is if you need exactly 1 ICE candidate for dissolve to work in firefox
+			// 'turns:turn-4only.evan-brass.net:443?transport=tcp',
+
+			'stun:turn.evan-brass.net',
 			'turn:turn.evan-brass.net',
 			'turn:turn.evan-brass.net?transport=tcp',
+			'turns:turn.evan-brass.net?transport=tcp',
+			'turns:turn.evan-brass.net:443?transport=tcp',
 		],
 		username: 'user',
 		credential: 'password',
