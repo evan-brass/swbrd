@@ -1,0 +1,9 @@
+[Unit]
+Description=Rotate the January.der certificate on November 1st each year.
+
+[Timer]
+OnCalendar=0-0-1-11
+Persistent=true
+
+[Install]
+WantedBy=timers.target

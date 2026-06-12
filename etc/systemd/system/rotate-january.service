@@ -1,0 +1,8 @@
+[Unit]
+Description=Rotate the January.der certificate file
+
+[Service]
+User=swbrd
+StateDirectory=swbrd
+WorkingDirectory=/var/lib/swbrd
+ExecStart=/opt/cert-rotate January
