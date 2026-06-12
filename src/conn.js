@@ -1,7 +1,10 @@
 import { cert as default_cert } from './cert.js';
 import { Id } from './id.js';
 import { is_firefox, state } from './util.js';
-import { pid as server_pid } from './deter.js';
+import { sha256, current } from './deter.js';
+
+const current = await certificate();
+const server_pid = Id.from(await sha256(current));
 
 export const defaults = {
 	iceServers: [{
@@ -49,7 +52,10 @@ export class Conn extends RTCPeerConnection {
 	// - TURN can be multiplexed with HTTP
 	// - IPv6 not required for either client or server
 	// - Server doesn't need ipv6 prefix, /128 would work
-	static to_server(urls = "turns:turn.evan-brass.net:443?transport=tcp", config = null) {
+	static to_server(
+		urls = 'turns:turn.evan-brass.net:443?transport=tcp',
+		config = null,
+	) {
 		return new this(server_pid, {
 			iceTransportPolicy: 'relay',
 			iceServers: [{ urls, username: 'user', credential: 'password' }],
@@ -87,7 +93,11 @@ export class Conn extends RTCPeerConnection {
 			// HACK: Firefox is just such a pain in the ass.  In order for ICE-dissolve to work, both sides must pair the same candidates.  The reason for this is because Firefox enforces TURN permissions locally and if it gets successful ICE responses from one pair it likely won't add permissions for the other ICE pairs.  Then when data is received over a different pair it gets dropped.  We can ensure that we only pair 1 candidate by forcing both sides to only generate 1 candidate.  We do this by only allowing relaying and only using 1 ipv4 address for the TURN server.  This fucking sucks.  Ideally this restriction should only be imposed if one or the other peers is a Firefox chud, but you would need to encode that into the peer id or pass it as another argument... lame.
 			adjustment: {
 				iceTransportPolicy: 'relay',
-				iceServers: [{ urls: 'turns:turn-4only.evan-brass.net:443?transport=tcp', username: 'user', credential: 'password' }]
+				iceServers: [{
+					urls: 'turns:turn-4only.evan-brass.net:443?transport=tcp',
+					username: 'user',
+					credential: 'password',
+				}],
 			},
 			...config,
 		});
@@ -199,7 +209,10 @@ export class Conn extends RTCPeerConnection {
 		if (cert_prefix) {
 			const [port, ...segments] = crypto.getRandomValues(new Uint16Array(4));
 			const prefix = cert_prefix + (this.pid & 0xffffn).toString(16);
-			const address = segments.reduce((a, v) => a + ':' + v.toString(16), prefix);
+			const address = segments.reduce(
+				(a, v) => a + ':' + v.toString(16),
+				prefix,
+			);
 			this.addIceCandidate({ address, port: port | 0x8000 });
 		}
 
@@ -221,8 +234,13 @@ export class Conn extends RTCPeerConnection {
 					// HACK: Looks like Chrome is the dumbass in this situation.  It's advertising 'a=setup:actpass' even though the DTLS handshake has already been completed.  Firefox doesn't help us in this situation because it seems to pick 'a=setup:active' by default even though it was passive during setup.
 					// Fuck my life.  We need to replace 'a=setup:actpass' with the actual value as taken from the current description.
 					const description = this.localDescription;
-					const { 0: current_setup } = this.currentLocalDescription.sdp.match(/a=setup:.+/img);
-					description.sdp = description.sdp.replace(/a=setup:actpass/img, current_setup);
+					const { 0: current_setup } = this.currentLocalDescription.sdp.match(
+						/a=setup:.+/img,
+					);
+					description.sdp = description.sdp.replace(
+						/a=setup:actpass/img,
+						current_setup,
+					);
 
 					this.#dc.send(JSON.stringify({ description }));
 				} catch { /* noop */ }
@@ -304,7 +322,7 @@ export class Conn extends RTCPeerConnection {
 		// WEIRD: For some reason, Firefox won't pair the candidate unless it has a related address and port (which are supposed to be optional?)
 		const firefox_hack1 = is_firefox ? ['raddr', '::', 'rport', '0'] : [];
 		// This removes an error in Firefox when the usernameFragment is not recognized
-		const firefox_hack2 = is_firefox ? { usernameFragment: null } : {}
+		const firefox_hack2 = is_firefox ? { usernameFragment: null } : {};
 		// Please Firefox, I beg you to deprecate your impl and just fucking switch to libwebrtc like Safari
 
 		candidate.candidate ??= 'candidate:' + [

@@ -13,12 +13,19 @@ export class Id {
 
 		return new this(val);
 	}
-	constructor(val) { this.#value = val; }
+	constructor(val) {
+		this.#value = val;
+	}
 	get fingerprint() {
-		return this.constructor.hash + ' ' + Array.from(this.#value.toString(16).padStart(Id.bits / 4, '0').matchAll(/[0-9a-f]{2}/ig)).join(':');
+		return this.constructor.hash + ' ' +
+			Array.from(
+				this.#value.toString(16).padStart(Id.bits / 4, '0').matchAll(
+					/[0-9a-f]{2}/ig,
+				),
+			).join(':');
 	}
 	[Symbol.toPrimitive](hint) {
-		if (hint == "string") {
+		if (hint == 'string') {
 			return this.#value.toString(Id.radix);
 		} else {
 			return this.#value;

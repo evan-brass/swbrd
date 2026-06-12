@@ -1,10 +1,9 @@
-import { Id } from "./id.js";
-import { encoder } from "./util.js";
+import { encoder } from './util.js';
 
 // Certificate rotation is mandatory.
 // "Secret" key rotation is optional.
 
-async function sha256(msg) {
+export async function sha256(msg) {
 	const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', msg));
 	let ret = 0n;
 	for (const b of digest) {
@@ -18,8 +17,9 @@ export async function certificate({
 	// Timestamp is 24hr old to allow some clock skew
 	timestamp = Date.now() - 24 * 60 * 60 * 1000,
 	year = new Date(timestamp).getUTCFullYear(),
-	month = timestamp > Date.UTC(year, 6) ? 6 : 0
+	month = timestamp > Date.UTC(year, 6) ? 6 : 0,
 } = {}) {
+	// deno-fmt-ignore
 	const cert = Uint8Array.of(
 		0x30, 0x81, 0xEA,
 		0x30, 0x81, 0x92,
@@ -65,20 +65,10 @@ export async function certificate({
 	v += n;
 	v %= n;
 	if (v > n >> 1n) v = n - v;
-	for (let i = 31; i >= 0; i--) { signature[i] = Number(v & 0xffn); v >>= 8n; }
+	for (let i = 31; i >= 0; i--) {
+		signature[i] = Number(v & 0xffn);
+		v >>= 8n;
+	}
 
 	return cert;
 }
-
-const current = await certificate();
-
-export const pid = Id.from(await sha256(current));
-export const pem = `-----BEGIN PRIVATE KEY-----
-MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgbDryew3NDszNoFMN
-bw4wLqPOIYmMbTAhSf2cEAtEmumhRANCAARhSohS3lfkXh/ALbSs9zHN3zT2QsFm
-cMGomGVzbQI9+5/a5NENiskkDMjLTjdg+2IbeObV90kZvYFxhTU+p8Cz
------END PRIVATE KEY-----
------BEGIN CERTIFICATE-----
-${btoa(String.fromCharCode(current)).match(/.{1,64}/g).join('\n')}
------END CERTIFICATE-----
-`;

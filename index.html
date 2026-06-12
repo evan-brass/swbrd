@@ -1,54 +1,75 @@
 <!DOCTYPE html>
-<script type="importmap">{
+<script type="importmap">
+{
 	"imports": {
 		"swbrd/": "./src/"
 	}
-}</script>
-<script>
-// Log everything.
-async function log_everything(conns) {
-	for (const key in conns) {
-		const conn = conns[key];
-		function logger(...args) {
-			console.log(key, ...args);
-		}
-		if (conn.dc) {
-			['message', 'open', 'close'].forEach((e) =>
-				conn.dc.addEventListener(e, logger)
-			);
-		}
-		[
-			'connectionState',
-			'iceConnectionState',
-			'iceGatheringState',
-			'signalingState',
-		].forEach((p) => {
-			conn.addEventListener(
-				p.toLowerCase() + 'change',
-				() => logger(p, conn[p]),
-			);
-		});
-		[
-			'icecandidate',
-			'candidate',
-			'datachannel',
-			'icecandidateerror',
-			'negotiationneeded',
-			'track',
-		].forEach((e) => {
-			conn.addEventListener(e, logger);
-		});
-
-		while (!conn.sctp) {
-			await new Promise(res => conn.addEventListener('signalingstatechange', res, { once: true }));
-		}
-		conn.sctp.addEventListener('statechange', ({ target: { state } }) => logger('sctp state', state));
-		conn.sctp.transport.addEventListener('error', ({ error }) => logger('dtls error', error));
-		conn.sctp.transport.iceTransport.addEventListener('gatheringstatechange', ({ target: { gatheringState } }) => logger('ice transport gatheringState', gatheringState));
-		conn.sctp.transport.iceTransport.addEventListener('statechange', ({ target: { state } }) => logger('ice transport state', state));
-		conn.sctp.transport.iceTransport.addEventListener('selectedcandidatepairchange', ({ target }) => logger('ice transport selected', target.getSelectedCandidatePair()));
-	}
 }
+</script>
+<script>
+	// Log everything.
+	async function log_everything(conns) {
+		for (const key in conns) {
+			const conn = conns[key];
+			function logger(...args) {
+				console.log(key, ...args);
+			}
+			if (conn.dc) {
+				['message', 'open', 'close'].forEach((e) =>
+					conn.dc.addEventListener(e, logger)
+				);
+			}
+			[
+				'connectionState',
+				'iceConnectionState',
+				'iceGatheringState',
+				'signalingState',
+			].forEach((p) => {
+				conn.addEventListener(
+					p.toLowerCase() + 'change',
+					() => logger(p, conn[p]),
+				);
+			});
+			[
+				'icecandidate',
+				'candidate',
+				'datachannel',
+				'icecandidateerror',
+				'negotiationneeded',
+				'track',
+			].forEach((e) => {
+				conn.addEventListener(e, logger);
+			});
+
+			while (!conn.sctp) {
+				await new Promise((res) =>
+					conn.addEventListener('signalingstatechange', res, { once: true })
+				);
+			}
+			conn.sctp.addEventListener(
+				'statechange',
+				({ target: { state } }) => logger('sctp state', state),
+			);
+			conn.sctp.transport.addEventListener(
+				'error',
+				({ error }) => logger('dtls error', error),
+			);
+			conn.sctp.transport.iceTransport.addEventListener(
+				'gatheringstatechange',
+				({ target: { gatheringState } }) =>
+					logger('ice transport gatheringState', gatheringState),
+			);
+			conn.sctp.transport.iceTransport.addEventListener(
+				'statechange',
+				({ target: { state } }) => logger('ice transport state', state),
+			);
+			conn.sctp.transport.iceTransport.addEventListener(
+				'selectedcandidatepairchange',
+				({ target }) =>
+					logger('ice transport selected', target.getSelectedCandidatePair()),
+			);
+		}
+	}
 </script>
 <script type="_module">
 import { Conn } from 'swbrd/conn.js';
@@ -74,46 +95,50 @@ b.addEventListener('candidate', ({candidate}) => a.addIceCandidate(candidate));
 log_everything({a, b});
 </script>
 <script type="module">
-import { state } from './src/util.js';
-const config = {
-	iceServers: [{
-		urls: [
-			// This was the old domain I used.
-			// 'turns:stun.evan-brass.net:443?transport=tcp',
+	import { state } from './src/util.js';
+	const config = {
+		iceServers: [{
+			urls: [
+				// This was the old domain I used.
+				// 'turns:stun.evan-brass.net:443?transport=tcp',
 
-			// This domain only has an A dns record, it's only use is if you need exactly 1 ICE candidate for dissolve to work in firefox
-			// 'turns:turn-4only.evan-brass.net:443?transport=tcp',
+				// This domain only has an A dns record, it's only use is if you need exactly 1 ICE candidate for dissolve to work in firefox
+				// 'turns:turn-4only.evan-brass.net:443?transport=tcp',
 
-			'stun:turn.evan-brass.net',
-			'turn:turn.evan-brass.net',
-			'turn:turn.evan-brass.net?transport=tcp',
-			'turns:turn.evan-brass.net?transport=tcp',
-			'turns:turn.evan-brass.net:443?transport=tcp',
-		],
-		username: 'user',
-		credential: 'password',
-	}],
-	iceTransportPolicy: 'relay',
-};
+				'stun:turn.evan-brass.net',
+				'turn:turn.evan-brass.net',
+				'turn:turn.evan-brass.net?transport=tcp',
+				'turns:turn.evan-brass.net?transport=tcp',
+				'turns:turn.evan-brass.net:443?transport=tcp',
+			],
+			username: 'user',
+			credential: 'password',
+		}],
+		iceTransportPolicy: 'relay',
+	};
 
-const a = new RTCPeerConnection(config);
-const b = new RTCPeerConnection(config);
+	const a = new RTCPeerConnection(config);
+	const b = new RTCPeerConnection(config);
 
-log_everything({a, b});
+	log_everything({ a, b });
 
-a.createDataChannel('');
+	a.createDataChannel('');
 
-function dissolve({type, sdp}) {
-	const new_sdp = sdp
-		.replace(/a=ice-ufrag:.+/img, "a=ice-ufrag:dissolve")
-		.replace(/a=ice-pwd:.+/img, "a=ice-pwd:the/ice/password/constant");
-	return {type, sdp: new_sdp};
-}
+	function dissolve({ type, sdp }) {
+		const new_sdp = sdp
+			.replace(/a=ice-ufrag:.+/img, 'a=ice-ufrag:dissolve')
+			.replace(/a=ice-pwd:.+/img, 'a=ice-pwd:the/ice/password/constant');
+		return { type, sdp: new_sdp };
+	}
 
-await a.setLocalDescription();
-while (a.iceGatheringState != 'complete') await state({ icegatheringstatechange: a });
-await b.setRemoteDescription(dissolve(a.localDescription));
-await b.setLocalDescription();
-while (b.iceGatheringState != 'complete') await state({ icegatheringstatechange: b });
-await a.setRemoteDescription(dissolve(b.localDescription));
+	await a.setLocalDescription();
+	while (a.iceGatheringState != 'complete') {
+		await state({ icegatheringstatechange: a });
+	}
+	await b.setRemoteDescription(dissolve(a.localDescription));
+	await b.setLocalDescription();
+	while (b.iceGatheringState != 'complete') {
+		await state({ icegatheringstatechange: b });
+	}
+	await a.setRemoteDescription(dissolve(b.localDescription));
 </script>
