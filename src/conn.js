@@ -1,10 +1,10 @@
 import { cert as default_cert } from './cert.js';
 import { Id } from './id.js';
 import { is_firefox, state } from './util.js';
-import { sha256, current } from './deter.js';
+import { sha256, certificate } from './deter.js';
 
 const current = await certificate();
-const server_pid = Id.from(await sha256(current));
+const deter_pid = Id.from(await sha256(current));
 
 export const defaults = {
 	iceServers: [{
@@ -56,7 +56,7 @@ export class Conn extends RTCPeerConnection {
 		urls = 'turns:turn.evan-brass.net:443?transport=tcp',
 		config = null,
 	) {
-		return new this(server_pid, {
+		return new this(deter_pid, {
 			iceTransportPolicy: 'relay',
 			iceServers: [{ urls, username: 'user', credential: 'password' }],
 			setup: 'passive',
@@ -68,7 +68,7 @@ export class Conn extends RTCPeerConnection {
 	// - Client must have IPv6
 	// - Server must have IPv6 /64
 	static to_server_direct(cert_prefix = '2a01:4ff:1f0:7e46:', config = null) {
-		return new this(server_pid, {
+		return new this(deter_pid, {
 			iceServers: [],
 			setup: 'passive',
 			cert_prefix,
@@ -103,7 +103,7 @@ export class Conn extends RTCPeerConnection {
 		});
 	}
 
-	constructor(peerid, {
+	constructor(peerid = deter_pid, {
 		pid = Id.from(peerid),
 		cert = default_cert,
 		polite = cert.id < pid,

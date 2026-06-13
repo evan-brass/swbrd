@@ -1,0 +1,15 @@
+[package]
+name = "dtls-proxy"
+version = "0.1.0"
+edition = "2024"
+license = "MIT-0"
+
+[dependencies]
+common = { path = "../common" }
+clap = { version = "4.4", features = ["derive"] }
+eyre = "0.6.12"
+openssl = "0.10.80"
+tracing = "0.1.41"
+tracing-subscriber = { version = "0.3.19", features = ["env-filter"] }
+tun-rs = "2.8.3"
+zerocopy = { version = "0.8.50", features = ["derive"] }

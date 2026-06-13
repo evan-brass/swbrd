@@ -2,6 +2,7 @@
 resolver = "3"
 members = [
 	"crates/common",
+	"crates/dtls-proxy",
 	"crates/ice-dissolve",
 	"crates/stun",
 	"crates/turnserver"
