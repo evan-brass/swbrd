@@ -112,6 +112,7 @@ export class Conn extends RTCPeerConnection {
 		timeout = 10_000,
 		adjustment = null,
 		cert_prefix = false,
+		sctp_port = 5000,
 		...config
 	} = {}) {
 		super({
@@ -146,6 +147,7 @@ export class Conn extends RTCPeerConnection {
 			adjustment,
 			setup,
 			cert_prefix,
+			sctp_port
 		}).catch((e) => {
 			console.error(e);
 			this.close();
@@ -153,7 +155,7 @@ export class Conn extends RTCPeerConnection {
 	}
 
 	async #signaling_task(
-		{ polite, config, adjustment, setup, cert_prefix },
+		{ polite, config, adjustment, setup, cert_prefix, sctp_port },
 	) {
 		// Prepare for renegotiation
 		let negotiation_needed = false;
@@ -196,7 +198,7 @@ export class Conn extends RTCPeerConnection {
 				'a=bundle-only',
 				'a=mid:dc',
 				`a=setup:${setup}`,
-				'a=sctp-port:5000',
+				`a=sctp-port:${sctp_port}`,
 				'',
 			].join('\n'),
 		});
