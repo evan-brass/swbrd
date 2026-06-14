@@ -74,8 +74,7 @@
 <script type="_module">
 import { Conn } from 'swbrd/conn.js';
 
-const h = Conn.to_server();
-// const h = Conn.to_server_direct();
+const h = await Conn.to_deter();
 log_everything({ h });
 </script>
 <script type="_module">

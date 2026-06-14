@@ -1,21 +1,35 @@
 use std::{
 	collections::{BTreeMap, VecDeque, btree_map::Entry},
-	fs,
 	io::{self, ErrorKind, IoSlice, IoSliceMut, Read, Write},
-	net::Ipv6Addr,
+	net::SocketAddrV6,
 	rc::Rc,
+	str::FromStr,
+	time::{Duration, Instant},
 };
 
+use clap::Parser;
 use common::{Ip6, Udp, VNET, VirtioNet, full_checksum, partial_checksum};
-use eyre::{Result, eyre};
-use openssl::{
-	hash::MessageDigest,
-	pkey::PKey,
-	ssl::{ErrorCode, Ssl, SslAcceptor, SslMethod, SslStream},
-	x509::X509,
-};
+use eyre::Result;
+use openssl::ssl::{ErrorCode, Ssl, SslAcceptor, SslFiletype, SslMethod, SslStream};
+use tracing_subscriber::EnvFilter;
 use tun_rs::{DeviceBuilder, SyncDevice};
 use zerocopy::{FromZeros, IntoBytes, network_endian::U16};
+
+#[derive(Parser)]
+#[command(version, about)]
+struct Args {
+	#[arg(long, short, default_value = "key.pem")]
+	key: String,
+
+	#[arg(long, short, default_value = "January.der")]
+	cert: String,
+
+	#[arg(long, short)]
+	if_name: Option<String>,
+
+	#[arg(long, short, default_value = "[::1]:9899")]
+	endpoint: String,
+}
 
 struct Bio {
 	// This is what we key our BTree with
@@ -25,6 +39,8 @@ struct Bio {
 
 	recv: VecDeque<u8>,
 	send: Rc<SyncDevice>,
+
+	last_update: Instant,
 }
 impl Read for Bio {
 	fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
@@ -63,55 +79,52 @@ impl Write for Bio {
 			IoSlice::new(udp.as_bytes()),
 			IoSlice::new(buf),
 		])?;
+
+		// TODO: It would probably be better to update this somewhere else
+		self.last_update = Instant::now();
+
 		Ok(buf.len())
 	}
 }
 
 type Never = core::convert::Infallible;
 fn main() -> Result<Never> {
+	// Enable logging
+	tracing_subscriber::fmt()
+		.with_env_filter(EnvFilter::from_default_env())
+		.init();
+
+	// Parse command line arguments
+	let args = Args::try_parse()?;
+
+	// Parse the endpoint address
+	// This IP is the destination and source of all plaintext
+	let endpoint = SocketAddrV6::from_str(&args.endpoint)?;
+	let endpoint = (endpoint.ip().octets(), U16::new(endpoint.port()));
+
 	// Setup the TUN interface
 	let network = {
-		#[allow(unused_mut)]
 		let mut builder = DeviceBuilder::new();
 		#[cfg(target_os = "linux")]
 		{
 			builder = builder.offload(true); // I'm not trying to do segmentation offloading, I'm only trying to do checksum offloading, but...
 		}
+		if let Some(if_name) = args.if_name {
+			builder = builder.name(if_name);
+		}
 
 		Rc::new(builder.build_sync()?)
 	};
 
-	// Load current certificate
-	let key_pem = fs::read("key.pem")?;
-	let cert_der = fs::read("January.der")?;
-
 	// Construct an acceptor and apply it
 	let mut acceptor = SslAcceptor::mozilla_modern(SslMethod::dtls())?;
-	let pkey = PKey::private_key_from_pem(&key_pem)?;
-	let cert = X509::from_der(&cert_der)?;
-	acceptor.set_private_key(&pkey)?;
-	acceptor.set_certificate(&cert)?;
+	acceptor.set_private_key_file(&args.key, SslFiletype::PEM)?;
+	acceptor.set_certificate_file(&args.cert, SslFiletype::ASN1)?;
 	acceptor.check_private_key()?;
-
-	// Get the fingerprint of the cert
-	let fingerprint = cert.digest(MessageDigest::sha256())?;
-	let low16 = u16::from_be_bytes(*fingerprint.last_chunk().ok_or(eyre!("Wat??"))?);
-
-	// Apply addresses on the TUN interface matching our certificate subnet(s)
-	network.add_address_v6(Ipv6Addr::new(0xfd01, 0, 0, 0, low16, 0, 0, 0), 80)?;
-	network.add_address_v6(
-		Ipv6Addr::new(0x2a01, 0x4ff, 0x1f0, 0x7e46, low16, 0, 0, 0),
-		80,
-	)?;
-
-	// This IP is the destination and source of all plaintext
-	let endpoint = (
-		Ipv6Addr::new(0x2a01, 0x4ff, 0x1f0, 0x7e46, 0, 0, 0, 1).octets(),
-		U16::new(9899),
-	);
 
 	let context = acceptor.build().into_context();
 	let mut streams = BTreeMap::new();
+	let mut next_cleanup = 10;
 
 	let mut buffer = vec![0; 65536];
 	let mut vnet = VirtioNet::new_zeroed();
@@ -162,6 +175,7 @@ fn main() -> Result<Never> {
 						send_to,
 						recv: VecDeque::from(Vec::from(data)),
 						send: network.clone(),
+						last_update: Instant::now(),
 					},
 				)?;
 
@@ -235,6 +249,13 @@ fn main() -> Result<Never> {
 				IoSlice::new(udp.as_bytes()),
 				IoSlice::new(data),
 			]);
+		}
+
+		// Handle cleaning up old connections
+		let max_age = Duration::from_mins(5);
+		if streams.len() > next_cleanup {
+			streams.retain(|_, stream| stream.get_ref().last_update.elapsed() < max_age);
+			next_cleanup = streams.len() + 10;
 		}
 	}
 }

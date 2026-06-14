@@ -3,7 +3,7 @@ import { encoder } from './util.js';
 // Certificate rotation is mandatory.
 // "Secret" key rotation is optional.
 
-export async function sha256(msg) {
+async function sha256(msg) {
 	const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', msg));
 	let ret = 0n;
 	for (const b of digest) {
@@ -13,6 +13,12 @@ export async function sha256(msg) {
 	return ret;
 }
 
+class Deter extends Uint8Array {
+	year;
+	month;
+	pid;
+}
+
 export async function certificate({
 	// Timestamp is 24hr old to allow some clock skew
 	timestamp = Date.now() - 24 * 60 * 60 * 1000,
@@ -20,7 +26,7 @@ export async function certificate({
 	month = timestamp > Date.UTC(year, 6) ? 6 : 0,
 } = {}) {
 	// deno-fmt-ignore
-	const cert = Uint8Array.of(
+	const cert = Deter.of(
 		0x30, 0x81, 0xEA,
 		0x30, 0x81, 0x92,
 		0x02, 0x01, 0x01,
@@ -48,6 +54,8 @@ export async function certificate({
 		0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
 		0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
 	);
+	cert.year = year;
+	cert.month = month;
 
 	const not_before = cert.subarray(27, 33);
 	const not_after = cert.subarray(44, 50);
@@ -69,6 +77,8 @@ export async function certificate({
 		signature[i] = Number(v & 0xffn);
 		v >>= 8n;
 	}
+
+	cert.pid = await sha256(cert);
 
 	return cert;
 }

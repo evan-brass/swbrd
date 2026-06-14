@@ -1,0 +1,14 @@
+[Unit]
+Description=DTLS proxy that uses destination IP+port as the connection id
+After=network-online.target
+
+[Install]
+WantedBy=multi-user.target
+
+[Service]
+User=swbrd
+StateDirectory=swbrd
+WorkingDirectory=/var/lib/swbrd
+Environment=RUST_BACKTRACE="full"
+Environment=RUST_LOG="trace"
+ExecStart=/opt/dtls-proxy -c July.der -i dtls-july -e [2a01:4ff:1f0:7e46::1]:9899

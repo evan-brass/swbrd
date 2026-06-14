@@ -7,19 +7,15 @@
  * We need to reconstruct the ssl config with the new certificate once it has been rotated.  I'm planning on using a signal here, maybe SIGHUP or SIGUSR1.
  *
  * 2026                                            2027                                            2028
- * Jan Feb Mar Apr May Jun Jul Aug Sep Oct Nov Dec Jan Feb Mar Apr May Jun Jul Aug Sep Oct Nov Dec Jan Feb Mar Apr May Jun Jul Aug Sep Oct Nov Dec
- * |--->-----------------CERT1-x-----------^---....|
- *                         |--->-----------------CERT2-x-----------^---....|
- *                                                 |--->-----------------CERT3-x-----------^---....|
- *                                                                         |--->-----------------CERT4-x-----------^---....|
- *                                                                                                 |--->-----------------CERT5-x-----------^---....|
- * (->-) is when all clients should have switched to the next certificate
- * (-x-) is when we send SIGUSR1 to tell dtls-proxy to no longer accept new connections
- * (-^-) is when we should rotate the certificate from CERTx to CERTx+2
- * (...) is when we should
+ * Jan Feb Mar Apr May Jun Jul Aug Sep Oct Nov Dec Jan Feb Mar Apr May Jun Jul Aug Sep Oct Nov Dec Jan Feb Mar Apr May Jun Jul Aug Sep Oct Nov Dec J
+ * |->------------------Jan 2026--------------<....|->------------------Jan 2027--------------<....|->------------------Jan 2028--------------<....|
+ * -------------------<....|->------------------Jul 2026--------------<....|->------------------Jul 2027--------------<....|->------------------Jul
+ * (->-) is when all clients should have switched to the next certificate since they pick the the latest certificate that is at least 24hr old
+ * (-< ) is when we should send SIGHUP to load the next certificate.
+ * (...) is when clients won't be able to connect to this DTLS process because the new certificate is not yet valid (Not Before)
  */
 
-import { certificate, sha256 } from '../src/deter.js';
+import { certificate } from '../src/deter.js';
 
 const [month_name] = Deno.args;
 if (!['January', 'July'].includes(month_name)) {
@@ -47,9 +43,4 @@ const cert = await certificate({
 	month,
 });
 
-const fingerprint = await sha256(cert);
-const low16 = (fingerprint & 0xffffn).toString(16);
-
-const cert_path = `cert-${low16}.der`;
-await Deno.writeFile(cert_path, cert);
-await Deno.link(cert_path, month_name + '.der');
+await Deno.writeFile(month_name + '.der', cert);

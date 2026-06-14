@@ -1,10 +1,7 @@
 import { cert as default_cert } from './cert.js';
 import { Id } from './id.js';
 import { is_firefox, state } from './util.js';
-import { sha256, certificate } from './deter.js';
-
-const current = await certificate();
-const deter_pid = Id.from(await sha256(current));
+import { certificate } from './deter.js';
 
 export const defaults = {
 	iceServers: [{
@@ -48,33 +45,34 @@ export class Conn extends RTCPeerConnection {
 		return this.#pid;
 	}
 
-	// Make a connection to a TURN server, then use cert prefix mechanism using private ipv6 address space fd01::/64
-	// - TURN can be multiplexed with HTTP
-	// - IPv6 not required for either client or server
-	// - Server doesn't need ipv6 prefix, /128 would work
-	static to_server(
-		urls = 'turns:turn.evan-brass.net:443?transport=tcp',
+	// Make a connection to a server that's using the deterministic certificate
+	// - Prefix is roughly a /95
+	// - We use 1 bit to signal whether we are connecting to the January or July certificate giving a /96
+	// - 32 bits of randomness completes the ip address + 15 bits of randomness gives us the port
+	static async to_deter(
+		prefix = Uint16Array.of(0x2a01, 0x4ff, 0x1f0, 0x7e46, 0, 4, 0, 0),
 		config = null,
 	) {
-		return new this(deter_pid, {
-			iceTransportPolicy: 'relay',
-			iceServers: [{ urls, username: 'user', credential: 'password' }],
+		const current = await certificate();
+
+		const ret = new this(current.pid, {
 			setup: 'passive',
-			cert_prefix: 'fd01::',
 			...config,
 		});
+
+		const [a, b, port] = crypto.getRandomValues(new Uint16Array(3));
+		prefix[6] = a;
+		prefix[7] = b;
+		if (current.month == 6) {
+			// TODO: This isn't quite the same thing as using masks... is that a problem?
+			prefix[5] += 1;
+		}
+		const address = Array.from(prefix, n => n.toString(16)).join(':');
+		ret.addIceCandidate({ address, port: port | 0x8000 });
+
+		return ret;
 	}
-	// Make a direct connection to a server using the cert-prefix mechanism
-	// - Client must have IPv6
-	// - Server must have IPv6 /64
-	static to_server_direct(cert_prefix = '2a01:4ff:1f0:7e46:', config = null) {
-		return new this(deter_pid, {
-			iceServers: [],
-			setup: 'passive',
-			cert_prefix,
-			...config,
-		});
-	}
+
 	// Make a connection between two Chrome browsers
 	// - Chrome <-> Chrome via fixup
 	static with_candidates(peerid, config = null) {
@@ -111,7 +109,6 @@ export class Conn extends RTCPeerConnection {
 		setup = polite ? 'active' : 'passive',
 		timeout = 10_000,
 		adjustment = null,
-		cert_prefix = false,
 		sctp_port = 5000,
 		...config
 	} = {}) {
@@ -146,7 +143,6 @@ export class Conn extends RTCPeerConnection {
 			config,
 			adjustment,
 			setup,
-			cert_prefix,
 			sctp_port
 		}).catch((e) => {
 			console.error(e);
@@ -155,7 +151,7 @@ export class Conn extends RTCPeerConnection {
 	}
 
 	async #signaling_task(
-		{ polite, config, adjustment, setup, cert_prefix, sctp_port },
+		{ polite, config, adjustment, setup, sctp_port },
 	) {
 		// Prepare for renegotiation
 		let negotiation_needed = false;
@@ -205,18 +201,6 @@ export class Conn extends RTCPeerConnection {
 
 		// TODO: I'm worried that the sctp-port in the local description might change in the future...  Currently this is the only assumption that I'm aware of, everything else has been setup in the original offer.
 		await super.setLocalDescription();
-
-		// The cert prefix mechanism combines 16 bits from the pid with a /64 to get a /80 within which we add a random ip+port ICE candidate.
-		// Why would you do this?  Because the destination ip+port can act as a connection identifier since WebRTC doesn't support DTLS CID
-		if (cert_prefix) {
-			const [port, ...segments] = crypto.getRandomValues(new Uint16Array(4));
-			const prefix = cert_prefix + (this.pid & 0xffffn).toString(16);
-			const address = segments.reduce(
-				(a, v) => a + ':' + v.toString(16),
-				prefix,
-			);
-			this.addIceCandidate({ address, port: port | 0x8000 });
-		}
 
 		// Switchover into handling renegotiation
 		for (; ;) {
