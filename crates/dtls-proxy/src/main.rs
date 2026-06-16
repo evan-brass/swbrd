@@ -4,13 +4,17 @@ use std::{
 	net::SocketAddrV6,
 	rc::Rc,
 	str::FromStr,
+	sync::{
+		Arc,
+		atomic::{AtomicBool, Ordering},
+	},
 	time::{Duration, Instant},
 };
 
 use clap::Parser;
 use common::{Ip6, Udp, VNET, VirtioNet, full_checksum, partial_checksum};
 use eyre::Result;
-use openssl::ssl::{ErrorCode, Ssl, SslAcceptor, SslFiletype, SslMethod, SslStream};
+use openssl::ssl::{ErrorCode, Ssl, SslAcceptor, SslContext, SslFiletype, SslMethod, SslStream};
 use tracing_subscriber::EnvFilter;
 use tun_rs::{DeviceBuilder, SyncDevice};
 use zerocopy::{FromZeros, IntoBytes, network_endian::U16};
@@ -18,12 +22,6 @@ use zerocopy::{FromZeros, IntoBytes, network_endian::U16};
 #[derive(Parser)]
 #[command(version, about)]
 struct Args {
-	#[arg(long, short, default_value = "key.pem")]
-	key: String,
-
-	#[arg(long, short, default_value = "January.der")]
-	cert: String,
-
 	#[arg(long, short)]
 	if_name: Option<String>,
 
@@ -87,6 +85,28 @@ impl Write for Bio {
 	}
 }
 
+fn load_config() -> Result<(SslContext, SslContext)> {
+	// Construct an acceptor and apply it
+	let january = {
+		let mut acceptor = SslAcceptor::mozilla_modern(SslMethod::dtls())?;
+		acceptor.set_private_key_file("key.pem", SslFiletype::PEM)?;
+		acceptor.set_certificate_file("January.der", SslFiletype::ASN1)?;
+		acceptor.check_private_key()?;
+		acceptor.build().into_context()
+	};
+	let july = {
+		let mut acceptor = SslAcceptor::mozilla_modern(SslMethod::dtls())?;
+		acceptor.set_private_key_file("key.pem", SslFiletype::PEM)?;
+		acceptor.set_certificate_file("July.der", SslFiletype::ASN1)?;
+		acceptor.check_private_key()?;
+		acceptor.build().into_context()
+	};
+
+	println!("Configuration loaded");
+
+	Ok((january, july))
+}
+
 type Never = core::convert::Infallible;
 fn main() -> Result<Never> {
 	// Enable logging
@@ -116,13 +136,10 @@ fn main() -> Result<Never> {
 		Rc::new(builder.build_sync()?)
 	};
 
-	// Construct an acceptor and apply it
-	let mut acceptor = SslAcceptor::mozilla_modern(SslMethod::dtls())?;
-	acceptor.set_private_key_file(&args.key, SslFiletype::PEM)?;
-	acceptor.set_certificate_file(&args.cert, SslFiletype::ASN1)?;
-	acceptor.check_private_key()?;
+	let (mut even, mut odd) = load_config()?;
+	let need_reconfig = Arc::new(AtomicBool::new(true));
+	signal_hook::flag::register(signal_hook::consts::SIGHUP, need_reconfig.clone())?;
 
-	let context = acceptor.build().into_context();
 	let mut streams = BTreeMap::new();
 	let mut next_cleanup = 10;
 
@@ -131,12 +148,19 @@ fn main() -> Result<Never> {
 	let mut ip = Ip6::new_zeroed();
 	let mut udp = Udp::new_zeroed();
 	loop {
-		let len = network.recv_vectored(&mut [
+		if need_reconfig.swap(false, Ordering::Relaxed) {
+			(even, odd) = load_config()?;
+		}
+		let len = match network.recv_vectored(&mut [
 			IoSliceMut::new(&mut vnet.as_mut_bytes()[..VNET]),
 			IoSliceMut::new(&mut ip.as_mut_bytes()),
 			IoSliceMut::new(&mut udp.as_mut_bytes()),
 			IoSliceMut::new(&mut buffer),
-		])?;
+		]) {
+			Ok(n) => n,
+			Err(e) if e.kind() == ErrorKind::Interrupted => continue,
+			Err(e) => return Err(e.into()),
+		};
 		if len < VNET + size_of::<Ip6>() + size_of::<Udp>() {
 			continue;
 		}
@@ -166,7 +190,11 @@ fn main() -> Result<Never> {
 
 			// Create a new SSL to hold this packet.  I really wish I could have DTLS cookies, but fucking Firefox is a piece of shit.
 			Entry::Vacant(e) => {
-				let mut ssl = Ssl::new(&context)?;
+				let mut ssl = Ssl::new(if udp.dst_port.get() & 0b1 == 0 {
+					&even
+				} else {
+					&odd
+				})?;
 				ssl.set_accept_state();
 				let stream = SslStream::new(
 					ssl,

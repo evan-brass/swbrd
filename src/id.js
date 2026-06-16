@@ -5,7 +5,7 @@ export class Id {
 	static radix = 36;
 	static hash = 'sha-256';
 	static bits = 256;
-	static MAX_ID = 2n ** BigInt(this.bits);
+	static MAX_ID = 2n ** BigInt(this.bits) - 1n;
 	static from(val) {
 		if (typeof val == 'string') val = parseBigInt(val, this.radix);
 		if (typeof val != 'bigint') val = BigInt(val);

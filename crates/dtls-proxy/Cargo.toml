@@ -13,3 +13,4 @@ tracing = "0.1.41"
 tracing-subscriber = { version = "0.3.19", features = ["env-filter"] }
 tun-rs = "2.8.3"
 zerocopy = { version = "0.8.50", features = ["derive"] }
+signal-hook = "0.4.4"

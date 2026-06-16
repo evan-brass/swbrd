@@ -15,7 +15,7 @@
  * (...) is when clients won't be able to connect to this DTLS process because the new certificate is not yet valid (Not Before)
  */
 
-import { certificate } from '../src/deter.js';
+import { Deter } from '../src/deter.js';
 
 const [month_name] = Deno.args;
 if (!['January', 'July'].includes(month_name)) {
@@ -38,7 +38,7 @@ const year = {
 	July: timestamp < Date.UTC(current_year, 4) ? current_year - 1 : current_year,
 }[month_name];
 
-const cert = await certificate({
+const cert = await Deter.generate({
 	year,
 	month,
 });

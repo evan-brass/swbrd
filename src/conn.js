@@ -1,7 +1,7 @@
 import { cert as default_cert } from './cert.js';
 import { Id } from './id.js';
 import { is_firefox, state } from './util.js';
-import { certificate } from './deter.js';
+import { Deter } from './deter.js';
 
 export const defaults = {
 	iceServers: [{
@@ -50,25 +50,17 @@ export class Conn extends RTCPeerConnection {
 	// - We use 1 bit to signal whether we are connecting to the January or July certificate giving a /96
 	// - 32 bits of randomness completes the ip address + 15 bits of randomness gives us the port
 	static async to_deter(
-		prefix = Uint16Array.of(0x2a01, 0x4ff, 0x1f0, 0x7e46, 0, 4, 0, 0),
+		base = Uint16Array.of(0x2a01, 0x4ff, 0x1f0, 0x7e46, 0, 4, 0, 0),
 		config = null,
 	) {
-		const current = await certificate();
+		const current = await Deter.generate();
 
 		const ret = new this(current.pid, {
 			setup: 'passive',
 			...config,
 		});
 
-		const [a, b, port] = crypto.getRandomValues(new Uint16Array(3));
-		prefix[6] = a;
-		prefix[7] = b;
-		if (current.month == 6) {
-			// TODO: This isn't quite the same thing as using masks... is that a problem?
-			prefix[5] += 1;
-		}
-		const address = Array.from(prefix, n => n.toString(16)).join(':');
-		ret.addIceCandidate({ address, port: port | 0x8000 });
+		ret.addIceCandidate(current.candidate(base));
 
 		return ret;
 	}
