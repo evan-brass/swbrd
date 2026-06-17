@@ -471,6 +471,7 @@ fn handle_turn<'i>(
 		.parse::<{ known::NONCE }, str>(&mut nonce)
 		.parse::<{ known::REQUESTED_TRANSPORT }, [u8; 4]>(&mut transport);
 
+	let mut unk = Vec::new();
 	msg.length.set(U16::new(0));
 	for (prefix, attr) in attrs {
 		match attr.typ {
@@ -479,7 +480,7 @@ fn handle_turn<'i>(
 				break;
 			}
 			_ if attr.is_optional() => {}
-			t => todo!("Unknown Attributes error response {t:?}"),
+			t => unk.push(t),
 		}
 	}
 
@@ -505,6 +506,14 @@ fn handle_turn<'i>(
 	};
 
 	match msg.method {
+		Method::Allocate if !unk.is_empty() => {
+			msg.class = Class::Response;
+			msg.method = msg.method.to_err();
+			msg.length.get_mut().set(0);
+			msg.append_val(known::UNKNOWN_ATTRIBUTES, unk.as_slice());
+		}
+		_ if !unk.is_empty() => return Ok(None),
+
 		Method::Bind => {
 			msg.class = Class::Response;
 			msg.length.get_mut().set(0);
