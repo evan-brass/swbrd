@@ -85,7 +85,7 @@ fn main() -> Result<Never> {
 
 		vnet = partial_checksum(&ip, &mut udp);
 		if VNET == 0 {
-			full_checksum(&mut udp, frame);
+			full_checksum(&mut udp, &[frame]);
 		}
 		let vnet = &vnet.as_bytes()[..VNET];
 		network.send_vectored(&[

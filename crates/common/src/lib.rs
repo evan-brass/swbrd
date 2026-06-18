@@ -116,18 +116,22 @@ pub fn partial_checksum<N: Ipsum>(ip: &Ip6, next: &mut N) -> VirtioNet {
 	}
 }
 
-pub fn full_checksum<N: Ipsum>(next: &mut N, data: &[u8]) {
-	let (chunks, rest) = data.as_chunks();
-	let mut last = [0; 4];
-	last[4 - rest.len()..].copy_from_slice(rest);
-
+pub fn full_checksum<N: Ipsum>(next: &mut N, pieces: &[&[u8]]) {
 	let [u1, u2]: &[u32; 2] = transmute_ref!(next);
-
 	let mut sum: u64 = *u1 as u64 + *u2 as u64;
-	for c in chunks {
-		sum += u32::from_ne_bytes(*c) as u64;
+
+	for piece in pieces {
+		// TODO: Add an assertion to ensure 2-byte alignment of the pieces.  For non-final pieces, rest must be empty or [u8; 2].  The final piece may be empty, [u8; 1], [u8; 2], or [u8; 3].
+		let (chunks, rest) = piece.as_chunks();
+
+		let mut last = [0; 4];
+		last[4 - rest.len()..].copy_from_slice(rest);
+
+		for c in chunks {
+			sum += u32::from_ne_bytes(*c) as u64;
+		}
+		sum += u32::from_ne_bytes(last) as u64;
 	}
-	sum += u32::from_ne_bytes(last) as u64;
 
 	while sum > 0xFFFF {
 		sum = (sum & 0xffff) + (sum >> 16);

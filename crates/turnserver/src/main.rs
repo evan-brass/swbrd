@@ -541,7 +541,7 @@ fn handle_turn<'i>(
 
 			let vnet = partial_checksum(&ip, &mut udp);
 			if VNET == 0 {
-				full_checksum(&mut udp, data);
+				full_checksum(&mut udp, &[data]);
 			}
 			let vnet = &vnet.as_bytes()[..VNET];
 			network.send_vectored(&[

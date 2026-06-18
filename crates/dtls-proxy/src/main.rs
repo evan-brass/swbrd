@@ -69,7 +69,7 @@ impl Write for Bio {
 		};
 		let vnet = partial_checksum(&ip, &mut udp);
 		if VNET == 0 {
-			full_checksum(&mut udp, buf);
+			full_checksum(&mut udp, &[buf]);
 		}
 		self.send.send_vectored(&[
 			IoSlice::new(&vnet.as_bytes()[..VNET]),
@@ -268,7 +268,7 @@ fn main() -> Result<Never> {
 			};
 			let vnet = partial_checksum(&ip, &mut udp);
 			if VNET == 0 {
-				full_checksum(&mut udp, data);
+				full_checksum(&mut udp, &[data]);
 			}
 
 			let _ = network.send_vectored(&[
