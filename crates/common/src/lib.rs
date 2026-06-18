@@ -26,6 +26,11 @@ impl Ip6 {
 	pub const FLAGS: u32 = u32::to_be(0b0110__0000_0000__0000_0000_0000_0000_0000);
 }
 
+pub trait Ipsum: KnownLayout + Immutable + IntoBytes {
+	fn checksum(&mut self) -> &mut u16;
+	fn checksum_offset() -> u16;
+}
+
 #[repr(C, align(4))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, KnownLayout, Immutable, FromBytes, IntoBytes)]
 pub struct Udp {
@@ -33,6 +38,31 @@ pub struct Udp {
 	pub dst_port: U16,
 	pub length: U16,
 	pub checksum: u16,
+}
+impl Ipsum for Udp {
+	fn checksum(&mut self) -> &mut u16 {
+		&mut self.checksum
+	}
+	fn checksum_offset() -> u16 {
+		offset_of!(Self, checksum) as u16
+	}
+}
+
+#[repr(C, align(4))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, KnownLayout, Immutable, FromBytes, IntoBytes)]
+pub struct Icmp6 {
+	typ: u8,
+	code: u8,
+	checksum: u16,
+	mtu: u32, // For my purposes this will be an MTU or unused
+}
+impl Ipsum for Icmp6 {
+	fn checksum(&mut self) -> &mut u16 {
+		&mut self.checksum
+	}
+	fn checksum_offset() -> u16 {
+		offset_of!(Self, checksum) as u16
+	}
 }
 
 #[repr(C)]
@@ -55,7 +85,7 @@ impl VirtioNet {
 	pub const GSO_NONE: u8 = 0;
 }
 
-pub fn partial_checksum(ip: &Ip6, udp: &mut Udp) -> VirtioNet {
+pub fn partial_checksum<N: Ipsum>(ip: &Ip6, next: &mut N) -> VirtioNet {
 	let [_1, _2, s1, s2, s3, s4, d1, d2, d3, d4]: &[u32; 10] = transmute_ref!(ip);
 	let [l1, l2] = ip.length.to_bytes();
 
@@ -74,7 +104,7 @@ pub fn partial_checksum(ip: &Ip6, udp: &mut Udp) -> VirtioNet {
 	while sum > 0xFFFF {
 		sum = (sum & 0xffff) + (sum >> 16);
 	}
-	udp.checksum = sum as u16;
+	*next.checksum() = sum as u16;
 
 	VirtioNet {
 		flags: VirtioNet::FLAG_NEEDS_CSUM,
@@ -82,16 +112,16 @@ pub fn partial_checksum(ip: &Ip6, udp: &mut Udp) -> VirtioNet {
 		hdr_len: (size_of::<Ip6>() + size_of::<Udp>()) as u16,
 		gso_size: 0,
 		csum_start: size_of::<Ip6>() as u16,
-		csum_offset: offset_of!(Udp, checksum) as u16,
+		csum_offset: N::checksum_offset(),
 	}
 }
-#[allow(unused)]
-pub fn full_checksum(ip: &Ip6, udp: &mut Udp, data: &[u8]) {
+
+pub fn full_checksum<N: Ipsum>(next: &mut N, data: &[u8]) {
 	let (chunks, rest) = data.as_chunks();
 	let mut last = [0; 4];
 	last[4 - rest.len()..].copy_from_slice(rest);
 
-	let [u1, u2]: &[u32; 2] = transmute_ref!(udp);
+	let [u1, u2]: &[u32; 2] = transmute_ref!(next);
 
 	let mut sum: u64 = *u1 as u64 + *u2 as u64;
 	for c in chunks {
@@ -104,7 +134,7 @@ pub fn full_checksum(ip: &Ip6, udp: &mut Udp, data: &[u8]) {
 	}
 
 	let ip_sum = !(sum as u16);
-	udp.checksum = if ip_sum == 0 { 0xffff } else { ip_sum };
+	*next.checksum() = if ip_sum == 0 { 0xffff } else { ip_sum };
 }
 
 #[test]
