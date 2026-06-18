@@ -12,7 +12,7 @@ use std::{
 };
 
 use clap::Parser;
-use common::{Ip6, Udp, VNET, VirtioNet, full_checksum, partial_checksum};
+use common::{Ip6, Udp, VNET, VirtioNet, full_checksum, partial_checksum, proto};
 use eyre::Result;
 use openssl::ssl::{ErrorCode, Ssl, SslAcceptor, SslContext, SslFiletype, SslMethod, SslStream};
 use tracing_subscriber::EnvFilter;
@@ -56,7 +56,7 @@ impl Write for Bio {
 		let ip = Ip6 {
 			flags: Ip6::FLAGS,
 			length: U16::new((buf.len() + size_of::<Udp>()) as u16),
-			next_header: 17,
+			next_header: proto::UDP,
 			hop_limit: 63,
 			src: self.send_from.0,
 			dst: self.send_to.0,
@@ -168,7 +168,7 @@ fn main() -> Result<Never> {
 			continue;
 		}
 		// TODO: Handle ICMP?
-		if ip.next_header != 17 {
+		if ip.next_header != proto::UDP {
 			continue;
 		}
 		if ip.length.get() < 8 {
@@ -257,7 +257,7 @@ fn main() -> Result<Never> {
 				src: send_from.0,
 				dst: endpoint.0,
 				length: U16::new((len + size_of::<Udp>()) as u16),
-				next_header: 17,
+				next_header: proto::UDP,
 				hop_limit: ip.hop_limit.saturating_sub(1),
 			};
 			let mut udp = Udp {

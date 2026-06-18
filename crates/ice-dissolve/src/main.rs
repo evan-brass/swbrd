@@ -1,6 +1,6 @@
 use eyre::{Result, eyre};
 
-use common::{Ip6, Udp, VNET, VirtioNet, full_checksum, partial_checksum};
+use common::{Ip6, Udp, VNET, VirtioNet, full_checksum, partial_checksum, proto};
 use stun::{Class, Method, Stun, addr::Addr6, known};
 use tun_rs::DeviceBuilder;
 use zerocopy::{FromZeros, IntoBytes, TryFromBytes};
@@ -44,7 +44,7 @@ fn main() -> Result<Never> {
 			continue;
 		}
 		// TODO: Handle ICMP?
-		if ip.next_header != 17 {
+		if ip.next_header != proto::UDP {
 			continue;
 		}
 		if ip.length.get() < 8 {

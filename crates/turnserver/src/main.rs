@@ -26,7 +26,7 @@ use zerocopy::{
 	network_endian::{U16, U32},
 };
 
-use common::{Ip6, Udp, VNET, VirtioNet, full_checksum, partial_checksum};
+use common::{Ip6, Udp, VNET, VirtioNet, full_checksum, partial_checksum, proto};
 
 /// md5('user:none:password')
 const TURNKEY: &[u8] = &[
@@ -252,7 +252,7 @@ fn main() -> Result<Never> {
 						continue;
 					}
 					// TODO: Handle ICMP?
-					if ip.next_header != 17 {
+					if ip.next_header != proto::UDP {
 						continue;
 					}
 					if ip.length.get() < 8 {
@@ -527,7 +527,7 @@ fn handle_turn<'i>(
 			let ip = Ip6 {
 				flags: Ip6::FLAGS,
 				length: U16::new((size_of::<Udp>() + data.len()) as u16),
-				next_header: 17,
+				next_header: proto::UDP,
 				hop_limit: 64,
 				src: src_ip.octets(),
 				dst: peer.ip().octets(),

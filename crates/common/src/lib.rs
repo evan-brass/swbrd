@@ -1,6 +1,11 @@
 use core::mem::{offset_of, size_of};
 use zerocopy::{FromBytes, Immutable, IntoBytes, KnownLayout, network_endian::U16, transmute_ref};
 
+pub mod proto {
+	pub const UDP: u8 = 17;
+	pub const ICMP6: u8 = 58;
+}
+
 // Checksum offloading support
 #[cfg(target_os = "linux")]
 pub const VNET: usize = size_of::<VirtioNet>();
@@ -107,7 +112,7 @@ fn sample1() {
 	let ip = Ip6 {
 		flags: u32::to_be(0b0110__0000_0000__0011_0000_1010_0000_0000),
 		length: U16::new(28),
-		next_header: 17,
+		next_header: proto::UDP,
 		hop_limit: 64,
 		src: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1],
 		dst: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1],
