@@ -11,4 +11,4 @@ StateDirectory=swbrd
 WorkingDirectory=/var/lib/swbrd
 Environment=RUST_BACKTRACE="full"
 Environment=RUST_LOG="trace"
-ExecStart=/opt/dtls-proxy -c January.der -i dtls-january -e [2a01:4ff:1f0:7e46::1]:9899
+ExecStart=/opt/dtls-proxy -i dtls-proxy -e [2a01:4ff:1f0:7e46::1]:9899

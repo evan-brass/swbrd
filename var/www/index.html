@@ -1,25 +1,26 @@
 <!DOCTYPE html>
 <html>
-	<head>
-		<title>turn.evan-brass.net</title>
-		<style>
-			body {
-				max-width: 80ch;
-				margin: 2em auto;
-				tab-size: 4;
-			}
-		</style>
-	</head>
 
-	<body>
-		<header>
-			<h1>turn.evan-brass.net</h1>
-			<p>This is a free STUN / TURN server</p>
-		</header>
-		<main>
-			<h2>How to use</h2>
-			<p>Adjust your WebRTC configuration to include this server:</p>
-			<pre><code lang="json">{
+<head>
+	<title>turn.evan-brass.net</title>
+	<style>
+body {
+	max-width: 80ch;
+	margin: 2em auto;
+	tab-size: 4;
+}
+	</style>
+</head>
+
+<body>
+	<header>
+		<h1>turn.evan-brass.net</h1>
+		<p>This is a free STUN / TURN server</p>
+	</header>
+	<main>
+		<h2>How to use</h2>
+		<p>Adjust your WebRTC configuration to include this server:</p>
+		<pre><code lang="json">{
 	"iceServers": [{
 		"urls": [
 			"turn:turn.evan-brass.net",
@@ -30,11 +31,8 @@
 		"credential": "password"
 	}]
 }</code></pre>
-			<p>
-				Note: The username was changed from <code>guest</code> to <code
-				>user</code>. Changing the username to be 1 character shorter saves 4
-				bytes per request.
-			</p>
-		</main>
-	</body>
+		<p>Note: The username was changed from <code>guest</code> to <code>user</code>.  Changing the username to be 1 character shorter saves 4 bytes per request.</p>
+	</main>
+</body>
+
 </html>

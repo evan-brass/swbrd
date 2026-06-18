@@ -1,5 +1,5 @@
 [NetDev]
-Name=dtls-july
+Name=dtls-proxy
 Kind=tun
 
 [Tun]

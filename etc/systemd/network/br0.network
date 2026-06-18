@@ -1,0 +1,8 @@
+[Match]
+Name=br0
+
+[Link]
+RequiredForOnline=no
+
+[Bridge]
+Learning=yes

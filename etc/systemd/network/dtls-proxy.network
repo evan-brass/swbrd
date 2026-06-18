@@ -1,5 +1,5 @@
 [Match]
-Name=dtls-january
+Name=dtls-proxy
 
 [Network]
 ConfigureWithoutCarrier=yes
@@ -8,6 +8,6 @@ IgnoreCarrierLoss=yes
 [Link]
 RequiredForOnline=no
 
-# /96 for the January rotation of deter
+# /96 giving (32 + ~16 - ~2) bits of random dtls cid
 [Route]
 Destination=2a01:4ff:1f0:7e46:0:4::/96
