@@ -1,7 +1,7 @@
 use std::{
 	collections::{BTreeMap, VecDeque, btree_map::Entry},
 	io::{self, ErrorKind, IoSlice, IoSliceMut, Read, Write},
-	net::SocketAddrV6,
+	net::{Ipv6Addr, SocketAddrV6},
 	rc::Rc,
 	str::FromStr,
 	sync::{
@@ -12,18 +12,25 @@ use std::{
 };
 
 use clap::Parser;
-use common::{Ip6, Udp, VNET, VirtioNet, full_checksum, partial_checksum, proto};
+use common::{Icmp6, Ip6, Udp, VNET, VirtioNet, full_checksum, partial_checksum, proto};
 use eyre::Result;
 use openssl::ssl::{ErrorCode, Ssl, SslAcceptor, SslContext, SslFiletype, SslMethod, SslStream};
 use tracing_subscriber::EnvFilter;
 use tun_rs::{DeviceBuilder, SyncDevice};
-use zerocopy::{FromZeros, IntoBytes, network_endian::U16};
+use zerocopy::{
+	FromBytes, FromZeros, IntoBytes,
+	network_endian::{U16, U32},
+	transmute,
+};
 
 #[derive(Parser)]
 #[command(version, about)]
 struct Args {
 	#[arg(long, short)]
 	if_name: Option<String>,
+
+	#[arg(long, short)]
+	router: Ipv6Addr,
 
 	#[arg(long, short, default_value = "[::1]:9899")]
 	endpoint: String,
@@ -33,10 +40,13 @@ struct Bio {
 	// This is what we key our BTree with
 	send_from: ([u8; 16], U16),
 	// This is where we last received ciphertext from and where we should forward our own handshake/ciphertext to
-	send_to: ([u8; 16], U16),
+	pub send_to: ([u8; 16], U16),
 
 	recv: VecDeque<u8>,
 	send: Rc<SyncDevice>,
+
+	// We store a small amount of plaintext data to be passed along in ICMP errors when we forward them to endpoint
+	plain_data: Option<[u8; 12]>,
 
 	last_update: Instant,
 }
@@ -140,13 +150,14 @@ fn main() -> Result<Never> {
 	let need_reconfig = Arc::new(AtomicBool::new(true));
 	signal_hook::flag::register(signal_hook::consts::SIGHUP, need_reconfig.clone())?;
 
-	let mut streams = BTreeMap::new();
+	let mut streams: BTreeMap<([u8; 16], zerocopy::U16<zerocopy::BigEndian>), SslStream<Bio>> =
+		BTreeMap::new();
 	let mut next_cleanup = 10;
 
-	let mut buffer = vec![0; 65536];
+	let mut buffer = vec![0; 4096];
 	let mut vnet = VirtioNet::new_zeroed();
 	let mut ip = Ip6::new_zeroed();
-	let mut udp = Udp::new_zeroed();
+	let mut transport = [0u8; 8];
 	loop {
 		if need_reconfig.swap(false, Ordering::Relaxed) {
 			(even, odd) = load_config()?;
@@ -154,7 +165,7 @@ fn main() -> Result<Never> {
 		let len = match network.recv_vectored(&mut [
 			IoSliceMut::new(&mut vnet.as_mut_bytes()[..VNET]),
 			IoSliceMut::new(&mut ip.as_mut_bytes()),
-			IoSliceMut::new(&mut udp.as_mut_bytes()),
+			IoSliceMut::new(&mut transport),
 			IoSliceMut::new(&mut buffer),
 		]) {
 			Ok(n) => n,
@@ -167,116 +178,267 @@ fn main() -> Result<Never> {
 		if u32::from_be(ip.flags) >> 28 != 6 {
 			continue;
 		}
-		// TODO: Handle ICMP?
-		if ip.next_header != proto::UDP {
-			continue;
-		}
 		if ip.length.get() < 8 {
 			continue;
 		}
-		if ip.length != udp.length {
+		if Ipv6Addr::from_octets(ip.dst).is_multicast() {
 			continue;
 		}
-		let length = udp.length.get() as usize - size_of::<Udp>();
-		let data = &buffer[..length];
 
-		// Lookup the ssl via the destination ip + port
-		let send_from = (ip.dst, udp.dst_port);
-		let send_to = (ip.src, udp.src_port);
-		let mut entry = match streams.entry(send_from) {
-			// Drop packets coming from endpoint where we don't have a stream
-			// TODO: This should be an ICMP host / port unreachable
-			Entry::Vacant(_) if send_from == endpoint => continue,
-
-			// Create a new SSL to hold this packet.  I really wish I could have DTLS cookies, but fucking Firefox is a piece of shit.
-			Entry::Vacant(e) => {
-				let mut ssl = Ssl::new(if udp.dst_port.get() & 0b1 == 0 {
-					&even
-				} else {
-					&odd
-				})?;
-				ssl.set_accept_state();
-				let stream = SslStream::new(
-					ssl,
-					Bio {
-						send_from,
-						send_to,
-						recv: VecDeque::from(Vec::from(data)),
-						send: network.clone(),
-						last_update: Instant::now(),
-					},
-				)?;
-
-				e.insert_entry(stream)
-			}
-
-			// Existing connection
-			Entry::Occupied(mut e) => {
-				let vd = &mut e.get_mut().get_mut().recv;
-				if vd.len() == 0 {
-					let _ = vd.write(data);
-				}
-				e
-			}
-		};
-		let stream = entry.get_mut();
-
-		let res = if !stream.ssl().is_init_finished() {
-			// Progress the handshake if that's what we're doing
-			stream.do_handshake()
-		} else if send_to == endpoint {
-			// Write plaintext from endpoint or fetch/peek data off the stream
-			stream.ssl_write(&data).map(|_| {})
-		} else {
-			// Use peek to prime the thing in the thing
-			let mut temp = [0; 4];
-			stream.ssl_peek(&mut temp).map(|_| {})
-		};
-
-		// Handle errors:
-		if let Err(e) = res
-			&& !matches!(e.code(), ErrorCode::WANT_READ | ErrorCode::WANT_WRITE)
+		// Drop fragmented packets.  I have no god damn idea what I'm doing.
+		if ip.next_header == proto::IP6_FRAGMENT {
+			continue;
+		}
+		// TCP, non-error ICMP, etc.
+		else if (ip.next_header == proto::ICMP6 && transport[0] >= 128)
+			|| !matches!(ip.next_header, proto::UDP | proto::ICMP6)
 		{
-			entry.remove();
-			continue;
-		}
-
-		// Pull data out, and emit plaintext UDP
-		while stream.ssl().pending() > 0 {
-			let Ok(len) = stream.ssl_read(&mut buffer) else {
-				break;
-			};
-			let data = &buffer[..len];
-
-			// After a successful read, update the send_to because we must have had valid application data:
-			stream.get_mut().send_to = send_to;
-
-			// Construct our plaintext packet
-			let ip = Ip6 {
+			let returned = u16::min(500, ip.length.get());
+			let outer_ip = Ip6 {
 				flags: Ip6::FLAGS,
-				src: send_from.0,
-				dst: endpoint.0,
-				length: U16::new((len + size_of::<Udp>()) as u16),
-				next_header: proto::UDP,
-				hop_limit: ip.hop_limit.saturating_sub(1),
+				next_header: proto::ICMP6,
+				hop_limit: 64,
+				// TODO: What ip should we use when sending icmp errors?
+				src: args.router.octets(),
+				dst: ip.src,
+				length: U16::new(size_of::<Icmp6>() as u16 + size_of::<Ip6>() as u16 + returned),
 			};
-			let mut udp = Udp {
-				src_port: send_from.1,
-				dst_port: endpoint.1,
-				length: ip.length,
+			let mut icmp = Icmp6 {
+				typ: 1,
+				code: 3, // Address unreachable
+				mtu: U32::new(0),
 				checksum: 0,
 			};
-			let vnet = partial_checksum(&ip, &mut udp);
-			if VNET == 0 {
-				full_checksum(&mut udp, &[data]);
-			}
+			let returned = &buffer[..returned as usize];
 
+			let mut vnet = partial_checksum(&outer_ip, &mut icmp);
+			vnet.flags = 0;
+			full_checksum(&mut icmp, &[ip.as_bytes(), returned]);
+			let _ = network.send_vectored(&[
+				IoSlice::new(&vnet.as_bytes()[..VNET]),
+				IoSlice::new(outer_ip.as_bytes()),
+				IoSlice::new(icmp.as_bytes()),
+				IoSlice::new(ip.as_bytes()),
+				IoSlice::new(returned),
+			]);
+		}
+		// ICMP
+		if ip.next_header == proto::ICMP6 {
+			let mut icmp: Icmp6 = transmute!(transport);
+
+			// Look inside for the offending UDP packet.
+			if ip.length.get() < 8 + 40 + 8 {
+				continue;
+			}
+			let (inner_ip, rest) = Ip6::mut_from_prefix(&mut buffer).unwrap();
+			if inner_ip.next_header != proto::UDP {
+				continue;
+			}
+			if ip.dst != inner_ip.src {
+				eprintln!("What the fuck?");
+				continue;
+			}
+			let (inner_udp, _rest) = Udp::mut_from_prefix(rest).unwrap();
+
+			// All offending packets must have been sent by our proxy (because the outer dst ip must be in our subnet)
+			// However, we have to modify the src/dst to pretend like the offending packet was sent by the client/endpoint
+			let cid = (inner_ip.src, inner_udp.src_port);
+
+			let Some(ssl) = streams.get(&cid) else {
+				continue;
+			};
+
+			// TODO: Apply the discovered MTU to the SSL stream (currently not possible because we can't get an &mut SSL which is required to call SSL.set_mtu())
+			// Reduce the MTU in the ICMP message to
+			// TODO: Actually get this overhead properly off of the ssl stream? In order to use DTLS_get_data_mtu, we must set SSL_set_mtu or DTLS_set_link_mtu.
+			const OVERHEAD: u32 = 13 + 8 + 16;
+			icmp.mtu.set(icmp.mtu.get().saturating_sub(OVERHEAD));
+
+			// If the "offending" packet was ciphertext (not from endpoint) then we must have sent it on-behalf of endpoint (endpoint is the src)
+			let mut plain: &[u8] = &[];
+			let new_src = if (inner_ip.dst, inner_udp.dst_port) != endpoint {
+				if let Some(ref plain_data) = ssl.get_ref().plain_data {
+					plain = plain_data;
+				}
+				endpoint
+			}
+			// If the "offending" packet was plaintext (from endpoint) then we must have sent it on-behalf of a client (client is the src)
+			else {
+				ssl.get_ref().send_to
+			};
+
+			// TODO: Should I also change the src "router" ip address?
+			ip.dst = new_src.0;
+			inner_ip.src = new_src.0;
+			inner_ip.dst = cid.0;
+			inner_udp.src_port = new_src.1;
+			inner_udp.dst_port = cid.1;
+			ip.length.set(
+				(size_of::<Icmp6>() + size_of::<Ip6>() + size_of::<Udp>() + size_of_val(plain))
+					as u16,
+			);
+
+			let mut vnet = partial_checksum(&ip, &mut icmp);
+			vnet.flags = 0;
+			full_checksum(
+				&mut icmp,
+				&[inner_ip.as_bytes(), inner_udp.as_bytes(), plain],
+			);
 			let _ = network.send_vectored(&[
 				IoSlice::new(&vnet.as_bytes()[..VNET]),
 				IoSlice::new(ip.as_bytes()),
-				IoSlice::new(udp.as_bytes()),
-				IoSlice::new(data),
+				IoSlice::new(icmp.as_bytes()),
+				IoSlice::new(inner_ip.as_bytes()),
+				IoSlice::new(inner_udp.as_bytes()),
+				IoSlice::new(plain),
 			]);
+		}
+		// UDP
+		else {
+			let udp: Udp = transmute!(transport);
+			if ip.length != udp.length {
+				continue;
+			}
+			let send_from = (ip.dst, udp.dst_port);
+			let send_to = (ip.src, udp.src_port);
+
+			let length = udp.length.get() as usize - size_of::<Udp>();
+			let data = &buffer[..length];
+			// Lookup the ssl via the destination ip + port
+			let mut entry = match streams.entry(send_from) {
+				// Return Port Unreachable errors to endpoint, for vacant ssl
+				Entry::Vacant(_) if send_to == endpoint => {
+					let wrapping_ip = Ip6 {
+						flags: Ip6::FLAGS,
+						next_header: proto::ICMP6,
+						hop_limit: 64,
+						src: send_from.0,
+						dst: send_to.0,
+						length: U16::new(
+							(size_of::<Icmp6>() + size_of::<Ip6>() + size_of::<Udp>()) as u16,
+						),
+					};
+					let mut icmp = Icmp6 {
+						typ: 1,
+						code: 4, // Port Unreachable
+						checksum: 0,
+						mtu: U32::new(0),
+					};
+					let mut vnet = partial_checksum(&wrapping_ip, &mut icmp);
+					vnet.flags = 0;
+					full_checksum(
+						&mut icmp,
+						&[
+							ip.as_bytes(),
+							// In this case, we pass the transport header unchanged.  We only need to change the transport when relaying ICMP errors
+							&udp.as_bytes(),
+						],
+					);
+
+					let _ = network.send_vectored(&[
+						IoSlice::new(&vnet.as_bytes()[..VNET]),
+						IoSlice::new(wrapping_ip.as_bytes()),
+						IoSlice::new(icmp.as_bytes()),
+						IoSlice::new(ip.as_bytes()),
+						IoSlice::new(udp.as_bytes()),
+					]);
+					continue;
+				}
+
+				// Create a new SSL context (TODO: I really wish I could use DTLS cookies, but last time I tried Firefox freaked out)
+				Entry::Vacant(e) => {
+					let mut ssl = Ssl::new(if send_from.1.get() & 0b1 == 0 {
+						&even
+					} else {
+						&odd
+					})?;
+					ssl.set_accept_state();
+					let stream = SslStream::new(
+						ssl,
+						Bio {
+							send_from,
+							send_to,
+							recv: VecDeque::from(Vec::from(data)),
+							send: network.clone(),
+							last_update: Instant::now(),
+							plain_data: None,
+						},
+					)?;
+
+					e.insert_entry(stream)
+				}
+
+				// Existing connection
+				Entry::Occupied(e) => e,
+			};
+			let stream = entry.get_mut();
+
+			let res = if !stream.ssl().is_init_finished() {
+				let _ = stream.get_mut().recv.write(data);
+				// Progress the handshake if that's what we're doing
+				stream.do_handshake()
+			} else if send_to == endpoint {
+				// Store the first 12 bytes of the plaintext, to replace the ciphertext in forwarded ICMP errors
+				stream.get_mut().plain_data = data.first_chunk().cloned();
+
+				// Write plaintext from endpoint or fetch/peek data off the stream
+				stream.ssl_write(&data).map(|_| {})
+			} else {
+				let _ = stream.get_mut().recv.write(data);
+				// Use peek to prime the thing in the thing
+				let mut temp = [0; 4];
+				stream.ssl_peek(&mut temp).map(|_| {})
+			};
+
+			// Handle errors:
+			if let Err(e) = res
+				&& !matches!(e.code(), ErrorCode::WANT_READ | ErrorCode::WANT_WRITE)
+			{
+				entry.remove();
+				continue;
+			}
+
+			// Pull data out, and emit plaintext UDP
+			while stream.ssl().pending() > 0 {
+				let Ok(len) = stream.ssl_read(&mut buffer) else {
+					break;
+				};
+				let data = &buffer[..len];
+
+				// After a successful read, update the send_to because we must have had valid application data:
+				stream.get_mut().send_to = send_to;
+
+				// Construct our plaintext packet
+				let ip = Ip6 {
+					flags: Ip6::FLAGS,
+					src: send_from.0,
+					dst: endpoint.0,
+					length: U16::new((len + size_of::<Udp>()) as u16),
+					next_header: proto::UDP,
+					hop_limit: ip.hop_limit.saturating_sub(1),
+				};
+				let mut udp = Udp {
+					src_port: send_from.1,
+					dst_port: endpoint.1,
+					length: ip.length,
+					checksum: 0,
+				};
+				let vnet = partial_checksum(&ip, &mut udp);
+				if VNET == 0 {
+					full_checksum(&mut udp, &[data]);
+				}
+
+				let _ = network.send_vectored(&[
+					IoSlice::new(&vnet.as_bytes()[..VNET]),
+					IoSlice::new(ip.as_bytes()),
+					IoSlice::new(udp.as_bytes()),
+					IoSlice::new(data),
+				]);
+			}
+
+			if !stream.get_ref().recv.is_empty() {
+				panic!("Why isn't your buffer empty?")
+			}
 		}
 
 		// Handle cleaning up old connections

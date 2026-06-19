@@ -1,9 +1,14 @@
 use core::mem::{offset_of, size_of};
-use zerocopy::{FromBytes, Immutable, IntoBytes, KnownLayout, network_endian::U16, transmute_ref};
+use zerocopy::{
+	FromBytes, Immutable, IntoBytes, KnownLayout,
+	network_endian::{U16, U32},
+	transmute_ref,
+};
 
 pub mod proto {
 	pub const UDP: u8 = 17;
 	pub const ICMP6: u8 = 58;
+	pub const IP6_FRAGMENT: u8 = 44;
 }
 
 // Checksum offloading support
@@ -51,10 +56,10 @@ impl Ipsum for Udp {
 #[repr(C, align(4))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, KnownLayout, Immutable, FromBytes, IntoBytes)]
 pub struct Icmp6 {
-	typ: u8,
-	code: u8,
-	checksum: u16,
-	mtu: u32, // For my purposes this will be an MTU or unused
+	pub typ: u8,
+	pub code: u8,
+	pub checksum: u16,
+	pub mtu: U32, // For my purposes this will be an MTU or unused
 }
 impl Ipsum for Icmp6 {
 	fn checksum(&mut self) -> &mut u16 {
@@ -109,7 +114,7 @@ pub fn partial_checksum<N: Ipsum>(ip: &Ip6, next: &mut N) -> VirtioNet {
 	VirtioNet {
 		flags: VirtioNet::FLAG_NEEDS_CSUM,
 		gso_type: VirtioNet::GSO_NONE,
-		hdr_len: (size_of::<Ip6>() + size_of::<Udp>()) as u16,
+		hdr_len: (size_of::<Ip6>() + size_of::<N>()) as u16,
 		gso_size: 0,
 		csum_start: size_of::<Ip6>() as u16,
 		csum_offset: N::checksum_offset(),
@@ -180,7 +185,7 @@ fn sample2() {
 		typ: 2,
 		code: 0,
 		checksum: 0x9999,
-		mtu: u32::to_be(1500),
+		mtu: U32::new(1500),
 	};
 	let inner_ip = Ip6 {
 		flags: u32::to_be(0b0110__0000_0000__0000_0000_0000_0000_0000),
