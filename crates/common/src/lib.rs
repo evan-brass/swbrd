@@ -1,6 +1,6 @@
 use core::mem::{offset_of, size_of};
 use zerocopy::{
-	FromBytes, Immutable, IntoBytes, KnownLayout,
+	FromBytes, Immutable, IntoBytes, KnownLayout, Unaligned,
 	network_endian::{U16, U32},
 	transmute_ref,
 };
@@ -144,6 +144,25 @@ pub fn full_checksum<N: Ipsum>(next: &mut N, pieces: &[&[u8]]) {
 
 	let ip_sum = !(sum as u16);
 	*next.checksum() = if ip_sum == 0 { 0xffff } else { ip_sum };
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, KnownLayout, Immutable, Unaligned, FromBytes, IntoBytes)]
+pub struct EtherHeader {
+	pub dst: [u8; 6],
+	pub src: [u8; 6],
+	pub typ: U16,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, KnownLayout, Immutable, Unaligned, FromBytes, IntoBytes)]
+pub struct DcepOpenHeader {
+	pub msg_typ: u8,
+	pub channel_typ: u8,
+	pub priority: U16,
+	pub reliability_parameter: U32,
+	pub label_len: U16,
+	pub protocol_len: U16,
 }
 
 #[test]
