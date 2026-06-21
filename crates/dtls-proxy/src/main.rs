@@ -155,35 +155,33 @@ fn main() -> Result<Never> {
 	let mut next_cleanup = 10;
 
 	let mut buffer = vec![0; 4096];
-	let mut vnet = VirtioNet::new_zeroed();
-	let mut ip = Ip6::new_zeroed();
-	let mut transport = [0u8; 8];
 	loop {
 		if need_reconfig.swap(false, Ordering::Relaxed) {
 			(even, odd) = load_config()?;
 		}
-		let len = match network.recv_vectored(&mut [
+		let mut vnet = VirtioNet::new_zeroed();
+		let mut ip = Ip6::new_zeroed();
+		let mut transport = [0u8; 8];
+		match network.recv_vectored(&mut [
 			IoSliceMut::new(&mut vnet.as_mut_bytes()[..VNET]),
 			IoSliceMut::new(&mut ip.as_mut_bytes()),
 			IoSliceMut::new(&mut transport),
 			IoSliceMut::new(&mut buffer),
 		]) {
-			Ok(n) => n,
+			Ok(len) if len < (VNET + size_of::<Ip6>() + size_of_val(&transport)) => continue,
 			Err(e) if e.kind() == ErrorKind::Interrupted => continue,
 			Err(e) => return Err(e.into()),
+
+			// Check the IP version
+			_ if u32::from_be(ip.flags) >> 28 != 6 => continue,
+			// Check the IP length
+			_ if ip.length.get() < 8 => continue,
+			// Drop multicast traffic
+			_ if Ipv6Addr::from_octets(ip.dst).is_multicast() => continue,
+
+			// Handle the packet
+			_ => {}
 		};
-		if len < VNET + size_of::<Ip6>() + size_of::<Udp>() {
-			continue;
-		}
-		if u32::from_be(ip.flags) >> 28 != 6 {
-			continue;
-		}
-		if ip.length.get() < 8 {
-			continue;
-		}
-		if Ipv6Addr::from_octets(ip.dst).is_multicast() {
-			continue;
-		}
 
 		// Drop fragmented packets.  I have no god damn idea what I'm doing.
 		if ip.next_header == proto::IP6_FRAGMENT {

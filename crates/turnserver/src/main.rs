@@ -22,8 +22,9 @@ use stun::{
 use tracing_subscriber::EnvFilter;
 use tun_rs::{DeviceBuilder, SyncDevice};
 use zerocopy::{
-	AlignedTryCastError, FromBytes, FromZeros, IntoBytes, TryFromBytes,
+	AlignedTryCastError, FromZeros, IntoBytes, TryFromBytes,
 	network_endian::{U16, U32},
+	transmute,
 };
 
 use common::{Ip6, Udp, VNET, VirtioNet, full_checksum, partial_checksum, proto};
@@ -234,34 +235,38 @@ fn main() -> Result<Never> {
 				},
 				TUN => loop {
 					let mut vnet = VirtioNet::new_zeroed();
+					let mut ip = Ip6::new_zeroed();
+					let mut transport = [0u8; 8];
 					match network.recv_vectored(&mut [
 						// TODO: This will sometimes be an empty slice... Is that a bad?
 						IoSliceMut::new(&mut vnet.as_mut_bytes()[..VNET]),
-						IoSliceMut::new(&mut buffer[Stun::HEADROOM..]),
+						IoSliceMut::new(&mut ip.as_mut_bytes()),
+						IoSliceMut::new(&mut transport),
+						IoSliceMut::new(&mut buffer[Stun::HEADROOM + 20 + 24 + 4..]),
 					]) {
-						Ok(len) if len >= (VNET + 40) => {}
-						Ok(_) => continue,
+						Ok(len) if len < (VNET + size_of::<Ip6>() + size_of_val(&transport)) => {
+							continue;
+						}
 						Err(e) if e.kind() == ErrorKind::WouldBlock => break,
 						Err(e) => return Err(e.into()),
+
+						// Check the IP version
+						_ if u32::from_be(ip.flags) >> 28 != 6 => continue,
+						// Check the IP length
+						_ if ip.length.get() < 8 => continue,
+						// Drop multicast traffic
+						_ if Ipv6Addr::from_octets(ip.dst).is_multicast() => continue,
+
+						// Handle the packet
+						_ => {}
 					};
 
-					let Ok((ip, rest)) = Ip6::read_from_prefix(&buffer[Stun::HEADROOM..]) else {
-						continue;
-					};
-					if u32::from_be(ip.flags) >> 28 != 6 {
-						continue;
-					}
 					// TODO: Handle ICMP?
 					if ip.next_header != proto::UDP {
 						continue;
 					}
-					if ip.length.get() < 8 {
-						continue;
-					}
-					let Ok((udp, _rest)) = Udp::read_from_prefix(rest) else {
-						continue;
-					};
 
+					let udp: Udp = transmute!(transport);
 					if ip.length != udp.length {
 						continue;
 					}
