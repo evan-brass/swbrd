@@ -6,3 +6,8 @@ DHCP=ipv4
 Address=2a01:4ff:1f0:7e46::1/128
 Gateway=fe80::1
 DNS=2a01:4ff:ff00::add:2 2a01:4ff:ff00::add:1
+
+# Prevent our /64 from being sent out the default gateway.  As we split it up we must add more specific routes.
+[Route]
+Destination=2a01:4ff:1f0:7e46::/64
+Type=unreachable

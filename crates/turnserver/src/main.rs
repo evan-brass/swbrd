@@ -8,7 +8,7 @@ use mio::{
 };
 use slab::Slab;
 use std::{
-	io::{ErrorKind, IoSlice, IoSliceMut, Read, Write},
+	io::{ErrorKind, IoSlice, Read, Write},
 	net::{IpAddr, Ipv6Addr, SocketAddr, SocketAddrV6},
 	ops::{BitAnd, BitOr},
 	os::fd::AsRawFd,
@@ -22,12 +22,11 @@ use stun::{
 use tracing_subscriber::EnvFilter;
 use tun_rs::{DeviceBuilder, SyncDevice};
 use zerocopy::{
-	AlignedTryCastError, FromZeros, IntoBytes, TryFromBytes,
+	AlignedTryCastError, IntoBytes, TryFromBytes,
 	network_endian::{U16, U32},
-	transmute,
 };
 
-use common::{Ip6, Udp, VNET, VirtioNet, full_checksum, partial_checksum, proto};
+use common::{Ip6, Packet, Udp, VNET, full_checksum, partial_checksum, proto, read_network};
 
 /// md5('user:none:password')
 const TURNKEY: &[u8] = &[
@@ -39,6 +38,9 @@ const TURNKEY: &[u8] = &[
 struct Args {
 	#[arg(long, short, default_value = "[::]:3478")]
 	address: String,
+
+	#[arg(long, short)]
+	router: Ipv6Addr,
 
 	#[arg(long, short)]
 	mapping: Vec<String>,
@@ -234,67 +236,80 @@ fn main() -> Result<Never> {
 					}
 				},
 				TUN => loop {
-					let mut vnet = VirtioNet::new_zeroed();
-					let mut ip = Ip6::new_zeroed();
-					let mut transport = [0u8; 8];
-					match network.recv_vectored(&mut [
-						// TODO: This will sometimes be an empty slice... Is that a bad?
-						IoSliceMut::new(&mut vnet.as_mut_bytes()[..VNET]),
-						IoSliceMut::new(&mut ip.as_mut_bytes()),
-						IoSliceMut::new(&mut transport),
-						IoSliceMut::new(&mut buffer[Stun::HEADROOM + 20 + 24 + 4..]),
-					]) {
-						Ok(len) if len < (VNET + size_of::<Ip6>() + size_of_val(&transport)) => {
-							continue;
-						}
+					let receiver;
+					let msg;
+					match read_network(
+						&network,
+						&mut buffer[Stun::HEADROOM + 20 + 24 + 4..],
+						&args.router,
+					) {
 						Err(e) if e.kind() == ErrorKind::WouldBlock => break,
 						Err(e) => return Err(e.into()),
+						Ok(Packet::Udp { ip, udp }) => {
+							// Unmap the destination ip address
+							let mut peer_ip = Ipv6Addr::from(ip.dst);
+							for m in &mappings {
+								if m.to_udp(&mut peer_ip) {
+									break;
+								}
+							}
+							receiver = SocketAddrV6::new(peer_ip, udp.dst_port.get(), 0, 0);
 
-						// Check the IP version
-						_ if u32::from_be(ip.flags) >> 28 != 6 => continue,
-						// Check the IP length
-						_ if ip.length.get() < 8 => continue,
-						// Drop multicast traffic
-						_ if Ipv6Addr::from_octets(ip.dst).is_multicast() => continue,
-
-						// Handle the packet
-						_ => {}
-					};
-
-					// TODO: Handle ICMP?
-					if ip.next_header != proto::UDP {
-						continue;
-					}
-
-					let udp: Udp = transmute!(transport);
-					if ip.length != udp.length {
-						continue;
-					}
-
-					// Unmap the destination ip address
-					let mut peer_ip = Ipv6Addr::from(ip.dst);
-					for m in &mappings {
-						if m.to_udp(&mut peer_ip) {
-							break;
+							let data_length = udp.length.get() - 8;
+							let sender =
+								Addr6::new(Ipv6Addr::from_octets(ip.src), udp.src_port.get());
+							msg = Stun::new(Class::Request, Method::Recv, &mut buffer)
+								.map_err(|e| eyre!("{e:?}"))?;
+							msg.append_val(known::XOR_PEER_ADDRESS, &sender.xor(&msg.txid));
+							msg.append_once(|_, a| {
+								a.typ = known::DATA;
+								a.length.set(data_length); // If my headroom calculations are correct, the UDP data is already in the correct position.
+							});
 						}
-					}
+						Ok(Packet::Icmp {
+							ip: _,
+							icmp,
+							inner_ip,
+							inner_udp,
+						}) => {
+							// Unmap the inner ip address
+							let mut peer_ip = Ipv6Addr::from(inner_ip.src);
+							for m in &mappings {
+								if m.to_udp(&mut peer_ip) {
+									break;
+								}
+							}
+							receiver = SocketAddrV6::new(peer_ip, inner_udp.src_port.get(), 0, 0);
 
-					let data_length = udp.length.get() - 8;
-					let receiver = SocketAddrV6::new(peer_ip, udp.dst_port.get(), 0, 0);
-					let sender = Addr6::new(Ipv6Addr::from_octets(ip.src), udp.src_port.get());
-					let msg = Stun::new(Class::Request, Method::Recv, &mut buffer)
-						.map_err(|e| eyre!("{e:?}"))?;
-					msg.append_val(known::XOR_PEER_ADDRESS, &sender.xor(&msg.txid));
-					msg.append_once(|_, a| {
-						a.typ = known::DATA;
-						a.length.set(data_length); // If my headroom calculations are correct, the UDP data is already in the correct position.
-					});
+							// How to handle receiving ICMP packets [RFC8656 Section 11.5](https://datatracker.ietf.org/doc/html/rfc8656#section-11.5)
+							// The XOR-PEER-ADDRESS attribute is set to the destination ip+port (if port is unavailable it is zeroed) of the returned UDP packet.  The Outer IP src ip address (The router / host that generated the ICMP message) is not used.
+							let peer = Addr6::new(
+								Ipv6Addr::from_octets(inner_ip.dst),
+								inner_udp.dst_port.get(),
+							);
+							msg = Stun::new(Class::Request, Method::Recv, &mut buffer)
+								.map_err(|e| eyre!("{e:?}"))?;
+							msg.append_val(known::XOR_PEER_ADDRESS, &peer.xor(&msg.txid));
+							msg.append_once(|_, a| {
+								use bytes::BufMut;
+								a.typ = known::ICMP;
+								// FUCK: The stupid ICMP vs LEGACY_ICMP shit
+								a.put_u8(icmp.typ);
+								a.put_u8(icmp.code);
+								a.put_u8(icmp.typ);
+								a.put_u8(icmp.code);
+								// NOTE: We are not changing the ICMP mtu because the client already knows we are relaying their data as IPv6+UDP packets (because of the family in XOR-PEER-ADDRESS).
+								a.put_u32(icmp.mtu.get());
+							});
+						}
+					};
 
 					let end = size_of_val(msg.trim());
 					let frame = &buffer[Stun::HEADROOM..end];
 					// Send to TCP clients
 					if let Some(key) = tcpnet.to_index(receiver) {
 						let Some(Conn { partial, stream }) = streams.get_mut(key) else {
+							// TODO: Return ICMP Port Unreachable for closed TCP streams?  Part of the problem is that our slab will reuse indexes frequently, meaning you are probably talking to a previous client/association.  I really want to use raw file descriptors instead of the slab allocator because I think that those will rotate less frequently.  Frankly we should probably just btreemap<u32, TcpStream> with an incrementing key... whatever.
 							continue;
 						};
 						if partial.is_some() {
@@ -321,7 +336,7 @@ fn main() -> Result<Never> {
 					}
 					// Send to UDP clients
 					else {
-						socket.send_to(frame, receiver.into())?;
+						let _ = socket.send_to(frame, receiver.into());
 					}
 				},
 				Token(key) => 'event: {

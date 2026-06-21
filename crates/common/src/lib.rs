@@ -1,8 +1,13 @@
 use core::mem::{offset_of, size_of};
+use std::{
+	io::{IoSlice, IoSliceMut},
+	net::Ipv6Addr,
+};
+use tun_rs::SyncDevice;
 use zerocopy::{
-	FromBytes, Immutable, IntoBytes, KnownLayout, Unaligned,
+	FromBytes, FromZeros, Immutable, IntoBytes, KnownLayout, Unaligned,
 	network_endian::{U16, U32},
-	transmute_ref,
+	transmute, transmute_ref,
 };
 
 pub mod proto {
@@ -163,4 +168,120 @@ pub struct DcepOpenHeader {
 	pub reliability_parameter: U32,
 	pub label_len: U16,
 	pub protocol_len: U16,
+}
+
+pub enum Packet {
+	Icmp {
+		ip: Ip6,
+		icmp: Icmp6,
+		inner_ip: Ip6,
+		inner_udp: Udp,
+	},
+	Udp {
+		ip: Ip6,
+		udp: Udp,
+	},
+}
+
+pub fn read_network(
+	network: &SyncDevice,
+	buffer: &mut [u8],
+	// ICMP Errors will be issued from this IP address
+	router: &Ipv6Addr,
+) -> Result<Packet, std::io::Error> {
+	loop {
+		let mut vnet = VirtioNet::new_zeroed();
+		let mut ip = Ip6::new_zeroed();
+		let mut transport = [0u8; 8];
+		match network.recv_vectored(&mut [
+			IoSliceMut::new(&mut vnet.as_mut_bytes()[..VNET]),
+			IoSliceMut::new(&mut ip.as_mut_bytes()),
+			IoSliceMut::new(&mut transport),
+			IoSliceMut::new(buffer),
+		]) {
+			Ok(len) if len < (VNET + size_of::<Ip6>() + size_of_val(&transport)) => continue,
+			Err(e) => return Err(e),
+
+			// Check the IP version
+			_ if u32::from_be(ip.flags) >> 28 != 6 => continue,
+			// Check the IP length
+			_ if ip.length.get() < 8 => continue,
+			// Drop multicast traffic
+			_ if Ipv6Addr::from_octets(ip.dst).is_multicast() => continue,
+			// Drop IP fragments
+			_ if ip.next_header == proto::IP6_FRAGMENT => continue,
+
+			// Handle the packet
+			_ => {}
+		};
+
+		// TCP, non-error ICMP, etc.
+		if (ip.next_header == proto::ICMP6 && transport[0] >= 128)
+			|| !matches!(ip.next_header, proto::UDP | proto::ICMP6)
+		{
+			let returned = usize::min(500, ip.length.get() as usize - 8);
+			let outer_ip = Ip6 {
+				flags: Ip6::FLAGS,
+				next_header: proto::ICMP6,
+				hop_limit: 64,
+				src: router.octets(),
+				dst: ip.src,
+				length: U16::new(
+					(size_of::<Icmp6>() + size_of::<Ip6>() + size_of_val(&transport) + returned)
+						as u16,
+				),
+			};
+			let mut icmp = Icmp6 {
+				typ: 1,
+				code: 3, // Address unreachable
+				mtu: U32::new(0),
+				checksum: 0,
+			};
+			let returned = &buffer[..returned as usize];
+
+			let mut vnet = partial_checksum(&outer_ip, &mut icmp);
+			vnet.flags = 0;
+			full_checksum(&mut icmp, &[ip.as_bytes(), &transport, returned]);
+			let _ = network.send_vectored(&[
+				IoSlice::new(&vnet.as_bytes()[..VNET]),
+				IoSlice::new(outer_ip.as_bytes()),
+				IoSlice::new(icmp.as_bytes()),
+				IoSlice::new(ip.as_bytes()),
+				IoSlice::new(&transport),
+				IoSlice::new(returned),
+			]);
+		}
+		// ICMP
+		if ip.next_header == proto::ICMP6 {
+			let icmp: Icmp6 = transmute!(transport);
+
+			// Look inside for the offending UDP packet.
+			if ip.length.get() < 8 + 40 + 8 {
+				continue;
+			}
+			let (inner_ip, rest) = Ip6::read_from_prefix(buffer).unwrap();
+			if inner_ip.next_header != proto::UDP {
+				continue;
+			}
+			if ip.dst != inner_ip.src {
+				eprintln!("What the fuck?");
+				continue;
+			}
+			let (inner_udp, _rest) = Udp::read_from_prefix(rest).unwrap();
+			return Ok(Packet::Icmp {
+				ip,
+				icmp,
+				inner_ip,
+				inner_udp,
+			});
+		}
+		// UDP
+		else {
+			let udp: Udp = transmute!(transport);
+			if ip.length != udp.length {
+				continue;
+			}
+			return Ok(Packet::Udp { ip, udp });
+		}
+	}
 }

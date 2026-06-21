@@ -71,6 +71,14 @@
 		}
 	}
 </script>
+<!-- Test ICMP attributes: -->
+<script type="module">
+import { Conn } from 'swbrd/conn.js';
+
+const t = new Conn(42n, { setup: 'passive', iceTransportPolicy: 'relay' });
+log_everything({ t });
+t.addIceCandidate({ address: '2a01:4ff:1f0:7e46:1::', port: 50_000 });
+</script>
 <script type="_module">
 import { Conn } from 'swbrd/conn.js';
 
@@ -93,7 +101,7 @@ b.addEventListener('candidate', ({candidate}) => a.addIceCandidate(candidate));
 
 log_everything({a, b});
 </script>
-<script type="module">
+<script type="_module">
 	import { state } from './src/util.js';
 	const config = {
 		iceServers: [{
