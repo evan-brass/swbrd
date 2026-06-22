@@ -2,7 +2,8 @@
 Description=Rotate the January.der certificate file
 
 [Service]
-User=swbrd
+Type=oneshot
 StateDirectory=swbrd
 WorkingDirectory=/var/lib/swbrd
 ExecStart=/opt/cert-rotate January
+ExecStart=systemctl kill -s SIGHUP dtls-proxy

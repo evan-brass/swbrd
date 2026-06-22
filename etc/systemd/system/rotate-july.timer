@@ -2,8 +2,9 @@
 Description=Rotate the July.der certificate on May 1st each year.
 
 [Timer]
-OnCalendar=0-0-1-5
+OnCalendar=*-5-1
 Persistent=true
+Unit=rotate-july.service
 
 [Install]
 WantedBy=timers.target

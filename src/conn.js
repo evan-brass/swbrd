@@ -102,6 +102,7 @@ export class Conn extends RTCPeerConnection {
 		timeout = 10_000,
 		adjustment = null,
 		sctp_port = 5000,
+		audio = false,
 		...config
 	} = {}) {
 		super({
@@ -135,7 +136,8 @@ export class Conn extends RTCPeerConnection {
 			config,
 			adjustment,
 			setup,
-			sctp_port
+			sctp_port,
+			audio,
 		}).catch((e) => {
 			console.error(e);
 			this.close();
@@ -143,7 +145,7 @@ export class Conn extends RTCPeerConnection {
 	}
 
 	async #signaling_task(
-		{ polite, config, adjustment, setup, sctp_port },
+		{ polite, config, adjustment, setup, sctp_port, audio },
 	) {
 		// Prepare for renegotiation
 		let negotiation_needed = false;
@@ -176,20 +178,38 @@ export class Conn extends RTCPeerConnection {
 				'o=swbrd 42 0 IN IP4 0.0.0.0',
 				's=-',
 				't=0 0',
-				'a=group:BUNDLE dc',
+				'a=group:BUNDLE dc' + (audio ? ' audio' : ''),
 				`a=fingerprint:${this.pid.fingerprint}`,
 				'a=ice-ufrag:dissolve',
 				'a=ice-pwd:the/ice/password/constant',
 				'a=ice-lite',
+				`a=setup:${setup}`,
 				'm=application 0 UDP/DTLS/SCTP webrtc-datachannel',
 				'c=IN IP4 0.0.0.0',
 				'a=bundle-only',
 				'a=mid:dc',
-				`a=setup:${setup}`,
 				`a=sctp-port:${sctp_port}`,
+				...(audio ? [
+					'm=audio 0 UDP/TLS/RTP/SAVPF 100 101',
+					'c=IN IP4 0.0.0.0',
+					'a=bundle-only',
+					'a=rtcp-mux',
+					'a=mid:audio',
+					'a=sendrecv',
+					'a=rtpmap:100 opus/48000/2',
+					'a=fmtp:100 useinbandfec=1',
+					'a=rtpmap:101 telephone-event/8000',
+					'a=rtcp-mux',
+				] : []),
 				'',
 			].join('\n'),
 		});
+
+		// Audio
+		if (audio) {
+			const trans = super.getTransceivers().find(t => t.mid == 'audio');
+			trans.direction = 'sendrecv';
+		}
 
 		// TODO: I'm worried that the sctp-port in the local description might change in the future...  Currently this is the only assumption that I'm aware of, everything else has been setup in the original offer.
 		await super.setLocalDescription();

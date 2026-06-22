@@ -79,12 +79,42 @@ const t = new Conn(42n, { setup: 'passive', iceTransportPolicy: 'relay' });
 log_everything({ t });
 t.addIceCandidate({ address: '2a01:4ff:1f0:7e46:1::', port: 50_000 });
 </script>
+
+<!-- Test swbrd VPN -->
 <script type="_module">
 import { Conn } from 'swbrd/conn.js';
 
 const h = await Conn.to_deter();
 log_everything({ h });
 </script>
+
+<!-- Test audio -->
+<audio controls></audio>
+<button>Call</button>
+<script type="module">
+import { Conn } from 'swbrd/conn.js';
+import { state } from 'swbrd/util.js';
+
+const audio = document.querySelector('audio');
+
+// User Interaction
+await state({ 'click': document.body });
+
+const h = await Conn.to_deter({ audio: true });
+log_everything({ h });
+
+h.addEventListener('track', ({ track, streams: [stream] }) => {
+	audio.srcObject = stream;
+	audio.play();
+});
+
+const user_mic = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+debugger;
+const { sender } = h.getTransceivers().find(t => t.mid == 'audio');
+const [mic] = user_mic.getAudioTracks();
+sender.replaceTrack(mic);
+</script>
+
 <script type="_module">
 import { Cert } from 'swbrd/cert.js';
 import { Conn } from 'swbrd/conn.js';

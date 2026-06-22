@@ -2,7 +2,7 @@ use clap::Parser;
 use eyre::{Result, eyre};
 use ipnet::Ipv6Net;
 use mio::{
-	Events, Interest, Poll, Token,
+	Events, Interest, Poll, Registry, Token,
 	net::{TcpListener, TcpStream, UdpSocket},
 	unix::SourceFd,
 };
@@ -10,7 +10,7 @@ use slab::Slab;
 use std::{
 	io::{ErrorKind, IoSlice, Read, Write},
 	net::{IpAddr, Ipv6Addr, SocketAddr, SocketAddrV6},
-	ops::{BitAnd, BitOr},
+	ops::{BitAnd, BitOr, Deref, DerefMut},
 	os::fd::AsRawFd,
 	str::FromStr,
 };
@@ -90,6 +90,45 @@ impl Mapping {
 struct Conn {
 	partial: Option<(usize, Box<[u8]>)>,
 	stream: TcpStream,
+}
+
+struct Cleanup<'a> {
+	key: usize,
+	streams: &'a mut Slab<Conn>,
+	registry: &'a Registry,
+}
+impl Deref for Cleanup<'_> {
+	type Target = Conn;
+	fn deref(&self) -> &Self::Target {
+		// Hopefully these indexes are cheap.  I would prefer to hold an slab entry instead, but I think slab only has a vacant entry type.
+		self.streams.get(self.key).unwrap()
+	}
+}
+impl DerefMut for Cleanup<'_> {
+	fn deref_mut(&mut self) -> &mut Self::Target {
+		self.streams.get_mut(self.key).unwrap()
+	}
+}
+impl<'a, 'b: 'a> Cleanup<'a> {
+	pub fn get_mut(
+		streams: &'a mut Slab<Conn>,
+		key: usize,
+		registry: &'a Registry,
+	) -> Option<Self> {
+		let _ = streams.get_mut(key)?;
+		Some(Self {
+			key,
+			streams,
+			registry,
+		})
+	}
+	pub fn cleanup(self) -> Result<(), std::io::Error> {
+		let Conn {
+			mut stream,
+			partial: _,
+		} = self.streams.remove(self.key);
+		self.registry.deregister(&mut stream)
+	}
 }
 
 // Tokens used by everything that isn't a TcpStream
@@ -308,27 +347,26 @@ fn main() -> Result<Never> {
 					let frame = &buffer[Stun::HEADROOM..end];
 					// Send to TCP clients
 					if let Some(key) = tcpnet.to_index(receiver) {
-						let Some(Conn { partial, stream }) = streams.get_mut(key) else {
+						let Some(mut conn) = Cleanup::get_mut(&mut streams, key, poll.registry())
+						else {
 							// TODO: Return ICMP Port Unreachable for closed TCP streams?  Part of the problem is that our slab will reuse indexes frequently, meaning you are probably talking to a previous client/association.  I really want to use raw file descriptors instead of the slab allocator because I think that those will rotate less frequently.  Frankly we should probably just btreemap<u32, TcpStream> with an incrementing key... whatever.
 							continue;
 						};
-						if partial.is_some() {
+						if conn.partial.is_some() {
 							continue;
 						}
 
 						let mut offset = 0;
 						loop {
 							let rest = &buffer[Stun::HEADROOM + offset..end];
-							match stream.write(rest) {
+							match conn.stream.write(rest) {
 								Ok(written) if written >= rest.len() => break,
 								Ok(written) => offset += written,
 								Err(e) if e.kind() == ErrorKind::WouldBlock => {
-									*partial = Some((0, Box::from(rest)));
+									conn.partial = Some((0, Box::from(rest)));
 								}
 								Err(_) => {
-									// Cleanup
-									poll.registry().deregister(stream)?;
-									streams.remove(key);
+									conn.cleanup()?;
 									break;
 								}
 							}
@@ -340,108 +378,95 @@ fn main() -> Result<Never> {
 					}
 				},
 				Token(key) => 'event: {
-					let Some(Conn { stream, partial }) = streams.get_mut(key) else {
+					let Some(mut conn) = Cleanup::get_mut(&mut streams, key, poll.registry())
+					else {
 						break 'event;
 					};
 
 					// NOTE: For cleanup, there's no need to finish writing partial data or anything like that, we just close.
 					if e.is_read_closed() || e.is_error() {
-						// Cleanup
-						poll.registry().deregister(stream)?;
-						streams.remove(key);
+						conn.cleanup()?;
 						break 'event;
 					}
 
 					// Continue writing previous partial frame
-					if e.is_writable() {
-						loop {
-							let Some((offset, buffer)) = partial.take() else {
-								break;
-							};
-							let rest = &buffer[offset..];
+					while e.is_writable() {
+						let Some((offset, buffer)) = conn.partial.take() else {
+							break;
+						};
+						let rest = &buffer[offset..];
 
-							match stream.write(rest) {
-								Ok(written) if written >= rest.len() => break,
-								Ok(written) => *partial = Some((offset + written, buffer)),
-								Err(e) if e.kind() == ErrorKind::WouldBlock => {
-									*partial = Some((offset, buffer));
-									break;
-								}
-								Err(_) => {
-									// Cleanup
-									poll.registry().deregister(stream)?;
-									streams.remove(key);
-									break 'event;
-								}
+						match conn.stream.write(rest) {
+							Ok(written) if written >= rest.len() => break,
+							Ok(written) => conn.partial = Some((offset + written, buffer)),
+							Err(e) if e.kind() == ErrorKind::WouldBlock => {
+								conn.partial = Some((offset, buffer));
+								break;
+							}
+							Err(_) => {
+								conn.cleanup()?;
+								break 'event;
 							}
 						}
 					}
 
 					// Handle reading
-					if e.is_readable() {
+					while e.is_readable() {
+						let available = match conn.stream.peek(&mut buffer[Stun::HEADROOM..]) {
+							Ok(n) => Stun::HEADROOM + n,
+							Err(e) if e.kind() == ErrorKind::WouldBlock => break,
+							Err(_) => {
+								conn.cleanup()?;
+								break;
+							}
+						};
+						let msg = match Stun::try_mut_from_bytes(&mut buffer)
+							.map_err(AlignedTryCastError::from)
+						{
+							Err(AlignedTryCastError::Validity(_v)) if available >= 20 => {
+								conn.cleanup()?;
+								break;
+							}
+							Ok(m) => {
+								let end = size_of_val(m.trim());
+								if available < end {
+									break;
+								}
+								// TODO: If read is less than what we peek'd then we're fucked
+								let n = conn.stream.read(&mut buffer[Stun::HEADROOM..end])?;
+								if (Stun::HEADROOM + n) < n {
+									panic!("Read short of peek'd!");
+								}
+								Stun::try_mut_from_bytes(&mut buffer).unwrap()
+							}
+							_ => break,
+						};
+
+						// Drop the TURN message if we have partial data waiting to be written out
+						if conn.partial.is_some() {
+							continue;
+						};
+
+						let Some(sender) = tcpnet.from_index(key) else {
+							continue;
+						};
+						let Some(resp) = handle_turn(&mappings, sender, msg, &network)? else {
+							continue;
+						};
+
+						let end = size_of_val(resp.trim());
+						let mut offset = 0;
 						loop {
-							let available = match stream.peek(&mut buffer[Stun::HEADROOM..]) {
-								Ok(n) => Stun::HEADROOM + n,
-								Err(e) if e.kind() == ErrorKind::WouldBlock => break,
+							let rest = &buffer[Stun::HEADROOM + offset..end];
+							match conn.stream.write(rest) {
+								Ok(written) if written >= rest.len() => break,
+								Ok(written) => offset += written,
+								Err(e) if e.kind() == ErrorKind::WouldBlock => {
+									conn.partial = Some((0, Box::from(rest)));
+								}
 								Err(_) => {
-									// Cleanup
-									poll.registry().deregister(stream)?;
-									streams.remove(key);
-									break;
-								}
-							};
-							let msg = match Stun::try_mut_from_bytes(&mut buffer)
-								.map_err(AlignedTryCastError::from)
-							{
-								Err(AlignedTryCastError::Validity(_v)) if available >= 20 => {
-									// Cleanup
-									poll.registry().deregister(stream)?;
-									streams.remove(key);
-									break;
-								}
-								Ok(m) => {
-									let end = size_of_val(m.trim());
-									if available < end {
-										break;
-									}
-									// TODO: If read is less than what we peek'd then we're fucked
-									let n = stream.read(&mut buffer[Stun::HEADROOM..end])?;
-									if (Stun::HEADROOM + n) < n {
-										panic!("Read short of peek'd!");
-									}
-									Stun::try_mut_from_bytes(&mut buffer).unwrap()
-								}
-								_ => break,
-							};
-
-							// Drop the TURN message if we have partial data waiting to be written out
-							if partial.is_some() {
-								continue;
-							};
-
-							let Some(sender) = tcpnet.from_index(key) else {
-								continue;
-							};
-							let Some(resp) = handle_turn(&mappings, sender, msg, &network)? else {
-								continue;
-							};
-
-							let end = size_of_val(resp.trim());
-							let mut offset = 0;
-							loop {
-								let rest = &buffer[Stun::HEADROOM + offset..end];
-								match stream.write(rest) {
-									Ok(written) if written >= rest.len() => break,
-									Ok(written) => offset += written,
-									Err(e) if e.kind() == ErrorKind::WouldBlock => {
-										*partial = Some((0, Box::from(rest)));
-									}
-									Err(_) => {
-										// Cleanup
-										poll.registry().deregister(stream)?;
-										streams.remove(key);
-										break 'event;
-									}
+									conn.cleanup()?;
+									break 'event;
 								}
 							}
 						}

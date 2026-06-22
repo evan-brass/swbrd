@@ -2,8 +2,9 @@
 Description=Rotate the January.der certificate on November 1st each year.
 
 [Timer]
-OnCalendar=0-0-1-11
+OnCalendar=*-11-1
 Persistent=true
+Unit=rotate-january.service
 
 [Install]
 WantedBy=timers.target
