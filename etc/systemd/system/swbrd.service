@@ -1,5 +1,5 @@
 [Unit]
-Description=DTLS proxy that uses destination IP+port as the connection id
+Description=SCTP/DataChannel VPN
 After=network-online.target
 
 [Install]
@@ -9,8 +9,6 @@ WantedBy=multi-user.target
 AmbientCapabilities=CAP_NET_ADMIN
 CapabilityBoundingSet=CAP_NET_ADMIN
 User=swbrd
-StateDirectory=swbrd
-WorkingDirectory=/var/lib/swbrd
 Environment=RUST_BACKTRACE="full"
 Environment=RUST_LOG="trace"
-ExecStart=/opt/dtls-proxy -i dtls-proxy -e [2a01:4ff:1f0:7e46::1]:9899 -r 2a01:4ff:1f0:7e46::1
+ExecStart=/opt/swbrd -i swbrd -p 5001 -s "2a01:4ff:1f0:7e46:0:5::/96"

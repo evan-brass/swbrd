@@ -11,3 +11,5 @@ RequiredForOnline=no
 # /96 giving (32 + ~16 - ~2) bits of random dtls cid
 [Route]
 Destination=2a01:4ff:1f0:7e46:0:4::/96
+[Route]
+Destination=fd01::/96

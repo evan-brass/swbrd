@@ -6,6 +6,8 @@ After=network-online.target
 WantedBy=multi-user.target
 
 [Service]
+AmbientCapabilities=CAP_NET_ADMIN
+CapabilityBoundingSet=CAP_NET_ADMIN
 User=swbrd
 Restart=no
 Environment=RUST_BACKTRACE="full"

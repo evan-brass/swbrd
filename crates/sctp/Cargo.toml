@@ -1,0 +1,10 @@
+[package]
+name = "sctp"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+libc = "0.2.186"
+nix = { version = "0.31.3", features = ["net", "socket", "uio"] }
+socket2 = { version = "0.6.4", features = ["all"] }
+zerocopy = { version = "0.8.50", features = ["derive"] }

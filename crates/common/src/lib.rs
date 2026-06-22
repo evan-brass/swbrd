@@ -2,6 +2,7 @@ use core::mem::{offset_of, size_of};
 use std::{
 	io::{IoSlice, IoSliceMut},
 	net::Ipv6Addr,
+	str::from_utf8,
 };
 use tun_rs::SyncDevice;
 use zerocopy::{
@@ -153,14 +154,6 @@ pub fn full_checksum<N: Ipsum>(next: &mut N, pieces: &[&[u8]]) {
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy, KnownLayout, Immutable, Unaligned, FromBytes, IntoBytes)]
-pub struct EtherHeader {
-	pub dst: [u8; 6],
-	pub src: [u8; 6],
-	pub typ: U16,
-}
-
-#[repr(C)]
-#[derive(Debug, Clone, Copy, KnownLayout, Immutable, Unaligned, FromBytes, IntoBytes)]
 pub struct DcepOpenHeader {
 	pub msg_typ: u8,
 	pub channel_typ: u8,
@@ -168,6 +161,16 @@ pub struct DcepOpenHeader {
 	pub reliability_parameter: U32,
 	pub label_len: U16,
 	pub protocol_len: U16,
+}
+impl DcepOpenHeader {
+	pub fn parse(buffer: &[u8]) -> Option<(Self, &str, &str)> {
+		let (header, rest) = Self::read_from_prefix(buffer).ok()?;
+		let (label, rest) = rest.split_at_checked(header.label_len.get() as usize)?;
+		let (protocol, _) = rest.split_at_checked(header.protocol_len.get() as usize)?;
+		let label = from_utf8(label).ok()?;
+		let protocol = from_utf8(protocol).ok()?;
+		Some((header, label, protocol))
+	}
 }
 
 pub enum Packet {

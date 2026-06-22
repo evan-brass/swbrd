@@ -11,14 +11,13 @@
 	async function log_everything(conns) {
 		for (const key in conns) {
 			const conn = conns[key];
-			function logger(...args) {
-				console.log(key, ...args);
+			function ondc({ channel }) {
+				['message', 'open', 'close'].forEach((e) => {
+					channel.addEventListener(e, console.log.bind(console, key, channel.label))
+				});
 			}
-			if (conn.dc) {
-				['message', 'open', 'close'].forEach((e) =>
-					conn.dc.addEventListener(e, logger)
-				);
-			}
+			if (conn.dc) ondc({ channel: conn.dc });
+			conn.addEventListener('datachannel', ondc);
 			[
 				'connectionState',
 				'iceConnectionState',
@@ -27,7 +26,7 @@
 			].forEach((p) => {
 				conn.addEventListener(
 					p.toLowerCase() + 'change',
-					() => logger(p, conn[p]),
+					({ target: { [p]: val }}) => console.log(key, p, val),
 				);
 			});
 			[
@@ -38,7 +37,7 @@
 				'negotiationneeded',
 				'track',
 			].forEach((e) => {
-				conn.addEventListener(e, logger);
+				conn.addEventListener(e, console.log.bind(console, key));
 			});
 
 			while (!conn.sctp) {
@@ -48,31 +47,32 @@
 			}
 			conn.sctp.addEventListener(
 				'statechange',
-				({ target: { state } }) => logger('sctp state', state),
+				({ target: { state } }) => console.log(key, 'sctp state', state),
 			);
 			conn.sctp.transport.addEventListener(
 				'error',
-				({ error }) => logger('dtls error', error),
+				({ error }) => console.log(key, 'dtls error', error),
 			);
 			conn.sctp.transport.iceTransport.addEventListener(
 				'gatheringstatechange',
 				({ target: { gatheringState } }) =>
-					logger('ice transport gatheringState', gatheringState),
+					console.log(key, 'ice transport gatheringState', gatheringState),
 			);
 			conn.sctp.transport.iceTransport.addEventListener(
 				'statechange',
-				({ target: { state } }) => logger('ice transport state', state),
+				({ target: { state } }) => console.log(key, 'ice transport state', state),
 			);
 			conn.sctp.transport.iceTransport.addEventListener(
 				'selectedcandidatepairchange',
 				({ target }) =>
-					logger('ice transport selected', target.getSelectedCandidatePair()),
+					console.log(key, 'ice transport selected', target.getSelectedCandidatePair()),
 			);
 		}
 	}
 </script>
+
 <!-- Test ICMP attributes: -->
-<script type="module">
+<script type="_module">
 import { Conn } from 'swbrd/conn.js';
 
 const t = new Conn(42n, { setup: 'passive', iceTransportPolicy: 'relay' });
@@ -81,17 +81,17 @@ t.addIceCandidate({ address: '2a01:4ff:1f0:7e46:1::', port: 50_000 });
 </script>
 
 <!-- Test swbrd VPN -->
-<script type="_module">
+<script type="module">
 import { Conn } from 'swbrd/conn.js';
 
-const h = await Conn.to_deter();
+const h = await Conn.to_deter({ sctp_port: 5001 });
 log_everything({ h });
 </script>
 
 <!-- Test audio -->
 <audio controls></audio>
 <button>Call</button>
-<script type="module">
+<script type="_module">
 import { Conn } from 'swbrd/conn.js';
 import { state } from 'swbrd/util.js';
 

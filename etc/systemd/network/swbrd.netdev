@@ -1,0 +1,6 @@
+[NetDev]
+Name=swbrd
+Kind=tun
+
+[Tun]
+User=swbrd

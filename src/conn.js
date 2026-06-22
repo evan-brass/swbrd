@@ -49,10 +49,10 @@ export class Conn extends RTCPeerConnection {
 	// - Prefix is roughly a /95
 	// - We use 1 bit to signal whether we are connecting to the January or July certificate giving a /96
 	// - 32 bits of randomness completes the ip address + 15 bits of randomness gives us the port
-	static async to_deter(
-		base = Uint16Array.of(0x2a01, 0x4ff, 0x1f0, 0x7e46, 0, 4, 0, 0),
-		config = null,
-	) {
+	static async to_deter({
+		base,
+		...config
+	} = {}) {
 		const current = await Deter.generate();
 
 		const ret = new this(current.pid, {
@@ -60,7 +60,7 @@ export class Conn extends RTCPeerConnection {
 			...config,
 		});
 
-		ret.addIceCandidate(current.candidate(base));
+		ret.addIceCandidate(current.candidate({ base }));
 
 		return ret;
 	}
@@ -93,7 +93,7 @@ export class Conn extends RTCPeerConnection {
 		});
 	}
 
-	constructor(peerid = deter_pid, {
+	constructor(peerid, {
 		pid = Id.from(peerid),
 		cert = default_cert,
 		polite = cert.id < pid,

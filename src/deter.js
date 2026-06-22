@@ -19,16 +19,15 @@ export class Deter extends Uint8Array {
 	month;
 	pid;
 
-	candidate(
+	candidate({
 		base = Uint16Array.of(0xfd01, 0, 0, 0, 0, 0, 0, 0),
-		{
-			min_port = 10_000,
-			month_map = {
-				mask: 0b1,
-				0: 0b0,
-				6: 0b1,
-			},
-		} = {}) {
+		min_port = 10_000,
+		month_map = {
+			mask: 0b1,
+			0: 0b0,
+			6: 0b1,
+		},
+	} = {}) {
 		if (!(base instanceof Uint16Array) || base.length != 8) {
 			throw new Error("The base IPv6 address should be a 8 element Uint16Array");
 		}
