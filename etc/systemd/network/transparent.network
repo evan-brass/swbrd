@@ -1,0 +1,18 @@
+[Match]
+Name=lo
+
+# redirect all fwmark 0x2 to local
+[RoutingPolicyRule]
+Family=both
+FirewallMark=2
+Table=transparent
+
+[Route]
+Destination=::/0
+Type=local
+Table=transparent
+
+[Route]
+Destination=0.0.0.0/0
+Type=local
+Table=transparent

@@ -1,0 +1,22 @@
+[Match]
+Name=swbrd
+
+[Network]
+ConfigureWithoutCarrier=yes
+IgnoreCarrierLoss=yes
+IPv6SendRA=yes
+
+[Link]
+RequiredForOnline=no
+
+# The sctp assoc id is an i32 which we encode directly into the /96
+[Route]
+Destination=2a01:4ff:1f0:7e46:0:5::/96
+
+[IPv6SendRA]
+EmitDNS=yes
+
+[IPv6Prefix]
+AddressAutoconfiguration=no
+OnLink=yes
+Prefix=2a01:4ff:1f0:7e46:0:5:0:0/96

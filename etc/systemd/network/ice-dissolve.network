@@ -11,7 +11,7 @@ RequiredForOnline=no
 # redirect all fwmark 0x1 to ice-dissolve
 [RoutingPolicyRule]
 Family=ipv6
-FirewallMark=0x1
+FirewallMark=1
 Table=ice-dissolve
 
 [Route]
