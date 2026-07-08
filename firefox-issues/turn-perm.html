@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<!--
+https://bugzilla.mozilla.org/show_bug.cgi?id=2053614
+
+Firefox enforces TURN permissions locally, this means that it is unable to discover prflx candidates through a TURN server.
+
+https://searchfox.org/firefox-main/rev/0088392ab4ccab730743ed188ddec62d04e578b7/dom/media/webrtc/transport/third_party/nICEr/src/stun/turn_client_ctx.cpp#1107
+
+Example signalling path that succeeds in Chrome and Safari, but fails in Firefox:
+-->
+<script type="module">
+const config = {
+	// All browsers support this type of connection if you remove the following line.
+	iceTransportPolicy: 'relay',
+	iceServers: [{
+		urls: [
+			'turn:turn.evan-brass.net?transport=tcp',
+			'turns:turn.evan-brass.net?transport=tcp',
+			'turns:turn.evan-brass.net:443?transport=tcp',
+		],
+		username: 'user',
+		credential: 'password',
+	}]
+};
+function log(label, { target: { iceConnectionState: val } }) {
+	console.log(label, val)
+}
+
+const a = new RTCPeerConnection(config);
+const b = new RTCPeerConnection(config);
+a.addEventListener('iceconnectionstatechange', log.bind(null, 'a'));
+b.addEventListener('iceconnectionstatechange', log.bind(null, 'b'))
+a.createDataChannel('');
+
+// Gather full candidates on a
+await a.setLocalDescription();
+while (a.iceGatheringState != 'complete') await new Promise(res => a.addEventListener('icegatheringstatechange', res));
+
+await b.setRemoteDescription(a.localDescription);
+await b.setLocalDescription();
+// Don't wait for b to gather candidates and strip any that it may already have
+const answer = {
+	type: b.localDescription.type,
+	sdp: b.localDescription.sdp.replace(/a=candidate:.*(\r\n|\r|\n)/img, '')
+};
+await a.setRemoteDescription(answer);
+
+// On Chrome/Safari you'll see:
+// b "checking"
+// a "checking" - A discovers b's peer reflexive candidate through the TURN server
+// a/b "connected"
+
+// On Firefox you'll only see:
+// b "checking"
+//
+// about:webrtc will include errors of the form:
+// TURN(relay(IP4:x.x.x.x:0/TLS|IP4:0.0.0.0:443/TLS)): Indication from peer addr IP6:[2a01:4ff:1f0:7e46:0:3::]:x/UDP with no permission
+</script>
