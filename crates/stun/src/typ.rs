@@ -1,5 +1,3 @@
-use core::num::NonZero;
-
 use zerocopy::{Immutable, IntoBytes, KnownLayout, TryFromBytes, Unaligned, try_transmute};
 
 #[repr(u8)]
@@ -67,7 +65,7 @@ pub enum Cookie {
 )]
 pub struct Txid {
 	cookie: Cookie,
-	pub id: [NonZero<u8>; 12],
+	pub id: [u8; 12],
 }
 impl Txid {
 	pub fn new() -> Self {
@@ -75,10 +73,10 @@ impl Txid {
 		let id = {
 			use core::array::from_fn;
 			use rand::{RngExt, distr::Alphanumeric, rng};
-			from_fn(|_| unsafe { NonZero::new_unchecked(rng().sample(Alphanumeric)) })
+			from_fn(|_| rng().sample(Alphanumeric))
 		};
 		#[cfg(not(feature = "rand"))]
-		let id = unsafe { [NonZero::new_unchecked(0x99); 12] };
+		let id = [0x99; 12];
 
 		Self {
 			cookie: Cookie::Magic,

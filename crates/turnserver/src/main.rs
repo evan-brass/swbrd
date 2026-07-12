@@ -19,6 +19,7 @@ use stun::{
 	addr::{Addr4, Addr6, Xor},
 	known,
 };
+use tracing::trace;
 use tracing_subscriber::EnvFilter;
 use tun_rs::{DeviceBuilder, SyncDevice};
 use zerocopy::{
@@ -263,6 +264,9 @@ fn main() -> Result<Never> {
 					let Ok(msg) = Stun::try_mut_from_bytes(&mut buffer).map_err(|_| ()) else {
 						continue;
 					};
+					if msg.txid.id == [0; 12] {
+						continue;
+					}
 					if msg.class != Class::Request
 						|| msg.method == Method::Recv
 						|| msg.method.is_err()
@@ -385,6 +389,7 @@ fn main() -> Result<Never> {
 
 					// NOTE: For cleanup, there's no need to finish writing partial data or anything like that, we just close.
 					if e.is_read_closed() || e.is_error() {
+						trace!(?e, "Closing because event is_error or is_read_closed");
 						conn.cleanup()?;
 						break 'event;
 					}
@@ -403,7 +408,8 @@ fn main() -> Result<Never> {
 								conn.partial = Some((offset, buffer));
 								break;
 							}
-							Err(_) => {
+							Err(reason) => {
+								trace!(?reason);
 								conn.cleanup()?;
 								break 'event;
 							}
@@ -415,7 +421,8 @@ fn main() -> Result<Never> {
 						let available = match conn.stream.peek(&mut buffer[Stun::HEADROOM..]) {
 							Ok(n) => Stun::HEADROOM + n,
 							Err(e) if e.kind() == ErrorKind::WouldBlock => break,
-							Err(_) => {
+							Err(reason) => {
+								trace!(?reason);
 								conn.cleanup()?;
 								break;
 							}
@@ -423,7 +430,8 @@ fn main() -> Result<Never> {
 						let msg = match Stun::try_mut_from_bytes(&mut buffer)
 							.map_err(AlignedTryCastError::from)
 						{
-							Err(AlignedTryCastError::Validity(_v)) if available >= 20 => {
+							Err(AlignedTryCastError::Validity(reason)) if available >= 20 => {
+								trace!(?reason, "Non-STUN frame");
 								conn.cleanup()?;
 								break;
 							}
@@ -441,6 +449,9 @@ fn main() -> Result<Never> {
 							}
 							_ => break,
 						};
+						if msg.txid.id == [0; 12] {
+							continue;
+						}
 
 						// Drop the TURN message if we have partial data waiting to be written out
 						if conn.partial.is_some() {
@@ -464,7 +475,8 @@ fn main() -> Result<Never> {
 								Err(e) if e.kind() == ErrorKind::WouldBlock => {
 									conn.partial = Some((0, Box::from(rest)));
 								}
-								Err(_) => {
+								Err(reason) => {
+									trace!(?reason);
 									conn.cleanup()?;
 									break 'event;
 								}

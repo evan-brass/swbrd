@@ -1,4 +1,4 @@
-use std::{net::Ipv4Addr, num::NonZero};
+use std::net::Ipv4Addr;
 
 use stun::{
 	addr::{Addr4, Family, Xor},
@@ -91,9 +91,7 @@ fn vector_2_1_encode() {
 	let msg = Stun::new(Class::Request, Method::Bind, &mut buffer).unwrap();
 	msg.txid.id = [
 		0xb7, 0xe7, 0xa7, 0x01, 0xbc, 0x34, 0xd6, 0x86, 0xfa, 0x87, 0xdf, 0xae,
-	]
-	.map(NonZero::new)
-	.map(Option::unwrap);
+	];
 
 	msg.set_authkey(b"VOkJxbRl1RmTxUk/WvJxBt");
 	msg.append_val(known::SOFTWARE, "STUN test client");
@@ -181,9 +179,7 @@ fn vector_2_2_encode() {
 	let msg = Stun::new(Class::Response, Method::Bind, &mut buffer).unwrap();
 	msg.txid.id = [
 		0xb7, 0xe7, 0xa7, 0x01, 0xbc, 0x34, 0xd6, 0x86, 0xfa, 0x87, 0xdf, 0xae,
-	]
-	.map(NonZero::new)
-	.map(Option::unwrap);
+	];
 
 	msg.set_authkey(b"VOkJxbRl1RmTxUk/WvJxBt");
 	msg.append_val(known::SOFTWARE, "test vector");
