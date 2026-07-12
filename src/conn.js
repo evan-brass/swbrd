@@ -119,7 +119,10 @@ export class Conn extends RTCPeerConnection {
 
 		// Add a timeout to close the conn if it fails to connect within timeout ms
 		if (typeof timeout == 'number') {
-			const t = setTimeout(() => this.close(), timeout);
+			const t = setTimeout(() => {
+				console.warn('Connection timeout expired!');
+				this.close()
+			}, timeout);
 			this.addEventListener(
 				'connectionstatechange',
 				({ target: { connectionState } }) => {
