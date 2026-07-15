@@ -15,7 +15,7 @@ use std::{
 	str::FromStr,
 };
 use stun::{
-	Class, Method, Parse, Parsed, Stun,
+	Authkey, Class, Method, Parse, Parsed, Stun,
 	addr::{Addr4, Addr6, Xor},
 	known,
 };
@@ -30,9 +30,39 @@ use zerocopy::{
 use common::{Ip6, Packet, Udp, VNET, full_checksum, partial_checksum, proto, read_network};
 
 /// md5('user:none:password')
-const TURNKEY: &[u8] = &[
-	0x9a, 0xc1, 0x33, 0x6a, 0xc2, 0xef, 0x12, 0xb8, 0xa1, 0x06, 0x00, 0x7a, 0xab, 0x74, 0x25, 0xf3,
-];
+const USER_KEY: &Authkey = &Authkey {
+	ipad: [
+		0xac, 0xf7, 0x05, 0x5c, 0xf4, 0xd9, 0x24, 0x8e, 0x97, 0x30, 0x36, 0x4c, 0x9d, 0x42, 0x13,
+		0xc5, 0x36, 0x36, 0x36, 0x36, 0x36, 0x36, 0x36, 0x36, 0x36, 0x36, 0x36, 0x36, 0x36, 0x36,
+		0x36, 0x36, 0x36, 0x36, 0x36, 0x36, 0x36, 0x36, 0x36, 0x36, 0x36, 0x36, 0x36, 0x36, 0x36,
+		0x36, 0x36, 0x36, 0x36, 0x36, 0x36, 0x36, 0x36, 0x36, 0x36, 0x36, 0x36, 0x36, 0x36, 0x36,
+		0x36, 0x36, 0x36, 0x36,
+	],
+	opad: [
+		0xc6, 0x9d, 0x6f, 0x36, 0x9e, 0xb3, 0x4e, 0xe4, 0xfd, 0x5a, 0x5c, 0x26, 0xf7, 0x28, 0x79,
+		0xaf, 0x5c, 0x5c, 0x5c, 0x5c, 0x5c, 0x5c, 0x5c, 0x5c, 0x5c, 0x5c, 0x5c, 0x5c, 0x5c, 0x5c,
+		0x5c, 0x5c, 0x5c, 0x5c, 0x5c, 0x5c, 0x5c, 0x5c, 0x5c, 0x5c, 0x5c, 0x5c, 0x5c, 0x5c, 0x5c,
+		0x5c, 0x5c, 0x5c, 0x5c, 0x5c, 0x5c, 0x5c, 0x5c, 0x5c, 0x5c, 0x5c, 0x5c, 0x5c, 0x5c, 0x5c,
+		0x5c, 0x5c, 0x5c, 0x5c,
+	],
+};
+// md5('guest:none:password')
+const GUEST_KEY: &Authkey = &Authkey {
+	ipad: [
+		0x37, 0x6a, 0xbc, 0xa1, 0x08, 0x92, 0x82, 0x9f, 0xff, 0x73, 0xc0, 0xa6, 0x22, 0x1d, 0xc5,
+		0x9b, 0x36, 0x36, 0x36, 0x36, 0x36, 0x36, 0x36, 0x36, 0x36, 0x36, 0x36, 0x36, 0x36, 0x36,
+		0x36, 0x36, 0x36, 0x36, 0x36, 0x36, 0x36, 0x36, 0x36, 0x36, 0x36, 0x36, 0x36, 0x36, 0x36,
+		0x36, 0x36, 0x36, 0x36, 0x36, 0x36, 0x36, 0x36, 0x36, 0x36, 0x36, 0x36, 0x36, 0x36, 0x36,
+		0x36, 0x36, 0x36, 0x36,
+	],
+	opad: [
+		0x5d, 0x00, 0xd6, 0xcb, 0x62, 0xf8, 0xe8, 0xf5, 0x95, 0x19, 0xaa, 0xcc, 0x48, 0x77, 0xaf,
+		0xf1, 0x5c, 0x5c, 0x5c, 0x5c, 0x5c, 0x5c, 0x5c, 0x5c, 0x5c, 0x5c, 0x5c, 0x5c, 0x5c, 0x5c,
+		0x5c, 0x5c, 0x5c, 0x5c, 0x5c, 0x5c, 0x5c, 0x5c, 0x5c, 0x5c, 0x5c, 0x5c, 0x5c, 0x5c, 0x5c,
+		0x5c, 0x5c, 0x5c, 0x5c, 0x5c, 0x5c, 0x5c, 0x5c, 0x5c, 0x5c, 0x5c, 0x5c, 0x5c, 0x5c, 0x5c,
+		0x5c, 0x5c, 0x5c, 0x5c,
+	],
+};
 
 #[derive(Parser)]
 #[command(version, about)]
@@ -226,13 +256,6 @@ fn main() -> Result<Never> {
 
 	let mut streams = Slab::new();
 
-	// Preload the authkey into the buffer.  As long as we never touch bellow the HEADROOM of the buffer then this data will stay in place
-	{
-		let t = Stun::new(Class::Request, Method::Bind, buffer.as_mut_slice())
-			.map_err(|e| eyre!("{e:?}"))?;
-		t.set_authkey(TURNKEY);
-	}
-
 	loop {
 		for e in events.into_iter() {
 			match e.token() {
@@ -255,7 +278,7 @@ fn main() -> Result<Never> {
 					});
 				},
 				UDP => loop {
-					let sender = match socket.recv_from(&mut buffer[Stun::HEADROOM..]) {
+					let sender = match socket.recv_from(&mut buffer) {
 						Ok((20.., SocketAddr::V6(sender))) => sender,
 						Ok(_) => continue,
 						Err(e) if e.kind() == ErrorKind::WouldBlock => break,
@@ -275,17 +298,13 @@ fn main() -> Result<Never> {
 					}
 					if let Some(resp) = handle_turn(&mappings, sender, msg, &network)? {
 						let end = size_of_val(resp.trim());
-						socket.send_to(&buffer[Stun::HEADROOM..end], sender.into())?;
+						socket.send_to(&buffer[..end], sender.into())?;
 					}
 				},
 				TUN => loop {
 					let receiver;
 					let msg;
-					match read_network(
-						&network,
-						&mut buffer[Stun::HEADROOM + 20 + 24 + 4..],
-						&args.router,
-					) {
+					match read_network(&network, &mut buffer[20 + 24 + 4..], &args.router) {
 						Err(e) if e.kind() == ErrorKind::WouldBlock => break,
 						Err(e) => return Err(e.into()),
 						Ok(Packet::Udp { ip, udp }) => {
@@ -348,7 +367,7 @@ fn main() -> Result<Never> {
 					};
 
 					let end = size_of_val(msg.trim());
-					let frame = &buffer[Stun::HEADROOM..end];
+					let frame = &buffer[..end];
 					// Send to TCP clients
 					if let Some(key) = tcpnet.to_index(receiver) {
 						let Some(mut conn) = Cleanup::get_mut(&mut streams, key, poll.registry())
@@ -362,7 +381,7 @@ fn main() -> Result<Never> {
 
 						let mut offset = 0;
 						loop {
-							let rest = &buffer[Stun::HEADROOM + offset..end];
+							let rest = &buffer[offset..end];
 							match conn.stream.write(rest) {
 								Ok(written) if written >= rest.len() => break,
 								Ok(written) => offset += written,
@@ -418,8 +437,8 @@ fn main() -> Result<Never> {
 
 					// Handle reading
 					while e.is_readable() {
-						let available = match conn.stream.peek(&mut buffer[Stun::HEADROOM..]) {
-							Ok(n) => Stun::HEADROOM + n,
+						let available = match conn.stream.peek(&mut buffer) {
+							Ok(n) => n,
 							Err(e) if e.kind() == ErrorKind::WouldBlock => break,
 							Err(reason) => {
 								trace!(?reason);
@@ -441,8 +460,8 @@ fn main() -> Result<Never> {
 									break;
 								}
 								// TODO: If read is less than what we peek'd then we're fucked
-								let n = conn.stream.read(&mut buffer[Stun::HEADROOM..end])?;
-								if (Stun::HEADROOM + n) < n {
+								let n = conn.stream.read(&mut buffer[..end])?;
+								if n < end {
 									panic!("Read short of peek'd!");
 								}
 								Stun::try_mut_from_bytes(&mut buffer).unwrap()
@@ -468,7 +487,7 @@ fn main() -> Result<Never> {
 						let end = size_of_val(resp.trim());
 						let mut offset = 0;
 						loop {
-							let rest = &buffer[Stun::HEADROOM + offset..end];
+							let rest = &buffer[offset..end];
 							match conn.stream.write(rest) {
 								Ok(written) if written >= rest.len() => break,
 								Ok(written) => offset += written,
@@ -514,7 +533,7 @@ fn handle_turn<'i>(
 	let mut realm = Parsed::NotPresent;
 	let mut nonce = Parsed::NotPresent;
 	let mut transport = Parsed::NotPresent;
-	let mut integrity = false;
+	let mut integrity = None;
 
 	let attrs = msg
 		.trim()
@@ -530,10 +549,23 @@ fn handle_turn<'i>(
 
 	let mut unk = Vec::new();
 	msg.length.set(U16::new(0));
+
 	for (prefix, attr) in attrs {
 		match attr.typ {
 			known::MESSAGE_INTEGRITY => {
-				integrity = attr.value == prefix.expected_message_integrity();
+				integrity = match username {
+					Parsed::Valid("guest")
+						if attr.value == prefix.expected_message_integrity(GUEST_KEY) =>
+					{
+						Some(GUEST_KEY)
+					}
+					Parsed::Valid("user")
+						if attr.value == prefix.expected_message_integrity(USER_KEY) =>
+					{
+						Some(USER_KEY)
+					}
+					_ => None,
+				};
 				break;
 			}
 			_ if attr.is_optional() => {}
@@ -618,7 +650,7 @@ fn handle_turn<'i>(
 			msg.append_val(known::REALM, "none");
 			msg.append_val(known::NONCE, "none");
 		}
-		m if (nonce, integrity) != (Parsed::Valid("none"), true) => {
+		m if (nonce, integrity.is_some()) != (Parsed::Valid("none"), true) => {
 			msg.class = Class::Response;
 			msg.method = m.to_err();
 			msg.length.get_mut().set(0);
@@ -654,10 +686,10 @@ fn handle_turn<'i>(
 		_ => return Ok(None),
 	}
 
-	if integrity {
+	if let Some(authkey) = integrity {
 		msg.append_val(
 			known::MESSAGE_INTEGRITY,
-			&msg.trim().expected_message_integrity(),
+			&msg.trim().expected_message_integrity(authkey),
 		);
 	}
 

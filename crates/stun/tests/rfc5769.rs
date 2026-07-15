@@ -46,14 +46,13 @@ pub const VECTOR_2_1: &[u8] = &[
 
 #[test]
 fn vector_2_1_decode() {
-	let mut buffer = vec![0; Stun::HEADROOM];
-	buffer.extend_from_slice(VECTOR_2_1);
+	let mut buffer = Vec::from(VECTOR_2_1);
 
 	let msg = Stun::try_mut_from_bytes(&mut buffer).unwrap();
 	assert_eq!(msg.class, Class::Request);
 	assert_eq!(msg.method, Method::Bind);
 
-	msg.set_authkey(b"VOkJxbRl1RmTxUk/WvJxBt");
+	let authkey = Authkey::new(b"VOkJxbRl1RmTxUk/WvJxBt");
 	msg.length.set(U16::new(0));
 
 	let mut software = Parsed::NotPresent;
@@ -71,7 +70,7 @@ fn vector_2_1_decode() {
 	while let Some((prefix, attr)) = attrs.next() {
 		match attr.typ {
 			known::MESSAGE_INTEGRITY => {
-				assert_eq!(prefix.expected_message_integrity(), attr.value);
+				assert_eq!(prefix.expected_message_integrity(&authkey), attr.value);
 				break;
 			}
 			_ => panic!("Unexpected attribute"),
@@ -87,24 +86,24 @@ fn vector_2_1_decode() {
 
 #[test]
 fn vector_2_1_encode() {
-	let mut buffer = vec![0x20; Stun::HEADROOM + size_of_val(VECTOR_2_1)];
+	let mut buffer = vec![0x20; size_of_val(VECTOR_2_1)];
 	let msg = Stun::new(Class::Request, Method::Bind, &mut buffer).unwrap();
 	msg.txid.id = [
 		0xb7, 0xe7, 0xa7, 0x01, 0xbc, 0x34, 0xd6, 0x86, 0xfa, 0x87, 0xdf, 0xae,
 	];
 
-	msg.set_authkey(b"VOkJxbRl1RmTxUk/WvJxBt");
+	let authkey = Authkey::new(b"VOkJxbRl1RmTxUk/WvJxBt");
 	msg.append_val(known::SOFTWARE, "STUN test client");
 	msg.append_val(known::PRIORITY, &U32::new(0x6e0001ff));
 	msg.append_val(known::ICE_CONTROLLED, &U64::new(0x932ff9b151263b36));
 	msg.append_val(known::USERNAME, "evtj:h6vY");
 	msg.append_val(
 		known::MESSAGE_INTEGRITY,
-		&msg.trim().expected_message_integrity(),
+		&msg.trim().expected_message_integrity(&authkey),
 	);
 	msg.append_val(known::FINGERPRINT, &msg.trim().expected_fingerprint());
 
-	assert_eq!(&buffer[Stun::HEADROOM..], VECTOR_2_1);
+	assert_eq!(&buffer, VECTOR_2_1);
 }
 
 /// 2.2.  Sample IPv4 Response
@@ -137,14 +136,13 @@ pub const VECTOR_2_2: &[u8] = &[
 
 #[test]
 fn vector_2_2_decode() {
-	let mut buffer = vec![0; Stun::HEADROOM];
-	buffer.extend_from_slice(VECTOR_2_2);
+	let mut buffer = Vec::from(VECTOR_2_2);
 
 	let msg = Stun::try_mut_from_bytes(&mut buffer).unwrap();
 	assert_eq!(msg.class, Class::Response);
 	assert_eq!(msg.method, Method::Bind);
 
-	msg.set_authkey(b"VOkJxbRl1RmTxUk/WvJxBt");
+	let authkey = Authkey::new(b"VOkJxbRl1RmTxUk/WvJxBt");
 	msg.length.set(U16::new(0));
 
 	let mut software = Parsed::NotPresent;
@@ -156,7 +154,7 @@ fn vector_2_2_decode() {
 	while let Some((prefix, attr)) = attrs.next() {
 		match attr.typ {
 			known::MESSAGE_INTEGRITY => {
-				assert_eq!(prefix.expected_message_integrity(), attr.value);
+				assert_eq!(prefix.expected_message_integrity(&authkey), attr.value);
 				break;
 			}
 			_ => panic!("Unexpected attribute"),
@@ -175,13 +173,13 @@ fn vector_2_2_decode() {
 
 #[test]
 fn vector_2_2_encode() {
-	let mut buffer = vec![0x20; Stun::HEADROOM + size_of_val(VECTOR_2_2)];
+	let mut buffer = vec![0x20; size_of_val(VECTOR_2_2)];
 	let msg = Stun::new(Class::Response, Method::Bind, &mut buffer).unwrap();
 	msg.txid.id = [
 		0xb7, 0xe7, 0xa7, 0x01, 0xbc, 0x34, 0xd6, 0x86, 0xfa, 0x87, 0xdf, 0xae,
 	];
 
-	msg.set_authkey(b"VOkJxbRl1RmTxUk/WvJxBt");
+	let authkey = Authkey::new(b"VOkJxbRl1RmTxUk/WvJxBt");
 	msg.append_val(known::SOFTWARE, "test vector");
 	msg.append_val(
 		known::XOR_MAPPED_ADDRESS,
@@ -189,11 +187,11 @@ fn vector_2_2_encode() {
 	);
 	msg.append_val(
 		known::MESSAGE_INTEGRITY,
-		&msg.trim().expected_message_integrity(),
+		&msg.trim().expected_message_integrity(&authkey),
 	);
 	msg.append_val(known::FINGERPRINT, &msg.trim().expected_fingerprint());
 
-	assert_eq!(&buffer[Stun::HEADROOM..], VECTOR_2_2);
+	assert_eq!(&buffer, VECTOR_2_2);
 }
 
 /// 2.3.  Sample IPv6 Response

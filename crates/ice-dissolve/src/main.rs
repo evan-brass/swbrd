@@ -1,7 +1,7 @@
-use eyre::{Result, eyre};
+use eyre::Result;
 
 use common::{Ip6, Udp, VNET, VirtioNet, full_checksum, partial_checksum, proto};
-use stun::{Class, Method, Stun, addr::Addr6, known};
+use stun::{Authkey, Class, Method, Stun, addr::Addr6, known};
 use tun_rs::DeviceBuilder;
 use zerocopy::{FromZeros, IntoBytes, TryFromBytes};
 
@@ -24,8 +24,7 @@ fn main() -> Result<Never> {
 	let mut buffer = vec![0; 65536];
 
 	// Write the ICE password into the buffer
-	let t = Stun::new(Class::Request, Method::Bind, &mut buffer).map_err(|e| eyre!("{e:?}"))?;
-	t.set_authkey(b"the/ice/password/constant");
+	let authkey = Authkey::new(b"the/ice/password/constant");
 
 	let mut vnet = VirtioNet::new_zeroed();
 	let mut ip = Ip6::new_zeroed();
@@ -35,7 +34,7 @@ fn main() -> Result<Never> {
 			IoSliceMut::new(&mut vnet.as_mut_bytes()[..VNET]),
 			IoSliceMut::new(&mut ip.as_mut_bytes()),
 			IoSliceMut::new(&mut udp.as_mut_bytes()),
-			IoSliceMut::new(&mut buffer[Stun::HEADROOM..]),
+			IoSliceMut::new(&mut buffer),
 		])?;
 		if len < VNET + size_of::<Ip6>() + size_of::<Udp>() {
 			continue;
@@ -67,11 +66,11 @@ fn main() -> Result<Never> {
 		msg.append_val(known::XOR_MAPPED_ADDRESS, &mapped);
 		msg.append_val(
 			known::MESSAGE_INTEGRITY,
-			&msg.trim().expected_message_integrity(),
+			&msg.trim().expected_message_integrity(&authkey),
 		);
 		msg.append_val(known::FINGERPRINT, &msg.trim().expected_fingerprint());
 		let end = size_of_val(msg.trim());
-		let frame = &buffer[Stun::HEADROOM..end];
+		let frame = &buffer[..end];
 
 		// Swap src and dst
 		let t = ip.src;

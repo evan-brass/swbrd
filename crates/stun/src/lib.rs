@@ -17,11 +17,26 @@ pub mod known;
 mod parse;
 mod typ;
 
+pub struct Authkey {
+	pub opad: [u8; 64],
+	pub ipad: [u8; 64],
+}
+impl Authkey {
+	pub fn new(key: &[u8]) -> Self {
+		assert!(key.len() <= 64);
+		let mut ipad = [0x36; 64];
+		let mut opad = [0x5c; 64];
+		for (i, b) in key.iter().enumerate() {
+			ipad[i] ^= b;
+			opad[i] ^= b;
+		}
+		Self { ipad, opad }
+	}
+}
+
 #[repr(C)]
 #[derive(Debug, PartialEq, Eq, KnownLayout, Unaligned, TryFromBytes, IntoBytes, SplitAt)]
 pub struct Stun {
-	opad: [u8; 64],
-	ipad: [u8; 64],
 	pub class: Class,
 	pub method: Method,
 	#[doc(hidden)]
@@ -30,11 +45,7 @@ pub struct Stun {
 	pub(crate) body: [[u8; 4]],
 }
 impl Stun {
-	pub const HEADROOM: usize = offset_of!(Self, class);
 	pub const MAX_LENGTH: u16 = 0xff00;
-	pub fn frame_length(&self) -> usize {
-		size_of_val(self.trim()) - Self::HEADROOM
-	}
 	pub fn trim(&self) -> &Self {
 		let length = self.length.get().get();
 		let offset = if length.is_multiple_of(4) {
@@ -54,7 +65,7 @@ impl Stun {
 		buffer: &mut [u8],
 	) -> Result<&mut Self, SizeError<&mut [u8], Self>> {
 		// Write valid bytes into the buffer before trying to read it as a &mut Stun
-		if buffer.len() >= (Self::HEADROOM + 20) {
+		if buffer.len() >= 20 {
 			// This is less then ideal.  1.8 billion slice indexes instead of 3 raw pointers... sux
 			class
 				.write_to(&mut buffer[offset_of!(Self, class)..][..size_of_val(&class)])
@@ -74,15 +85,6 @@ impl Stun {
 			Err(AlignedTryCastError::Alignment(a)) => match a {},
 			Err(AlignedTryCastError::Size(s)) => Err(s),
 			Err(AlignedTryCastError::Validity(_)) => unreachable!(),
-		}
-	}
-	pub fn set_authkey(&mut self, key: &[u8]) {
-		assert!(key.len() <= 64);
-		self.ipad.fill(0x36);
-		self.opad.fill(0x5c);
-		for (i, b) in key.iter().enumerate() {
-			self.ipad[i] ^= b;
-			self.opad[i] ^= b;
 		}
 	}
 }
