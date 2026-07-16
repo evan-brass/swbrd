@@ -186,11 +186,105 @@ pub enum Packet {
 	},
 }
 
+pub fn write_network_udp(
+	network: &SyncDevice,
+	from: ([u8; 16], U16),
+	to: ([u8; 16], U16),
+	buffer: &[u8],
+) -> Result<(), std::io::Error> {
+	let ip = Ip6 {
+		flags: Ip6::FLAGS,
+		length: U16::new((size_of::<Udp>() + buffer.len()) as u16),
+		next_header: proto::UDP,
+		hop_limit: 64,
+		src: from.0,
+		dst: to.0,
+	};
+	let mut udp = Udp {
+		src_port: from.1,
+		dst_port: to.1,
+		length: ip.length,
+		checksum: 0,
+	};
+
+	let vnet = partial_checksum(&ip, &mut udp);
+	if VNET == 0 {
+		full_checksum(&mut udp, &[buffer]);
+	}
+	network.send_vectored(&[
+		IoSlice::new(&vnet.as_bytes()[..VNET]),
+		IoSlice::new(ip.as_bytes()),
+		IoSlice::new(udp.as_bytes()),
+		IoSlice::new(buffer),
+	])?;
+	Ok(())
+}
+
+pub fn write_network_icmp(
+	network: &SyncDevice,
+	from: [u8; 16],
+	typ: u8,
+	code: u8,
+	arg: u32,
+
+	inner_ip: Ip6,
+	inner_transport: &[u8],
+	buffer: &[u8],
+) -> Result<(), std::io::Error> {
+	//
+	let quoted = &buffer[..usize::min(
+		buffer.len(),
+		/* Minimum IP6 MTU */
+		1280
+		/* IP Header */
+		- size_of::<Ip6>()
+		/* ICMP Header */
+		- size_of::<Icmp6>()
+		/* Quoted IP Header */
+		- size_of::<Ip6>()
+		/* Quoted Transport Header */
+		- size_of_val(inner_transport),
+	)];
+
+	let ip = Ip6 {
+		flags: Ip6::FLAGS,
+		next_header: proto::ICMP6,
+		hop_limit: 64,
+		src: from,
+		dst: inner_ip.src,
+		length: U16::new(
+			(size_of::<Icmp6>() + size_of::<Ip6>() + size_of::<Udp>() + size_of_val(quoted)) as u16,
+		),
+	};
+	let mut icmp = Icmp6 {
+		typ,
+		code,
+		mtu: U32::new(arg),
+		checksum: 0,
+	};
+
+	let mut vnet = partial_checksum(&ip, &mut icmp);
+	vnet.flags = 0;
+	full_checksum(
+		&mut icmp,
+		&[inner_ip.as_bytes(), inner_transport.as_bytes(), quoted],
+	);
+	network.send_vectored(&[
+		IoSlice::new(&vnet.as_bytes()[..VNET]),
+		IoSlice::new(ip.as_bytes()),
+		IoSlice::new(icmp.as_bytes()),
+		IoSlice::new(inner_ip.as_bytes()),
+		IoSlice::new(inner_transport.as_bytes()),
+		IoSlice::new(quoted),
+	])?;
+	Ok(())
+}
+
 pub fn read_network(
 	network: &SyncDevice,
 	buffer: &mut [u8],
 	// ICMP Errors will be issued from this IP address
-	router: &Ipv6Addr,
+	router: [u8; 16],
 ) -> Result<Packet, std::io::Error> {
 	loop {
 		let mut vnet = VirtioNet::new_zeroed();
@@ -222,37 +316,8 @@ pub fn read_network(
 		if (ip.next_header == proto::ICMP6 && transport[0] >= 128)
 			|| !matches!(ip.next_header, proto::UDP | proto::ICMP6)
 		{
-			let returned = usize::min(500, ip.length.get() as usize - 8);
-			let outer_ip = Ip6 {
-				flags: Ip6::FLAGS,
-				next_header: proto::ICMP6,
-				hop_limit: 64,
-				src: router.octets(),
-				dst: ip.src,
-				length: U16::new(
-					(size_of::<Icmp6>() + size_of::<Ip6>() + size_of_val(&transport) + returned)
-						as u16,
-				),
-			};
-			let mut icmp = Icmp6 {
-				typ: 1,
-				code: 3, // Address unreachable
-				mtu: U32::new(0),
-				checksum: 0,
-			};
-			let returned = &buffer[..returned as usize];
-
-			let mut vnet = partial_checksum(&outer_ip, &mut icmp);
-			vnet.flags = 0;
-			full_checksum(&mut icmp, &[ip.as_bytes(), &transport, returned]);
-			let _ = network.send_vectored(&[
-				IoSlice::new(&vnet.as_bytes()[..VNET]),
-				IoSlice::new(outer_ip.as_bytes()),
-				IoSlice::new(icmp.as_bytes()),
-				IoSlice::new(ip.as_bytes()),
-				IoSlice::new(&transport),
-				IoSlice::new(returned),
-			]);
+			// Emit a host unreachable
+			let _ = write_network_icmp(network, router, 1, 3, 0, ip, &transport, buffer);
 		}
 		// ICMP
 		if ip.next_header == proto::ICMP6 {
