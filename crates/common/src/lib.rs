@@ -11,6 +11,8 @@ use zerocopy::{
 	transmute, transmute_ref,
 };
 
+pub mod dtls;
+
 pub mod proto {
 	pub const UDP: u8 = 17;
 	pub const ICMP6: u8 = 58;

@@ -14,10 +14,12 @@ use std::{
 use clap::Parser;
 use common::{Packet, Udp, read_network, write_network_icmp, write_network_udp};
 use eyre::Result;
-use openssl::ssl::{ErrorCode, Ssl, SslAcceptor, SslContext, SslFiletype, SslMethod, SslStream};
+use openssl::ssl::{ErrorCode, SslAcceptor, SslContext, SslFiletype, SslMethod, SslStream};
 use tracing_subscriber::EnvFilter;
 use tun_rs::{DeviceBuilder, SyncDevice};
 use zerocopy::{IntoBytes, network_endian::U16};
+
+use crate::cookie::{self, Capture, Verdict};
 
 #[derive(Parser)]
 #[command(version, about)]
@@ -44,6 +46,10 @@ struct Bio {
 	// We store a small amount of plaintext data to be passed along in ICMP errors when we forward them to endpoint
 	plain_data: Option<[u8; 12]>,
 
+	// While cookie::promote walks a fresh Ssl into its post-HelloVerifyRequest
+	// state, the HelloVerifyRequest it writes is captured here instead of sent
+	capture: Option<Vec<u8>>,
+
 	last_update: Instant,
 }
 impl Read for Bio {
@@ -59,12 +65,27 @@ impl Write for Bio {
 		Ok(())
 	}
 	fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+		if let Some(captured) = &mut self.capture {
+			captured.extend_from_slice(buf);
+			return Ok(buf.len());
+		}
 		let _ = write_network_udp(&self.send, self.send_from, self.send_to, buf);
 
 		// TODO: It would probably be better to update this somewhere else
 		self.last_update = Instant::now();
 
 		Ok(buf.len())
+	}
+}
+impl Capture for Bio {
+	fn feed(&mut self, datagram: &[u8]) {
+		self.recv.extend(datagram);
+	}
+	fn capture(&mut self) {
+		self.capture = Some(Vec::new());
+	}
+	fn take_captured(&mut self) -> Vec<u8> {
+		self.capture.take().unwrap_or_default()
 	}
 }
 
@@ -75,6 +96,7 @@ fn load_config() -> Result<(SslContext, SslContext)> {
 		acceptor.set_private_key_file("key.pem", SslFiletype::PEM)?;
 		acceptor.set_certificate_file("January.der", SslFiletype::ASN1)?;
 		acceptor.check_private_key()?;
+		cookie::configure(&mut acceptor);
 		acceptor.build().into_context()
 	};
 	let july = {
@@ -82,6 +104,7 @@ fn load_config() -> Result<(SslContext, SslContext)> {
 		acceptor.set_private_key_file("key.pem", SslFiletype::PEM)?;
 		acceptor.set_certificate_file("July.der", SslFiletype::ASN1)?;
 		acceptor.check_private_key()?;
+		cookie::configure(&mut acceptor);
 		acceptor.build().into_context()
 	};
 
@@ -120,6 +143,9 @@ pub fn main() -> Result<Never> {
 	};
 
 	let (mut even, mut odd) = load_config()?;
+	// The HMAC key behind our stateless DTLS cookies.  Fresh per process: a
+	// restart just costs in-flight handshakes one extra HelloVerifyRequest round.
+	let keys = cookie::Keys::generate()?;
 	let need_reconfig = Arc::new(AtomicBool::new(true));
 	signal_hook::flag::register(signal_hook::consts::SIGHUP, need_reconfig.clone())?;
 
@@ -205,27 +231,44 @@ pub fn main() -> Result<Never> {
 						continue;
 					}
 
-					// Create a new SSL context (TODO: I really wish I could use DTLS cookies, but last time I tried Firefox freaked out)
+					// Unknown src/dst pair: statelessly verify a DTLS cookie.
+					// Ssl state is only ever created (in cookie::promote) for a
+					// ClientHello fragment bearing a valid cookie.
 					Entry::Vacant(e) => {
-						let mut ssl = Ssl::new(if send_from.1.get() & 0b1 == 0 {
-							&even
-						} else {
-							&odd
-						})?;
-						ssl.set_accept_state();
-						let stream = SslStream::new(
-							ssl,
-							Bio {
-								send_from,
-								send_to,
-								recv: VecDeque::from(Vec::from(data)),
-								send: network.clone(),
-								last_update: Instant::now(),
-								plain_data: None,
-							},
-						)?;
-
-						e.insert_entry(stream)
+						match keys.inspect(send_to, send_from, data) {
+							// Not the start of a ClientHello: ignore
+							Verdict::Drop => {}
+							// No/stale cookie: answer without allocating anything
+							Verdict::HelloVerify(hvr) => {
+								let _ =
+									write_network_udp(&network, send_from, send_to, hvr.as_bytes());
+							}
+							Verdict::Accept(verified) => {
+								let bio = Bio {
+									send_from,
+									send_to,
+									recv: VecDeque::new(),
+									send: network.clone(),
+									last_update: Instant::now(),
+									plain_data: None,
+									capture: None,
+								};
+								let ctx = if send_from.1.get() & 0b1 == 0 {
+									&even
+								} else {
+									&odd
+								};
+								match cookie::promote(ctx, bio, &verified) {
+									// Remaining fragments of the hello (if any)
+									// arrive through the Occupied path below
+									Ok(stream) => {
+										e.insert(stream);
+									}
+									Err(err) => tracing::debug!("promotion failed: {err}"),
+								}
+							}
+						}
+						continue;
 					}
 
 					// Existing connection

@@ -1,0 +1,484 @@
+//! Stateless DTLS cookies.
+//!
+//! Neither OpenSSL (`DTLSv1_listen`) nor mbedTLS will emit a HelloVerifyRequest
+//! for a *fragmented* ClientHello, and Chrome fragments its ClientHellos at
+//! 1200 bytes.  So cookies are handled manually: [`Keys::inspect`] statelessly
+//! parses the first fragment of a ClientHello (the cookie always lands in
+//! fragment 0) and either answers with a HelloVerifyRequest or clears the
+//! datagram for [`promote`], which is the only place an [`Ssl`] is created.
+//!
+//! A fresh server Ssl only accepts a ClientHello with message_seq 0, but a
+//! post-HelloVerifyRequest retry always has message_seq 1 (RFC 6347 4.2.2) and
+//! OpenSSL only accepts that after *it* has sent a HelloVerifyRequest on the
+//! same Ssl.  So `promote` walks the new Ssl into that state: it feeds a
+//! synthetic empty-cookie ClientHello, captures (and discards) the resulting
+//! HelloVerifyRequest — whose cookie, via the generate callback, is byte-equal
+//! to the one we already verified — and only then feeds the real, verified,
+//! truncated fragment.  Capturing the HelloVerifyRequest doubles as proof that
+//! OpenSSL reached the state where any future non-matching ClientHello is
+//! rejected, so a parsing disagreement can't leave a virgin Ssl behind as a
+//! cookie bypass.
+
+use std::{
+	io::{Read, Write},
+	sync::LazyLock,
+};
+
+use common::dtls::{
+	COOKIE_LEN, ContentType, Fragment, HandshakeHeader, HelloVerifyRequest, RecordHeader, U24,
+	Version,
+};
+use eyre::{Result, ensure, eyre};
+use openssl::{
+	error::ErrorStack,
+	hash::MessageDigest,
+	pkey::{PKey, Private},
+	sign::Signer,
+	ssl::{ErrorCode, Ssl, SslContextBuilder, SslContextRef, SslOptions, SslStream},
+};
+use zerocopy::{IntoBytes, network_endian::U16};
+
+type Addr = ([u8; 16], U16);
+
+/// The cookie an Ssl expects, stashed so the cookie callbacks can reach it
+static INDEX: LazyLock<openssl::ex_data::Index<Ssl, [u8; COOKIE_LEN]>> =
+	LazyLock::new(|| Ssl::new_ex_index().unwrap());
+
+/// Install the cookie callbacks on a server context.  Generation and
+/// verification both just reproduce the cookie that was already verified
+/// statelessly in [`Keys::inspect`] — by the time OpenSSL sees a ClientHello
+/// its cookie has been checked, so verification here is a formality that only
+/// re-pins the cookie against fragment-reassembly shenanigans.
+pub fn configure(ctx: &mut SslContextBuilder) {
+	ctx.set_options(SslOptions::COOKIE_EXCHANGE);
+	ctx.set_cookie_generate_cb(|ssl, buf| {
+		let cookie = ssl.ex_data(*INDEX).ok_or_else(ErrorStack::get)?;
+		buf[..COOKIE_LEN].copy_from_slice(cookie);
+		Ok(COOKIE_LEN)
+	});
+	ctx.set_cookie_verify_cb(|ssl, cookie| {
+		ssl.ex_data(*INDEX)
+			.is_some_and(|expected| cookie.len() == COOKIE_LEN && openssl::memcmp::eq(expected, cookie))
+	});
+}
+
+/// A ClientHello fragment whose cookie checked out
+pub struct Verified<'a> {
+	cookie: [u8; COOKIE_LEN],
+	random: [u8; 32],
+	/// [`Fragment::truncated`] record + handshake headers for [`Self::body`]
+	header: [u8; 25],
+	body: &'a [u8],
+}
+
+pub enum Verdict<'a> {
+	/// Not the start of a ClientHello (or malformed): ignore the datagram
+	Drop,
+	/// A ClientHello without a valid cookie: answer statelessly, keep no state
+	HelloVerify(HelloVerifyRequest),
+	/// A ClientHello with a valid cookie: safe to [`promote`]
+	Accept(Verified<'a>),
+}
+
+pub struct Keys {
+	hmac: PKey<Private>,
+}
+impl Keys {
+	pub fn generate() -> Result<Self> {
+		let mut key = [0; 32];
+		openssl::rand::rand_bytes(&mut key)?;
+		Ok(Self {
+			hmac: PKey::hmac(&key)?,
+		})
+	}
+
+	/// HMAC over both src and dst: dst ip+port is our stand-in for DTLS
+	/// connection ids, so a cookie must not be portable between destinations.
+	fn cookie(&self, src: Addr, dst: Addr) -> Result<[u8; COOKIE_LEN]> {
+		let mut signer = Signer::new(MessageDigest::sha256(), &self.hmac)?;
+		signer.update(&src.0)?;
+		signer.update(src.1.as_bytes())?;
+		signer.update(&dst.0)?;
+		signer.update(dst.1.as_bytes())?;
+		let mut cookie = [0; COOKIE_LEN];
+		signer.sign(&mut cookie)?;
+		Ok(cookie)
+	}
+
+	/// Statelessly judge a datagram from an unknown src/dst pair
+	pub fn inspect<'a>(&self, src: Addr, dst: Addr, datagram: &'a [u8]) -> Verdict<'a> {
+		let Some(fragment) = Fragment::parse(datagram) else {
+			return Verdict::Drop;
+		};
+		let Some(hello) = fragment.client_hello() else {
+			return Verdict::Drop;
+		};
+		let Ok(cookie) = self.cookie(src, dst) else {
+			return Verdict::Drop;
+		};
+		if hello.cookie.len() == COOKIE_LEN && openssl::memcmp::eq(hello.cookie, &cookie) {
+			Verdict::Accept(Verified {
+				cookie,
+				random: hello.random,
+				header: fragment.truncated(),
+				body: fragment.body,
+			})
+		} else {
+			Verdict::HelloVerify(HelloVerifyRequest::new(&fragment, cookie))
+		}
+	}
+}
+
+/// The BIO half that `promote` needs beyond Read + Write
+pub trait Capture {
+	/// Queue ciphertext for the Ssl to read
+	fn feed(&mut self, datagram: &[u8]);
+	/// Start capturing writes instead of sending them
+	fn capture(&mut self);
+	/// Stop capturing and return what was captured
+	fn take_captured(&mut self) -> Vec<u8>;
+}
+
+/// A minimal well-formed ClientHello: message_seq 0, empty cookie.  Its only
+/// job is to make OpenSSL send a HelloVerifyRequest (which happens before any
+/// version/cipher negotiation), so one dummy cipher suite and no extensions.
+#[repr(C, packed)]
+#[derive(Clone, Copy, zerocopy::KnownLayout, zerocopy::Immutable, zerocopy::Unaligned, IntoBytes)]
+struct SyntheticHello {
+	record: RecordHeader,
+	handshake: HandshakeHeader,
+	version: Version,
+	random: [u8; 32],
+	session_id_len: u8,
+	cookie_len: u8,
+	cipher_suites_len: U16,
+	cipher_suite: U16,
+	compression_len: u8,
+	compression: u8,
+}
+impl SyntheticHello {
+	const BODY: usize = 2 + 32 + 1 + 1 + 2 + 2 + 1 + 1;
+
+	fn new(random: [u8; 32]) -> Self {
+		Self {
+			record: RecordHeader {
+				content_type: ContentType::Handshake,
+				version: Version::Dtls1_0,
+				epoch: U16::new(0),
+				sequence: [0; 6],
+				length: U16::new((size_of::<HandshakeHeader>() + Self::BODY) as u16),
+			},
+			handshake: HandshakeHeader {
+				typ: HandshakeHeader::CLIENT_HELLO,
+				length: U24::new(Self::BODY as u32),
+				message_seq: U16::new(0),
+				fragment_offset: U24::new(0),
+				fragment_length: U24::new(Self::BODY as u32),
+			},
+			version: Version::Dtls1_2,
+			random,
+			session_id_len: 0,
+			cookie_len: 0,
+			cipher_suites_len: U16::new(2),
+			cipher_suite: U16::new(0xc02b), // ECDHE-ECDSA-AES128-GCM-SHA256, never actually negotiated
+			compression_len: 1,
+			compression: 0,
+		}
+	}
+}
+
+/// The only place an Ssl is created: for a cookie-[`Verified`] ClientHello
+/// fragment.  Feeds OpenSSL the synthetic hello, requires the captured
+/// HelloVerifyRequest as proof of state, then feeds exactly the verified bytes.
+pub fn promote<B: Read + Write + Capture>(
+	ctx: &SslContextRef,
+	bio: B,
+	verified: &Verified,
+) -> Result<SslStream<B>> {
+	let mut ssl = Ssl::new(ctx)?;
+	ssl.set_ex_data(*INDEX, verified.cookie);
+	ssl.set_accept_state();
+	let mut stream = SslStream::new(ssl, bio)?;
+
+	// Walk the Ssl into its post-HelloVerifyRequest state
+	stream.get_mut().capture();
+	stream.get_mut().feed(SyntheticHello::new(verified.random).as_bytes());
+	let res = stream.do_handshake();
+	let captured = stream.get_mut().take_captured();
+	match res {
+		Err(e) if e.code() == ErrorCode::WANT_READ => {}
+		res => return Err(eyre!("synthetic hello: {res:?}")),
+	}
+	ensure!(
+		Fragment::parse(&captured)
+			.is_some_and(|f| f.handshake.typ == HandshakeHeader::HELLO_VERIFY_REQUEST),
+		"no hello verify request: {:?}",
+		stream.ssl().state_string_long()
+	);
+
+	// The verified fragment, and nothing else from its datagram.  If the
+	// ClientHello was unfragmented this writes the ServerHello flight;
+	// otherwise OpenSSL buffers the fragment and awaits the rest.
+	let mut record = Vec::with_capacity(verified.header.len() + verified.body.len());
+	record.extend_from_slice(&verified.header);
+	record.extend_from_slice(verified.body);
+	stream.get_mut().feed(&record);
+	match stream.do_handshake() {
+		Ok(()) => Ok(stream),
+		Err(e) if matches!(e.code(), ErrorCode::WANT_READ | ErrorCode::WANT_WRITE) => Ok(stream),
+		Err(e) => Err(eyre!("client hello: {e:?}")),
+	}
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+	use openssl::{
+		asn1::Asn1Time,
+		ec::{EcGroup, EcKey},
+		nid::Nid,
+		ssl::{SslContext, SslMethod, SslVerifyMode},
+		x509::X509,
+	};
+	use std::collections::VecDeque;
+
+	const SRC: Addr = ([1; 16], U16::new(1111));
+	const DST: Addr = ([2; 16], U16::new(2222));
+
+	/// An in-memory datagram BIO: one incoming datagram per read, one outgoing
+	/// datagram per write
+	#[derive(Default)]
+	struct TestBio {
+		incoming: VecDeque<Vec<u8>>,
+		outgoing: Vec<Vec<u8>>,
+		capture: Option<Vec<u8>>,
+	}
+	impl Read for TestBio {
+		fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+			match self.incoming.pop_front() {
+				Some(datagram) => {
+					let len = datagram.len().min(buf.len());
+					buf[..len].copy_from_slice(&datagram[..len]);
+					Ok(len)
+				}
+				None => Err(std::io::Error::new(std::io::ErrorKind::WouldBlock, "")),
+			}
+		}
+	}
+	impl Write for TestBio {
+		fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+			match &mut self.capture {
+				Some(captured) => captured.extend_from_slice(buf),
+				None => self.outgoing.push(buf.to_vec()),
+			}
+			Ok(buf.len())
+		}
+		fn flush(&mut self) -> std::io::Result<()> {
+			Ok(())
+		}
+	}
+	impl Capture for TestBio {
+		fn feed(&mut self, datagram: &[u8]) {
+			self.incoming.push_back(datagram.to_vec());
+		}
+		fn capture(&mut self) {
+			self.capture = Some(Vec::new());
+		}
+		fn take_captured(&mut self) -> Vec<u8> {
+			self.capture.take().unwrap_or_default()
+		}
+	}
+
+	fn server_ctx() -> SslContext {
+		let group = EcGroup::from_curve_name(Nid::X9_62_PRIME256V1).unwrap();
+		let key = PKey::from_ec_key(EcKey::generate(&group).unwrap()).unwrap();
+		let mut cert = X509::builder().unwrap();
+		cert.set_version(2).unwrap();
+		cert.set_pubkey(&key).unwrap();
+		cert.set_not_before(&Asn1Time::days_from_now(0).unwrap()).unwrap();
+		cert.set_not_after(&Asn1Time::days_from_now(1).unwrap()).unwrap();
+		cert.sign(&key, MessageDigest::sha256()).unwrap();
+		let cert = cert.build();
+
+		let mut ctx = SslContext::builder(SslMethod::dtls()).unwrap();
+		ctx.set_certificate(&cert).unwrap();
+		ctx.set_private_key(&key).unwrap();
+		configure(&mut ctx);
+		ctx.build()
+	}
+
+	/// `mtu` forces the client to fragment its ClientHello like Chrome does
+	fn client(mtu: Option<u32>) -> SslStream<TestBio> {
+		let mut ctx = SslContext::builder(SslMethod::dtls()).unwrap();
+		ctx.set_verify(SslVerifyMode::NONE);
+		if mtu.is_some() {
+			ctx.set_options(SslOptions::NO_QUERY_MTU);
+		}
+		let ctx = ctx.build();
+		let mut ssl = Ssl::new(&ctx).unwrap();
+		// Bloat the ClientHello so a small MTU actually fragments it
+		ssl.set_hostname(&"padding.".repeat(20)).unwrap();
+		if let Some(mtu) = mtu {
+			ssl.set_mtu(mtu).unwrap();
+		}
+		ssl.set_connect_state();
+		SslStream::new(ssl, TestBio::default()).unwrap()
+	}
+
+	fn want_read<T>(res: Result<T, openssl::ssl::Error>) {
+		match res {
+			Err(e) if e.code() == ErrorCode::WANT_READ => {}
+			Err(e) => panic!("fatal: {e:?}"),
+			Ok(_) => panic!("finished early"),
+		}
+	}
+
+	/// Drive a client through the stateless HelloVerify round and return its
+	/// retry flight.  The first flight is fragmented too (a custom BIO can't
+	/// answer MTU queries, so OpenSSL falls back to its minimum), and only its
+	/// fragment 0 draws a HelloVerifyRequest.
+	fn verify_retry(keys: &Keys, client: &mut SslStream<TestBio>) -> Vec<Vec<u8>> {
+		want_read(client.do_handshake());
+		let flight = std::mem::take(&mut client.get_mut().outgoing);
+		let mut hvr = None;
+		for (i, datagram) in flight.iter().enumerate() {
+			match keys.inspect(SRC, DST, datagram) {
+				Verdict::HelloVerify(h) if i == 0 => hvr = Some(h),
+				Verdict::Drop if i > 0 => {}
+				_ => panic!("wrong verdict for first-flight datagram {i}"),
+			}
+		}
+		client.get_mut().feed(hvr.unwrap().as_bytes());
+		want_read(client.do_handshake());
+		std::mem::take(&mut client.get_mut().outgoing)
+	}
+
+	fn pump(client: &mut SslStream<TestBio>, server: &mut SslStream<TestBio>) {
+		for round in 0..10 {
+			if client.ssl().is_init_finished() && server.ssl().is_init_finished() {
+				return;
+			}
+			let to_client = std::mem::take(&mut server.get_mut().outgoing);
+			for datagram in &to_client {
+				client.get_mut().feed(datagram);
+			}
+			let client_res = client.do_handshake();
+			let to_server = std::mem::take(&mut client.get_mut().outgoing);
+			for datagram in &to_server {
+				server.get_mut().feed(datagram);
+			}
+			let server_res = server.do_handshake();
+			eprintln!(
+				"round {round}: {}> client {:?} ({client_res:?}) | {}> server {:?} ({server_res:?})",
+				to_client.len(),
+				client.ssl().state_string_long(),
+				to_server.len(),
+				server.ssl().state_string_long(),
+			);
+		}
+		panic!("handshake did not complete");
+	}
+
+	/// The full Chrome-shaped flow: fragmented hello -> stateless verify ->
+	/// promote on fragment 0 -> reassembly -> handshake -> application data
+	#[test]
+	fn fragmented_handshake() {
+		let keys = Keys::generate().unwrap();
+		let ctx = server_ctx();
+
+		let mut client = client(Some(256));
+		let flight = verify_retry(&keys, &mut client);
+		assert!(flight.len() > 1, "retry did not fragment");
+
+		// Valid cookie: promote on fragment 0, feed the rest like the
+		// Entry::Occupied path would
+		let mut server = None;
+		for (i, datagram) in flight.iter().enumerate() {
+			match keys.inspect(SRC, DST, datagram) {
+				Verdict::Accept(verified) if i == 0 => {
+					server = Some(promote(&ctx, TestBio::default(), &verified).unwrap());
+				}
+				Verdict::Drop if i > 0 => {
+					let server = server.as_mut().unwrap();
+					server.get_mut().feed(datagram);
+					want_read(server.do_handshake());
+				}
+				_ => panic!("wrong verdict for retry datagram {i}"),
+			}
+		}
+		let mut server = server.unwrap();
+
+		pump(&mut client, &mut server);
+
+		// And application data flows
+		client.ssl_write(b"ping").unwrap();
+		for datagram in std::mem::take(&mut client.get_mut().outgoing) {
+			server.get_mut().feed(&datagram);
+		}
+		let mut buf = [0; 64];
+		let len = server.ssl_read(&mut buf).unwrap();
+		assert_eq!(&buf[..len], b"ping");
+	}
+
+	/// Cookies are bound to both src and dst
+	#[test]
+	fn cookie_binds_addresses() {
+		let keys = Keys::generate().unwrap();
+
+		let mut client = client(None);
+		let flight = verify_retry(&keys, &mut client);
+		let retry = &flight[0];
+
+		assert!(matches!(keys.inspect(SRC, DST, retry), Verdict::Accept(_)));
+		// Replay from elsewhere, or to another destination: back to verification
+		let other = ([3; 16], U16::new(3333));
+		assert!(matches!(keys.inspect(other, DST, retry), Verdict::HelloVerify(_)));
+		assert!(matches!(keys.inspect(SRC, other, retry), Verdict::HelloVerify(_)));
+		// A different key (e.g. a restarted server): not accepted either
+		let fresh = Keys::generate().unwrap();
+		assert!(matches!(fresh.inspect(SRC, DST, retry), Verdict::HelloVerify(_)));
+	}
+
+	/// Even if the stateless parse were somehow fooled, OpenSSL's cookie
+	/// callbacks re-verify: promotion with a cookie that doesn't match the
+	/// hello's fails instead of creating usable state
+	#[test]
+	fn promote_rejects_mismatch() {
+		let keys = Keys::generate().unwrap();
+		let ctx = server_ctx();
+
+		let mut client = client(None);
+		let flight = verify_retry(&keys, &mut client);
+
+		let Verdict::Accept(mut verified) = keys.inspect(SRC, DST, &flight[0]) else {
+			panic!("expected accept");
+		};
+		verified.cookie[0] ^= 1;
+		match promote(&ctx, TestBio::default(), &verified) {
+			// Unfragmented hello: rejected inside promote
+			Err(_) => {}
+			// Fragmented hello: the cookie is re-checked when reassembly
+			// completes, before any handshake progress
+			Ok(mut server) => {
+				let fatal = flight[1..].iter().any(|datagram| {
+					server.get_mut().feed(datagram);
+					matches!(server.do_handshake(), Err(e) if e.code() != ErrorCode::WANT_READ)
+				});
+				assert!(fatal, "mismatched cookie was accepted");
+				assert!(!server.ssl().is_init_finished());
+			}
+		}
+	}
+
+	#[test]
+	fn junk_dropped() {
+		let keys = Keys::generate().unwrap();
+		assert!(matches!(keys.inspect(SRC, DST, b""), Verdict::Drop));
+		assert!(matches!(keys.inspect(SRC, DST, b"GET / HTTP/1.1"), Verdict::Drop));
+		// STUN magic doesn't parse as DTLS
+		assert!(matches!(
+			keys.inspect(SRC, DST, &[0, 1, 0, 0, 0x21, 0x12, 0xa4, 0x42, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]),
+			Verdict::Drop
+		));
+	}
+}
