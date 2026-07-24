@@ -210,6 +210,8 @@ checksum = "1d07550c9036bf2ae0c684c4297d503f838287c83c53686d05370d0e139ae570"
 name = "common"
 version = "0.1.0"
 dependencies = [
+ "nix 0.31.3",
+ "socket2",
  "tun-rs",
  "zerocopy",
 ]
@@ -1179,6 +1181,7 @@ dependencies = [
  "ipnet",
  "mio",
  "slab",
+ "socket2",
  "stun",
  "tracing",
  "tracing-subscriber",

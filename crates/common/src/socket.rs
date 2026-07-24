@@ -1,0 +1,145 @@
+//! Socket helpers shared by the socket-side of the proxies (turnserver now,
+//! dtls-proxy later).
+//!
+//! The point of these is connected sockets whose source address is fixed at
+//! bind/connect time, plus the two message-based helpers needed to answer off an
+//! *unconnected* wildcard socket from the correct local address.  We drive
+//! `recvmsg`/`sendmsg` through nix (its `ControlMessageOwned` iterator parses the
+//! `IPV6_PKTINFO` cmsg for us) on the raw fd of a `socket2::Socket`.
+
+use core::mem::MaybeUninit;
+use std::{
+	io::{self, IoSlice, IoSliceMut},
+	net::{Ipv6Addr, SocketAddrV6},
+	os::fd::AsRawFd,
+};
+
+use nix::{
+	libc,
+	sys::socket::{
+		ControlMessage, ControlMessageOwned, MsgFlags, SockaddrIn6, recvmsg, sendmsg, setsockopt,
+		sockopt,
+	},
+};
+use socket2::{Domain, Protocol, SockAddr, Socket, Type};
+
+/// Which non-default option a forked connected UDP socket wants.  turnserver
+/// needs `SO_REUSEPORT` so its per-client sockets can share `:3478` with the
+/// wildcard socket; dtls-proxy needs `IP_TRANSPARENT` so it can bind to / send
+/// from the non-local addresses that show up in TUN packets.
+#[derive(Clone, Copy, Debug)]
+pub enum UdpOpt {
+	ReusePort,
+	Transparent,
+}
+
+/// Enable `IPV6_RECVPKTINFO` so `recv_with_local` can recover the local address
+/// each datagram was sent to.  Call once on the wildcard UDP socket.
+pub fn set_recv_pktinfo(sock: &Socket) -> io::Result<()> {
+	setsockopt(sock, sockopt::Ipv6RecvPacketInfo, &true).map_err(io::Error::from)
+}
+
+/// Receive one datagram, reporting both the client's transport address (`remote`)
+/// and the local address it was sent to (`local`, from the `IPV6_PKTINFO` cmsg).
+/// The socket must be dual-stack with `IPV6_RECVPKTINFO` enabled
+/// ([`set_recv_pktinfo`]); v4 clients arrive v4-mapped and still carry pktinfo.
+pub fn recv_with_local(
+	sock: &Socket,
+	buf: &mut [u8],
+) -> io::Result<(usize, SocketAddrV6, Ipv6Addr)> {
+	let mut cmsg = nix::cmsg_space!(libc::in6_pktinfo);
+	let mut iov = [IoSliceMut::new(buf)];
+	let msg = recvmsg::<SockaddrIn6>(
+		sock.as_raw_fd(),
+		&mut iov,
+		Some(&mut cmsg),
+		MsgFlags::empty(),
+	)
+	.map_err(io::Error::from)?;
+
+	let remote = msg
+		.address
+		.map(SocketAddrV6::from)
+		.ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "recvmsg: no source address"))?;
+
+	let mut local = Ipv6Addr::UNSPECIFIED;
+	for c in msg.cmsgs().map_err(io::Error::from)? {
+		if let ControlMessageOwned::Ipv6PacketInfo(pi) = c {
+			local = Ipv6Addr::from(pi.ipi6_addr.s6_addr);
+		}
+	}
+
+	Ok((msg.bytes, remote, local))
+}
+
+/// Send `buf` to `to` from local address `local`, off an *unconnected* socket.
+/// Used for stateless Binding replies on the wildcard socket so the reply's
+/// source IP matches the address the request was sent to.
+pub fn send_from(sock: &Socket, local: Ipv6Addr, to: SocketAddrV6, buf: &[u8]) -> io::Result<usize> {
+	let pi = libc::in6_pktinfo {
+		ipi6_addr: libc::in6_addr {
+			s6_addr: local.octets(),
+		},
+		ipi6_ifindex: 0,
+	};
+	let cmsgs = [ControlMessage::Ipv6PacketInfo(&pi)];
+	let iov = [IoSlice::new(buf)];
+	let addr = SockaddrIn6::from(to);
+	sendmsg(
+		sock.as_raw_fd(),
+		&iov,
+		&cmsgs,
+		MsgFlags::empty(),
+		Some(&addr),
+	)
+	.map_err(io::Error::from)
+}
+
+/// Build a connected, nonblocking, dual-stack UDP socket bound to `local` and
+/// connected to `remote`.  The connected 4-tuple outscores a wildcard socket in
+/// the kernel UDP demux, so this flow is delivered here while unknown flows keep
+/// hitting the wildcard.
+pub fn connected_udp(
+	local: SocketAddrV6,
+	remote: SocketAddrV6,
+	opt: UdpOpt,
+) -> io::Result<Socket> {
+	let sock = Socket::new(Domain::IPV6, Type::DGRAM, Some(Protocol::UDP))?;
+	sock.set_only_v6(false)?;
+	sock.set_reuse_address(true)?;
+	match opt {
+		UdpOpt::ReusePort => sock.set_reuse_port(true)?,
+		UdpOpt::Transparent => setsockopt(&sock, sockopt::IpTransparent, &true).map_err(io::Error::from)?,
+	}
+	sock.bind(&SockAddr::from(local))?;
+	sock.connect(&SockAddr::from(remote))?;
+	sock.set_nonblocking(true)?;
+	Ok(sock)
+}
+
+/// `MSG_PEEK` into an initialized `&mut [u8]`, returning how many bytes are
+/// available without consuming them. Wraps socket2's `MaybeUninit`-typed `peek`;
+/// only the initialized prefix is ever read back, so the cast is sound.
+pub fn peek(sock: &Socket, buf: &mut [u8]) -> io::Result<usize> {
+	let uninit =
+		unsafe { core::slice::from_raw_parts_mut(buf.as_mut_ptr().cast::<MaybeUninit<u8>>(), buf.len()) };
+	sock.peek(uninit)
+}
+
+/// How many more bytes can be handed to the kernel for this TCP socket right now:
+/// `SO_SNDBUF` minus the bytes still queued (`SIOCOUTQ`) minus a safety margin.
+/// Callers use this to decide whether a whole STUN frame fits before writing —
+/// there is no partial-write buffer, so a frame that does not fit is dropped.
+pub fn tcp_send_space(sock: &Socket) -> io::Result<usize> {
+	const MARGIN: usize = 2048;
+	let sndbuf = sock.send_buffer_size()?;
+	let mut outq: libc::c_int = 0;
+	// SIOCOUTQ == TIOCOUTQ (0x5411) on Linux: unsent bytes in the send queue.
+	let rc = unsafe { libc::ioctl(sock.as_raw_fd(), libc::TIOCOUTQ as _, &mut outq) };
+	if rc != 0 {
+		return Err(io::Error::last_os_error());
+	}
+	Ok(sndbuf
+		.saturating_sub(outq as usize)
+		.saturating_sub(MARGIN))
+}

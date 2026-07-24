@@ -12,6 +12,7 @@ eyre = "0.6.12"
 ipnet = "2.12.0"
 mio = { version = "1.2.1", features = ["os-poll", "os-ext", "net"] }
 slab = "0.4.12"
+socket2 = { version = "0.6.4", features = ["all"] }
 stun = { path = "../stun" }
 tracing = "0.1.41"
 tracing-subscriber = { version = "0.3.19", features = ["env-filter"] }
