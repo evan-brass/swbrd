@@ -8,7 +8,13 @@ license = "MIT-0"
 common = { path = "../common" }
 clap = { version = "4.4", features = ["derive"] }
 eyre = "0.6.12"
+foreign-types = "0.3"
+libc = "0.2"
+mio = { version = "1.2.1", features = ["os-poll", "os-ext", "net"] }
 openssl = "0.10.80"
+openssl-sys = "0.9"
+slab = "0.4.12"
+socket2 = { version = "0.6.4", features = ["all"] }
 tracing = "0.1.41"
 tracing-subscriber = { version = "0.3.19", features = ["env-filter"] }
 tun-rs = "2.8.3"

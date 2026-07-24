@@ -19,10 +19,7 @@
 //! rejected, so a parsing disagreement can't leave a virgin Ssl behind as a
 //! cookie bypass.
 
-use std::{
-	io::{Read, Write},
-	sync::LazyLock,
-};
+use std::{os::fd::RawFd, sync::LazyLock};
 
 use common::dtls::{
 	COOKIE_LEN, ContentType, Fragment, HandshakeHeader, HelloVerifyRequest, RecordHeader, U24,
@@ -34,9 +31,11 @@ use openssl::{
 	hash::MessageDigest,
 	pkey::{PKey, Private},
 	sign::Signer,
-	ssl::{ErrorCode, Ssl, SslContextBuilder, SslContextRef, SslOptions, SslStream},
+	ssl::{Ssl, SslContextBuilder, SslContextRef, SslOptions},
 };
 use zerocopy::{IntoBytes, network_endian::U16};
+
+use crate::ffi::{self, BioPair, SslIo};
 
 type Addr = ([u8; 16], U16);
 
@@ -129,16 +128,6 @@ impl Keys {
 	}
 }
 
-/// The BIO half that `promote` needs beyond Read + Write
-pub trait Capture {
-	/// Queue ciphertext for the Ssl to read
-	fn feed(&mut self, datagram: &[u8]);
-	/// Start capturing writes instead of sending them
-	fn capture(&mut self);
-	/// Stop capturing and return what was captured
-	fn take_captured(&mut self) -> Vec<u8>;
-}
-
 /// A minimal well-formed ClientHello: message_seq 0, empty cookie.  Its only
 /// job is to make OpenSSL send a HelloVerifyRequest (which happens before any
 /// version/cipher negotiation), so one dummy cipher suite and no extensions.
@@ -187,47 +176,91 @@ impl SyntheticHello {
 	}
 }
 
+/// A caught-up server handshake: an owned [`Ssl`] past the cookie exchange,
+/// still driven through an in-memory datagram BIO pair.  Production immediately
+/// [`Self::into_established`]s it onto the connected socket; the tests keep
+/// driving it in memory via [`Self::feed`] / [`Self::drain_output`].
+pub struct Handshake {
+	ssl: Ssl,
+	pair: BioPair,
+}
+impl Handshake {
+	pub fn is_finished(&self) -> bool {
+		self.ssl.is_init_finished()
+	}
+	/// The datagrams the Ssl has written out so far (handshake flights).
+	pub fn drain_output(&self) -> Vec<Vec<u8>> {
+		self.pair.drain()
+	}
+	/// Queue one ciphertext datagram for the Ssl to read.  Only production's
+	/// remaining fragments arrive on the socket; the in-memory tests feed here.
+	#[cfg(test)]
+	pub fn feed(&self, datagram: &[u8]) {
+		self.pair.feed(datagram);
+	}
+	#[cfg(test)]
+	pub fn do_handshake(&mut self) -> SslIo {
+		ffi::do_handshake(&mut self.ssl)
+	}
+	/// Read decrypted application data (used by the in-memory tests; production
+	/// reads via [`ffi::read`] on the owned Ssl after [`Self::into_established`]).
+	#[cfg(test)]
+	pub fn read(&mut self, buf: &mut [u8]) -> SslIo {
+		ffi::read(&mut self.ssl, buf)
+	}
+	/// Cut over from the in-memory pair to a dgram BIO on the connected socket
+	/// `fd`, returning the owned Ssl.  The caller must have already drained and
+	/// sent any pending output; this consumes (and frees) the pair.
+	pub fn into_established(self, fd: RawFd) -> Result<Ssl> {
+		let Handshake { mut ssl, pair } = self;
+		ensure!(ffi::attach_dgram(&mut ssl, fd), "BIO_new_dgram failed");
+		drop(pair);
+		Ok(ssl)
+	}
+}
+
 /// The only place an Ssl is created: for a cookie-[`Verified`] ClientHello
 /// fragment.  Feeds OpenSSL the synthetic hello, requires the captured
 /// HelloVerifyRequest as proof of state, then feeds exactly the verified bytes.
-pub fn promote<B: Read + Write + Capture>(
-	ctx: &SslContextRef,
-	bio: B,
-	verified: &Verified,
-) -> Result<SslStream<B>> {
+pub fn promote(ctx: &SslContextRef, verified: &Verified) -> Result<Handshake> {
 	let mut ssl = Ssl::new(ctx)?;
 	ssl.set_ex_data(*INDEX, verified.cookie);
 	ssl.set_accept_state();
-	let mut stream = SslStream::new(ssl, bio)?;
+
+	let pair = BioPair::new().ok_or_else(|| eyre!("BIO_new_bio_dgram_pair failed"))?;
+	ffi::set_bio(&mut ssl, &pair);
 
 	// Walk the Ssl into its post-HelloVerifyRequest state
-	stream.get_mut().capture();
-	stream.get_mut().feed(SyntheticHello::new(verified.random).as_bytes());
-	let res = stream.do_handshake();
-	let captured = stream.get_mut().take_captured();
-	match res {
-		Err(e) if e.code() == ErrorCode::WANT_READ => {}
-		res => return Err(eyre!("synthetic hello: {res:?}")),
+	pair.feed(SyntheticHello::new(verified.random).as_bytes());
+	match ffi::do_handshake(&mut ssl) {
+		SslIo::WantRead => {}
+		_ => return Err(eyre!("synthetic hello: unexpected handshake result")),
 	}
+	let captured = pair.drain();
 	ensure!(
-		Fragment::parse(&captured)
+		captured
+			.first()
+			.and_then(|d| Fragment::parse(d))
 			.is_some_and(|f| f.handshake.typ == HandshakeHeader::HELLO_VERIFY_REQUEST),
 		"no hello verify request: {:?}",
-		stream.ssl().state_string_long()
+		ssl.state_string_long()
 	);
 
 	// The verified fragment, and nothing else from its datagram.  If the
-	// ClientHello was unfragmented this writes the ServerHello flight;
-	// otherwise OpenSSL buffers the fragment and awaits the rest.
+	// ClientHello was unfragmented this writes the ServerHello flight (drained
+	// by the caller); otherwise OpenSSL buffers the fragment and awaits the rest.
 	let mut record = Vec::with_capacity(verified.header.len() + verified.body.len());
 	record.extend_from_slice(&verified.header);
 	record.extend_from_slice(verified.body);
-	stream.get_mut().feed(&record);
-	match stream.do_handshake() {
-		Ok(()) => Ok(stream),
-		Err(e) if matches!(e.code(), ErrorCode::WANT_READ | ErrorCode::WANT_WRITE) => Ok(stream),
-		Err(e) => Err(eyre!("client hello: {e:?}")),
+	pair.feed(&record);
+	match ffi::do_handshake(&mut ssl) {
+		SslIo::Ok(_) | SslIo::WantRead | SslIo::WantWrite => {}
+		SslIo::ZeroReturn => return Err(eyre!("client hello: peer closed")),
+		SslIo::Syscall(e) => return Err(eyre!("client hello: syscall {e}")),
+		SslIo::Fatal => return Err(eyre!("client hello: fatal handshake result")),
 	}
+
+	Ok(Handshake { ssl, pair })
 }
 
 #[cfg(test)]
@@ -237,21 +270,28 @@ mod tests {
 		asn1::Asn1Time,
 		ec::{EcGroup, EcKey},
 		nid::Nid,
-		ssl::{SslContext, SslMethod, SslVerifyMode},
+		ssl::{ErrorCode, SslContext, SslMethod, SslStream, SslVerifyMode},
 		x509::X509,
 	};
-	use std::collections::VecDeque;
+	use std::{
+		collections::VecDeque,
+		io::{Read, Write},
+	};
 
 	const SRC: Addr = ([1; 16], U16::new(1111));
 	const DST: Addr = ([2; 16], U16::new(2222));
 
-	/// An in-memory datagram BIO: one incoming datagram per read, one outgoing
-	/// datagram per write
+	/// An in-memory datagram BIO for the DTLS *client* side of the tests: one
+	/// incoming datagram per read, one outgoing datagram per write.
 	#[derive(Default)]
 	struct TestBio {
 		incoming: VecDeque<Vec<u8>>,
 		outgoing: Vec<Vec<u8>>,
-		capture: Option<Vec<u8>>,
+	}
+	impl TestBio {
+		fn feed(&mut self, datagram: &[u8]) {
+			self.incoming.push_back(datagram.to_vec());
+		}
 	}
 	impl Read for TestBio {
 		fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
@@ -267,26 +307,20 @@ mod tests {
 	}
 	impl Write for TestBio {
 		fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-			match &mut self.capture {
-				Some(captured) => captured.extend_from_slice(buf),
-				None => self.outgoing.push(buf.to_vec()),
-			}
+			self.outgoing.push(buf.to_vec());
 			Ok(buf.len())
 		}
 		fn flush(&mut self) -> std::io::Result<()> {
 			Ok(())
 		}
 	}
-	impl Capture for TestBio {
-		fn feed(&mut self, datagram: &[u8]) {
-			self.incoming.push_back(datagram.to_vec());
-		}
-		fn capture(&mut self) {
-			self.capture = Some(Vec::new());
-		}
-		fn take_captured(&mut self) -> Vec<u8> {
-			self.capture.take().unwrap_or_default()
-		}
+
+	/// A handshake step on the [`Handshake`] server that must not be fatal.
+	fn want_read_io(res: SslIo) {
+		assert!(matches!(res, SslIo::WantRead), "expected WANT_READ from server");
+	}
+	fn is_fatal_io(res: SslIo) -> bool {
+		matches!(res, SslIo::Fatal | SslIo::Syscall(_) | SslIo::ZeroReturn)
 	}
 
 	fn server_ctx() -> SslContext {
@@ -353,28 +387,19 @@ mod tests {
 		std::mem::take(&mut client.get_mut().outgoing)
 	}
 
-	fn pump(client: &mut SslStream<TestBio>, server: &mut SslStream<TestBio>) {
-		for round in 0..10 {
-			if client.ssl().is_init_finished() && server.ssl().is_init_finished() {
+	fn pump(client: &mut SslStream<TestBio>, server: &mut Handshake) {
+		for _round in 0..10 {
+			if client.ssl().is_init_finished() && server.is_finished() {
 				return;
 			}
-			let to_client = std::mem::take(&mut server.get_mut().outgoing);
-			for datagram in &to_client {
-				client.get_mut().feed(datagram);
+			for datagram in server.drain_output() {
+				client.get_mut().feed(&datagram);
 			}
-			let client_res = client.do_handshake();
-			let to_server = std::mem::take(&mut client.get_mut().outgoing);
-			for datagram in &to_server {
-				server.get_mut().feed(datagram);
+			let _ = client.do_handshake();
+			for datagram in std::mem::take(&mut client.get_mut().outgoing) {
+				server.feed(&datagram);
 			}
-			let server_res = server.do_handshake();
-			eprintln!(
-				"round {round}: {}> client {:?} ({client_res:?}) | {}> server {:?} ({server_res:?})",
-				to_client.len(),
-				client.ssl().state_string_long(),
-				to_server.len(),
-				server.ssl().state_string_long(),
-			);
+			let _ = server.do_handshake();
 		}
 		panic!("handshake did not complete");
 	}
@@ -391,17 +416,17 @@ mod tests {
 		assert!(flight.len() > 1, "retry did not fragment");
 
 		// Valid cookie: promote on fragment 0, feed the rest like the
-		// Entry::Occupied path would
+		// Entry::Occupied path (over the connected socket) would
 		let mut server = None;
 		for (i, datagram) in flight.iter().enumerate() {
 			match keys.inspect(SRC, DST, datagram) {
 				Verdict::Accept(verified) if i == 0 => {
-					server = Some(promote(&ctx, TestBio::default(), &verified).unwrap());
+					server = Some(promote(&ctx, &verified).unwrap());
 				}
 				Verdict::Drop if i > 0 => {
 					let server = server.as_mut().unwrap();
-					server.get_mut().feed(datagram);
-					want_read(server.do_handshake());
+					server.feed(datagram);
+					want_read_io(server.do_handshake());
 				}
 				_ => panic!("wrong verdict for retry datagram {i}"),
 			}
@@ -413,11 +438,44 @@ mod tests {
 		// And application data flows
 		client.ssl_write(b"ping").unwrap();
 		for datagram in std::mem::take(&mut client.get_mut().outgoing) {
-			server.get_mut().feed(&datagram);
+			server.feed(&datagram);
 		}
 		let mut buf = [0; 64];
-		let len = server.ssl_read(&mut buf).unwrap();
+		let SslIo::Ok(len) = server.read(&mut buf) else {
+			panic!("server did not read application data");
+		};
 		assert_eq!(&buf[..len], b"ping");
+	}
+
+	/// The promote -> cutover BIO-ownership dance: swap the in-memory pair for a
+	/// real fd-backed dgram BIO and tear everything down without a double free.
+	#[test]
+	fn promote_then_cutover() {
+		use std::os::fd::AsRawFd;
+
+		let keys = Keys::generate().unwrap();
+		let ctx = server_ctx();
+
+		let mut client = client(None);
+		let flight = verify_retry(&keys, &mut client);
+		let Verdict::Accept(verified) = keys.inspect(SRC, DST, &flight[0]) else {
+			panic!("expected accept");
+		};
+
+		let hs = promote(&ctx, &verified).unwrap();
+		// Drain any ServerHello flight before cutover, like production does.
+		let _ = hs.drain_output();
+
+		// A connected UDP socket for the dgram BIO to borrow (no real handshake).
+		let sock = std::net::UdpSocket::bind("[::1]:0").unwrap();
+		let addr = sock.local_addr().unwrap();
+		sock.connect(addr).unwrap();
+
+		let ssl = hs.into_established(sock.as_raw_fd()).unwrap();
+		// Drop order: Ssl frees the dgram BIO (BIO_NOCLOSE, fd untouched), then the
+		// socket closes the fd.
+		drop(ssl);
+		drop(sock);
 	}
 
 	/// Cookies are bound to both src and dst
@@ -454,18 +512,18 @@ mod tests {
 			panic!("expected accept");
 		};
 		verified.cookie[0] ^= 1;
-		match promote(&ctx, TestBio::default(), &verified) {
+		match promote(&ctx, &verified) {
 			// Unfragmented hello: rejected inside promote
 			Err(_) => {}
 			// Fragmented hello: the cookie is re-checked when reassembly
 			// completes, before any handshake progress
 			Ok(mut server) => {
 				let fatal = flight[1..].iter().any(|datagram| {
-					server.get_mut().feed(datagram);
-					matches!(server.do_handshake(), Err(e) if e.code() != ErrorCode::WANT_READ)
+					server.feed(datagram);
+					is_fatal_io(server.do_handshake())
 				});
 				assert!(fatal, "mismatched cookie was accepted");
-				assert!(!server.ssl().is_init_finished());
+				assert!(!server.is_finished());
 			}
 		}
 	}

@@ -1,8 +1,8 @@
 use std::{
-	collections::{BTreeMap, VecDeque, btree_map::Entry},
-	io::{self, ErrorKind, Read, Write},
+	collections::HashMap,
+	io::ErrorKind,
 	net::{Ipv6Addr, SocketAddrV6},
-	rc::Rc,
+	os::fd::AsRawFd,
 	str::FromStr,
 	sync::{
 		Arc,
@@ -12,14 +12,28 @@ use std::{
 };
 
 use clap::Parser;
-use common::{Packet, Udp, read_network, write_network_icmp, write_network_udp};
+use common::{
+	Packet, Udp, read_network,
+	socket::{UdpOpt, connected_udp, set_v6_pmtudisc, v6_path_mtu},
+	write_network_icmp, write_network_udp,
+};
 use eyre::Result;
-use openssl::ssl::{ErrorCode, SslAcceptor, SslContext, SslFiletype, SslMethod, SslStream};
+use mio::{Events, Interest, Poll, Registry, Token, unix::SourceFd};
+use openssl::ssl::{Ssl, SslAcceptor, SslContext, SslContextRef, SslFiletype, SslMethod};
+use slab::Slab;
+use socket2::Socket;
 use tracing_subscriber::EnvFilter;
 use tun_rs::{DeviceBuilder, SyncDevice};
 use zerocopy::{IntoBytes, network_endian::U16};
 
-use crate::cookie::{self, Capture, Verdict};
+use crate::{
+	cookie::{self, Verdict, Verified},
+	ffi::{self, SslIo},
+};
+
+/// IPv6 (40) + UDP (8) header overhead between a link/path MTU and the UDP
+/// payload a DTLS record occupies.
+const IP_UDP: u32 = 40 + 8;
 
 #[derive(Parser)]
 #[command(version, about)]
@@ -34,63 +48,21 @@ struct Args {
 	endpoint: String,
 }
 
-struct Bio {
-	// This is what we key our BTree with
+/// An established or in-flight DTLS connection.  The client-facing ciphertext
+/// rides its own connected `IP_TRANSPARENT` socket, managed by OpenSSL's dgram
+/// BIO; only endpoint plaintext and first-contact ClientHellos touch the TUN.
+struct Connection {
+	ssl: Ssl,
+	/// Connected transparent socket (owns the fd the dgram BIO borrows).
+	sock: Socket,
+	/// The relayed address the client sent to = our local addr on this socket;
+	/// the `by_addr` key and the source of forwarded plaintext / ICMP.
 	send_from: ([u8; 16], U16),
-	// This is where we last received ciphertext from and where we should forward our own handshake/ciphertext to
-	pub send_to: ([u8; 16], U16),
-
-	recv: VecDeque<u8>,
-	send: Rc<SyncDevice>,
-
-	// We store a small amount of plaintext data to be passed along in ICMP errors when we forward them to endpoint
-	plain_data: Option<[u8; 12]>,
-
-	// While cookie::promote walks a fresh Ssl into its post-HelloVerifyRequest
-	// state, the HelloVerifyRequest it writes is captured here instead of sent
-	capture: Option<Vec<u8>>,
-
+	established: bool,
 	last_update: Instant,
-}
-impl Read for Bio {
-	fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-		match self.recv.read(buf) {
-			Ok(0) => Err(io::Error::new(ErrorKind::WouldBlock, "")),
-			r => r,
-		}
-	}
-}
-impl Write for Bio {
-	fn flush(&mut self) -> io::Result<()> {
-		Ok(())
-	}
-	fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-		if let Some(captured) = &mut self.capture {
-			captured.extend_from_slice(buf);
-			return Ok(buf.len());
-		}
-		let _ = write_network_udp(&self.send, self.send_from, self.send_to, buf);
-
-		// TODO: It would probably be better to update this somewhere else
-		self.last_update = Instant::now();
-
-		Ok(buf.len())
-	}
-}
-impl Capture for Bio {
-	fn feed(&mut self, datagram: &[u8]) {
-		self.recv.extend(datagram);
-	}
-	fn capture(&mut self) {
-		self.capture = Some(Vec::new());
-	}
-	fn take_captured(&mut self) -> Vec<u8> {
-		self.capture.take().unwrap_or_default()
-	}
 }
 
 fn load_config() -> Result<(SslContext, SslContext)> {
-	// Construct an acceptor and apply it
 	let january = {
 		let mut acceptor = SslAcceptor::mozilla_modern(SslMethod::dtls())?;
 		acceptor.set_private_key_file("key.pem", SslFiletype::PEM)?;
@@ -113,6 +85,113 @@ fn load_config() -> Result<(SslContext, SslContext)> {
 	Ok((january, july))
 }
 
+/// Drop a connection: deregister its socket and forget its address.
+fn remove_conn(
+	streams: &mut Slab<Connection>,
+	by_addr: &mut HashMap<([u8; 16], U16), usize>,
+	registry: &Registry,
+	key: usize,
+) {
+	let Some(conn) = streams.try_remove(key) else {
+		return;
+	};
+	let _ = registry.deregister(&mut SourceFd(&conn.sock.as_raw_fd()));
+	by_addr.remove(&conn.send_from);
+}
+
+/// A cookie-verified ClientHello: fork a connected transparent socket, run the
+/// cookie catch-up on an in-memory BIO pair, then cut over to the fd-backed
+/// dgram BIO and register the socket.
+fn create_connection(
+	ctx: &SslContextRef,
+	verified: &Verified,
+	send_from: ([u8; 16], U16),
+	send_to: ([u8; 16], U16),
+	streams: &mut Slab<Connection>,
+	by_addr: &mut HashMap<([u8; 16], U16), usize>,
+	registry: &Registry,
+) -> Result<()> {
+	let local = SocketAddrV6::new(Ipv6Addr::from(send_from.0), send_from.1.get(), 0, 0);
+	let remote = SocketAddrV6::new(Ipv6Addr::from(send_to.0), send_to.1.get(), 0, 0);
+	let sock = connected_udp(local, remote, UdpOpt::Transparent)?;
+	set_v6_pmtudisc(&sock)?;
+
+	let hs = cookie::promote(ctx, verified)?;
+
+	// Unfragmented hello: the ServerHello flight is already produced; send it on
+	// the socket before cutover.  (Fragmented: nothing yet — the rest arrives on
+	// the socket.)
+	for datagram in hs.drain_output() {
+		let _ = sock.send(&datagram);
+	}
+
+	let fd = sock.as_raw_fd();
+	let established = hs.is_finished();
+	let ssl = hs.into_established(fd)?;
+
+	let entry = streams.vacant_entry();
+	let key = entry.key();
+	registry.register(&mut SourceFd(&fd), Token(key), Interest::READABLE)?;
+	entry.insert(Connection {
+		ssl,
+		sock,
+		send_from,
+		established,
+		last_update: Instant::now(),
+	});
+	by_addr.insert(send_from, key);
+	Ok(())
+}
+
+/// Drain a connection's socket: drive the handshake, then read decrypted
+/// application data and forward it to the endpoint over the TUN.
+fn drive_connection(
+	key: usize,
+	streams: &mut Slab<Connection>,
+	by_addr: &mut HashMap<([u8; 16], U16), usize>,
+	registry: &Registry,
+	network: &SyncDevice,
+	endpoint: ([u8; 16], U16),
+	buffer: &mut [u8],
+) {
+	loop {
+		let Some(conn) = streams.get_mut(key) else {
+			return;
+		};
+		let outcome = if !conn.established {
+			let r = ffi::do_handshake(&mut conn.ssl);
+			if matches!(r, SslIo::Ok(_)) {
+				conn.established = conn.ssl.is_init_finished();
+				conn.last_update = Instant::now();
+			}
+			r
+		} else {
+			let r = ffi::read(&mut conn.ssl, buffer);
+			if let SslIo::Ok(len) = r
+				&& len > 0
+			{
+				conn.last_update = Instant::now();
+				let from = conn.send_from;
+				let _ = write_network_udp(network, from, endpoint, &buffer[..len]);
+			}
+			r
+		};
+
+		match outcome {
+			// Handshake step or read made progress: keep draining.
+			SslIo::Ok(_) => continue,
+			// Nothing more to read right now.
+			SslIo::WantRead | SslIo::WantWrite => return,
+			// close_notify, a connected-socket error (e.g. ECONNREFUSED surfaced
+			// by the dgram BIO's recv), or a fatal alert: tear down.
+			SslIo::ZeroReturn | SslIo::Syscall(_) | SslIo::Fatal => {
+				remove_conn(streams, by_addr, registry, key);
+				return;
+			}
+		}
+	}
+}
+
 type Never = core::convert::Infallible;
 pub fn main() -> Result<Never> {
 	// Enable logging
@@ -123,208 +202,200 @@ pub fn main() -> Result<Never> {
 	// Parse command line arguments
 	let args = Args::try_parse()?;
 
-	// Parse the endpoint address
 	// This IP is the destination and source of all plaintext
 	let endpoint = SocketAddrV6::from_str(&args.endpoint)?;
 	let endpoint = (endpoint.ip().octets(), U16::new(endpoint.port()));
 
-	// Setup the TUN interface
+	let mut poll = Poll::new()?;
+
+	// The TUN interface carries first-contact ClientHellos (cookie exchange) and
+	// endpoint plaintext.  Established client ciphertext is diverted to each
+	// connection's connected transparent socket by nftables `socket transparent`.
 	let network = {
 		let mut builder = DeviceBuilder::new();
-		#[cfg(target_os = "linux")]
-		{
-			builder = builder.offload(true); // I'm not trying to do segmentation offloading, I'm only trying to do checksum offloading, but...
-		}
+		builder = builder.offload(true); // checksum offload
 		if let Some(if_name) = args.if_name {
 			builder = builder.name(if_name);
 		}
-
-		Rc::new(builder.build_sync()?)
+		builder.build_sync()?
 	};
+	network.set_nonblocking(true)?;
+	poll.registry()
+		.register(&mut SourceFd(&network.as_raw_fd()), TUN, Interest::READABLE)?;
 
 	let (mut even, mut odd) = load_config()?;
 	// The HMAC key behind our stateless DTLS cookies.  Fresh per process: a
 	// restart just costs in-flight handshakes one extra HelloVerifyRequest round.
 	let keys = cookie::Keys::generate()?;
-	let need_reconfig = Arc::new(AtomicBool::new(true));
+	let need_reconfig = Arc::new(AtomicBool::new(false));
 	signal_hook::flag::register(signal_hook::consts::SIGHUP, need_reconfig.clone())?;
 
-	let mut streams: BTreeMap<([u8; 16], zerocopy::U16<zerocopy::BigEndian>), SslStream<Bio>> =
-		BTreeMap::new();
+	let mut streams: Slab<Connection> = Slab::new();
+	// Relayed address -> slab key: TUN-side lookup for endpoint plaintext, and
+	// dedup for ClientHello retransmits that raced the socket fork.
+	let mut by_addr: HashMap<([u8; 16], U16), usize> = HashMap::new();
 	let mut next_cleanup = 10;
 
+	let mut events = Events::with_capacity(128);
 	let mut buffer = vec![0; 4096];
+
 	loop {
 		if need_reconfig.swap(false, Ordering::Relaxed) {
 			(even, odd) = load_config()?;
 		}
 
-		match read_network(&network, &mut buffer, args.router.octets()) {
+		match poll.poll(&mut events, None) {
+			Ok(()) => {}
+			// SIGHUP (or any signal) interrupts the wait; loop to reconfigure.
 			Err(e) if e.kind() == ErrorKind::Interrupted => continue,
 			Err(e) => return Err(e.into()),
-			Ok(Packet::Icmp {
-				ip,
-				icmp,
-				mut inner_ip,
-				mut inner_udp,
-			}) => {
-				// All offending packets must have been sent by our proxy (because the outer dst ip must be in our subnet)
-				// However, we have to modify the src/dst to pretend like the offending packet was sent by the client/endpoint
-				let cid = (inner_ip.src, inner_udp.src_port);
+		}
 
-				let Some(ssl) = streams.get(&cid) else {
-					continue;
-				};
-
-				// If the "offending" packet was ciphertext (not from endpoint) then we must have sent it on-behalf of endpoint (endpoint is the src)
-				let mut plain: &[u8] = &[];
-				let new_src = if (inner_ip.dst, inner_udp.dst_port) != endpoint {
-					if let Some(ref plain_data) = ssl.get_ref().plain_data {
-						plain = plain_data;
-					}
-					endpoint
-				}
-				// If the "offending" packet was plaintext (from endpoint) then we must have sent it on-behalf of a client (client is the src)
-				else {
-					ssl.get_ref().send_to
-				};
-				inner_ip.src = new_src.0;
-				inner_ip.dst = cid.0;
-				inner_udp.src_port = new_src.1;
-				inner_udp.dst_port = cid.1;
-
-				// TODO: Apply the discovered MTU to the SSL stream (currently not possible because we can't get an &mut SSL which is required to call SSL.set_mtu())
-				// Reduce the MTU in the ICMP message to
-				// TODO: Actually get this overhead properly off of the ssl stream? In order to use DTLS_get_data_mtu, we must set SSL_set_mtu or DTLS_set_link_mtu.
-				const OVERHEAD: u32 = 13 + 8 + 16;
-				let _ = write_network_icmp(
-					&network,
-					ip.src, // TODO: Should I also change the src "router" ip address?
-					icmp.typ,
-					icmp.code,
-					icmp.mtu.get().saturating_sub(OVERHEAD),
-					inner_ip,
-					inner_udp.as_bytes(),
-					plain,
-				);
-			}
-			Ok(Packet::Udp { ip, udp }) => {
-				let send_from = (ip.dst, udp.dst_port);
-				let send_to = (ip.src, udp.src_port);
-
-				let length = udp.length.get() as usize - size_of::<Udp>();
-				let data = &buffer[..length];
-				// Lookup the ssl via the destination ip + port
-				let mut entry = match streams.entry(send_from) {
-					// Return Port Unreachable errors to endpoint, for vacant ssl
-					Entry::Vacant(_) if send_to == endpoint => {
-						let _ = write_network_icmp(
-							&network,
-							send_from.0,
-							1,
-							4, // Port Unreachable
-							0,
-							ip,
-							udp.as_bytes(),
-							data,
-						);
+		for e in events.iter() {
+			match e.token() {
+				TUN => loop {
+					let packet = match read_network(&network, &mut buffer, args.router.octets()) {
+						Ok(p) => p,
+						Err(e) if e.kind() == ErrorKind::WouldBlock => break,
+						Err(e) if e.kind() == ErrorKind::Interrupted => continue,
+						Err(e) => return Err(e.into()),
+					};
+					// DTLS has no ICMP back-channel (unlike TURN's ICMP attribute),
+					// so inbound ICMP is dropped; client-path errors surface on the
+					// connected socket instead.
+					let Packet::Udp { ip, udp } = packet else {
 						continue;
-					}
+					};
 
-					// Unknown src/dst pair: statelessly verify a DTLS cookie.
-					// Ssl state is only ever created (in cookie::promote) for a
-					// ClientHello fragment bearing a valid cookie.
-					Entry::Vacant(e) => {
-						match keys.inspect(send_to, send_from, data) {
-							// Not the start of a ClientHello: ignore
-							Verdict::Drop => {}
-							// No/stale cookie: answer without allocating anything
-							Verdict::HelloVerify(hvr) => {
-								let _ =
-									write_network_udp(&network, send_from, send_to, hvr.as_bytes());
+					let send_from = (ip.dst, udp.dst_port);
+					let send_to = (ip.src, udp.src_port);
+					let length = udp.length.get() as usize - size_of::<Udp>();
+					let data = &buffer[..length];
+
+					match by_addr.get(&send_from).copied() {
+						// Known connection: only endpoint plaintext reaches the TUN
+						// (established client ciphertext is diverted to the socket).
+						Some(key) => {
+							if send_to != endpoint {
+								// Raced ClientHello retransmit; the socket has it.
+								continue;
 							}
-							Verdict::Accept(verified) => {
-								let bio = Bio {
-									send_from,
-									send_to,
-									recv: VecDeque::new(),
-									send: network.clone(),
-									last_update: Instant::now(),
-									plain_data: None,
-									capture: None,
-								};
-								let ctx = if send_from.1.get() & 0b1 == 0 {
-									&even
-								} else {
-									&odd
-								};
-								match cookie::promote(ctx, bio, &verified) {
-									// Remaining fragments of the hello (if any)
-									// arrive through the Occupied path below
-									Ok(stream) => {
-										e.insert(stream);
+							let teardown = {
+								let conn = &mut streams[key];
+								if !conn.established {
+									continue;
+								}
+								conn.last_update = Instant::now();
+								match ffi::write(&mut conn.ssl, data) {
+									SslIo::Ok(_) | SslIo::WantRead | SslIo::WantWrite => false,
+									// Client path shrank: apply the new MTU to the
+									// DTLS stream and tell the endpoint to send less.
+									SslIo::Syscall(err)
+										if err.raw_os_error() == Some(libc::EMSGSIZE) =>
+									{
+										if let Ok(pmtu) = v6_path_mtu(&conn.sock) {
+											let _ = conn.ssl.set_mtu(pmtu.saturating_sub(IP_UDP));
+											let data_mtu = ffi::data_mtu(&conn.ssl) as u32;
+											let _ = write_network_icmp(
+												&network,
+												send_from.0,
+												2, // ICMPv6 Packet Too Big
+												0,
+												data_mtu + IP_UDP,
+												ip,
+												udp.as_bytes(),
+												data,
+											);
+										}
+										false
 									}
-									Err(err) => tracing::debug!("promotion failed: {err}"),
+									// ECONNREFUSED or a fatal error: drop it.
+									_ => true,
+								}
+							};
+							if teardown {
+								remove_conn(&mut streams, &mut by_addr, poll.registry(), key);
+							}
+						}
+
+						// Unknown relayed address.
+						None => {
+							// Endpoint spoke to a relayed address with no connection.
+							if send_to == endpoint {
+								let _ = write_network_icmp(
+									&network,
+									send_from.0,
+									1,
+									4, // Port Unreachable
+									0,
+									ip,
+									udp.as_bytes(),
+									data,
+								);
+								continue;
+							}
+							// Statelessly verify a DTLS cookie.
+							match keys.inspect(send_to, send_from, data) {
+								Verdict::Drop => {}
+								Verdict::HelloVerify(hvr) => {
+									let _ = write_network_udp(
+										&network,
+										send_from,
+										send_to,
+										hvr.as_bytes(),
+									);
+								}
+								Verdict::Accept(verified) => {
+									let ctx = if send_from.1.get() & 0b1 == 0 {
+										&even
+									} else {
+										&odd
+									};
+									if let Err(err) = create_connection(
+										ctx,
+										&verified,
+										send_from,
+										send_to,
+										&mut streams,
+										&mut by_addr,
+										poll.registry(),
+									) {
+										tracing::debug!("connection setup failed: {err}");
+									}
 								}
 							}
 						}
-						continue;
 					}
+				},
 
-					// Existing connection
-					Entry::Occupied(e) => e,
-				};
-				let stream = entry.get_mut();
-
-				let res = if !stream.ssl().is_init_finished() {
-					let _ = stream.get_mut().recv.write(data);
-					// Progress the handshake if that's what we're doing
-					stream.do_handshake()
-				} else if send_to == endpoint {
-					// Store the first 12 bytes of the plaintext, to replace the ciphertext in forwarded ICMP errors
-					stream.get_mut().plain_data = data.first_chunk().cloned();
-
-					// Write plaintext from endpoint or fetch/peek data off the stream
-					stream.ssl_write(&data).map(|_| {})
-				} else {
-					let _ = stream.get_mut().recv.write(data);
-					// Use peek to prime the thing in the thing
-					let mut temp = [0; 4];
-					stream.ssl_peek(&mut temp).map(|_| {})
-				};
-
-				// Handle errors:
-				if let Err(e) = res
-					&& !matches!(e.code(), ErrorCode::WANT_READ | ErrorCode::WANT_WRITE)
-				{
-					entry.remove();
-					continue;
-				}
-
-				// Pull data out, and emit plaintext UDP
-				while stream.ssl().pending() > 0 {
-					let Ok(len) = stream.ssl_read(&mut buffer) else {
-						break;
-					};
-					let data = &buffer[..len];
-
-					// After a successful read, update the send_to because we must have had valid application data:
-					stream.get_mut().send_to = send_to;
-
-					let _ = write_network_udp(&network, send_from, endpoint, data);
-				}
-
-				if !stream.get_ref().recv.is_empty() {
-					panic!("Why isn't your buffer empty?")
-				}
+				// A connection's socket: ciphertext arrived (or an error).
+				Token(key) => drive_connection(
+					key,
+					&mut streams,
+					&mut by_addr,
+					poll.registry(),
+					&network,
+					endpoint,
+					&mut buffer,
+				),
 			}
 		}
 
-		// Handle cleaning up old connections
-		let max_age = Duration::from_mins(5);
+		// Reap idle connections when the map has grown enough to bother.
+		let max_age = Duration::from_secs(5 * 60);
 		if streams.len() > next_cleanup {
-			streams.retain(|_, stream| stream.get_ref().last_update.elapsed() < max_age);
+			let registry = poll.registry();
+			streams.retain(|_key, conn| {
+				let keep = conn.last_update.elapsed() < max_age;
+				if !keep {
+					let _ = registry.deregister(&mut SourceFd(&conn.sock.as_raw_fd()));
+					by_addr.remove(&conn.send_from);
+				}
+				keep
+			});
 			next_cleanup = streams.len() + 10;
 		}
 	}
 }
+
+const TUN: Token = Token(usize::MAX);

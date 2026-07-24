@@ -117,6 +117,47 @@ pub fn connected_udp(
 	Ok(sock)
 }
 
+/// Enable IPv6 path-MTU discovery (`IPV6_PMTUDISC_DO`) so an oversized send
+/// fails with `EMSGSIZE` instead of being fragmented, and the kernel records the
+/// discovered PMTU (readable via [`v6_path_mtu`]).  dtls-proxy sets this on each
+/// connected transparent socket so it can react to a shrinking client path.
+pub fn set_v6_pmtudisc(sock: &Socket) -> io::Result<()> {
+	let val: libc::c_int = libc::IPV6_PMTUDISC_DO;
+	let rc = unsafe {
+		libc::setsockopt(
+			sock.as_raw_fd(),
+			libc::IPPROTO_IPV6,
+			libc::IPV6_MTU_DISCOVER,
+			(&val as *const libc::c_int).cast(),
+			size_of::<libc::c_int>() as libc::socklen_t,
+		)
+	};
+	if rc != 0 {
+		return Err(io::Error::last_os_error());
+	}
+	Ok(())
+}
+
+/// The IPv6 path MTU the kernel has discovered for this connected socket
+/// (`IPV6_MTU`) — e.g. the value carried by a received ICMPv6 Packet Too Big.
+pub fn v6_path_mtu(sock: &Socket) -> io::Result<u32> {
+	let mut val: libc::c_int = 0;
+	let mut len = size_of::<libc::c_int>() as libc::socklen_t;
+	let rc = unsafe {
+		libc::getsockopt(
+			sock.as_raw_fd(),
+			libc::IPPROTO_IPV6,
+			libc::IPV6_MTU,
+			(&mut val as *mut libc::c_int).cast(),
+			&mut len,
+		)
+	};
+	if rc != 0 {
+		return Err(io::Error::last_os_error());
+	}
+	Ok(val as u32)
+}
+
 /// `MSG_PEEK` into an initialized `&mut [u8]`, returning how many bytes are
 /// available without consuming them. Wraps socket2's `MaybeUninit`-typed `peek`;
 /// only the initialized prefix is ever read back, so the cast is sound.
