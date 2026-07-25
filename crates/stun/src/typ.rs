@@ -32,7 +32,6 @@ pub enum Method {
 	#[deprecated]
 	This = 0x13, // Allocate Error
 	#[doc(hidden)]
-	#[deprecated]
 	Shit = 0x14, // Refresh Error
 	#[doc(hidden)]
 	#[deprecated]

@@ -10,6 +10,7 @@ use std::{
 	net::{IpAddr, Ipv6Addr, SocketAddr, SocketAddrV6},
 	os::fd::AsRawFd,
 	str::FromStr,
+	time::{Duration, Instant},
 };
 use stun::{
 	Authkey, Class, Method, Parse, Parsed, Stun,
@@ -221,9 +222,13 @@ fn tcp_write_frame(sock: &mut Socket, frame: &[u8]) -> Write2 {
 fn remove_alloc(
 	streams: &mut Slab<Socket>,
 	by_peer: &mut HashMap<SocketAddrV6, usize>,
+	refresh: &mut HashMap<usize, u8>,
 	registry: &Registry,
 	key: usize,
 ) {
+	// Drop the heartbeat counter first: slab keys are reused, so a stale entry
+	// must never outlive its allocation (no-op for TCP allocs, never indexed).
+	refresh.remove(&key);
 	let Some(sock) = streams.get(key) else {
 		return;
 	};
@@ -308,6 +313,14 @@ pub fn main() -> Result<Never> {
 	let mut streams: Slab<Socket> = Slab::with_capacity(64.min(relay.capacity()));
 	// Dedup index for Allocate retransmits that race the fork (keyed by client).
 	let mut by_peer: HashMap<SocketAddrV6, usize> = HashMap::new();
+	// Per-allocation heartbeat counter, connected-UDP allocations only.  Bumped
+	// each tick we send a Refresh Indication; reset by a client Refresh; at the
+	// cap the allocation is expired.  Keyed by slab key, so every teardown path
+	// must drop the entry (see `remove_alloc`) since slab keys get reused.
+	let mut refresh: HashMap<usize, u8> = HashMap::new();
+
+	// Fire a heartbeat sweep every minute; the poll below wakes for it.
+	let mut next_tick = Instant::now() + Duration::from_secs(60);
 
 	loop {
 		for e in events.into_iter() {
@@ -397,6 +410,7 @@ pub fn main() -> Result<Never> {
 								let _ = sock.send(&buffer[..end]);
 								entry.insert(sock);
 								by_peer.insert(remote, key);
+								refresh.insert(key, 0);
 							} else {
 								// Auth/validation error: reply off the wildcard,
 								// do not allocate (vacant entry is dropped).
@@ -480,7 +494,7 @@ pub fn main() -> Result<Never> {
 					if is_udp {
 						let _ = sock.send(&buffer[..end]);
 					} else if let Write2::Abort = tcp_write_frame(sock, &buffer[..end]) {
-						remove_alloc(&mut streams, &mut by_peer, poll.registry(), key);
+						remove_alloc(&mut streams, &mut by_peer, &mut refresh, poll.registry(), key);
 					}
 				},
 				Token(key) => {
@@ -489,7 +503,7 @@ pub fn main() -> Result<Never> {
 					}
 					if e.is_read_closed() || e.is_error() {
 						trace!(?e, "closing allocation (is_error / is_read_closed)");
-						remove_alloc(&mut streams, &mut by_peer, poll.registry(), key);
+						remove_alloc(&mut streams, &mut by_peer, &mut refresh, poll.registry(), key);
 						continue;
 					}
 
@@ -499,18 +513,56 @@ pub fn main() -> Result<Never> {
 						.map(|t| t == Type::DGRAM)
 						.unwrap_or(false);
 					let close = if is_udp {
-						handle_udp_alloc(key, &relay, &mut streams, &mut buffer, &network)?
+						handle_udp_alloc(key, &relay, &mut streams, &mut refresh, &mut buffer, &network)?
 					} else {
 						handle_tcp_alloc(key, &relay, &mut streams, &mut buffer, &network)?
 					};
 					if close {
-						remove_alloc(&mut streams, &mut by_peer, poll.registry(), key);
+						remove_alloc(&mut streams, &mut by_peer, &mut refresh, poll.registry(), key);
 					}
 				}
 			}
 		}
 
-		poll.poll(&mut events, None)?;
+		poll.poll(
+			&mut events,
+			Some(next_tick.saturating_duration_since(Instant::now())),
+		)?;
+
+		// Heartbeat sweep: once per minute, keep connected-UDP allocations warm
+		// and expire the ones whose clients have gone silent.
+		let now = Instant::now();
+		if now >= next_tick {
+			next_tick = now + Duration::from_secs(60);
+			let mut expired: Vec<usize> = Vec::new();
+			for (&key, counter) in refresh.iter_mut() {
+				// Five sent heartbeats with no client Refresh in between; the
+				// next tick (~6min) expires it.
+				if *counter >= 5 {
+					expired.push(key);
+					continue;
+				}
+				let Some(sock) = streams.get(key) else {
+					expired.push(key);
+					continue;
+				};
+				// Fresh txid per send.
+				let end = match Stun::new(Class::Request, Method::Shit, &mut buffer) {
+					Ok(msg) => size_of_val(msg.trim()),
+					Err(_) => continue,
+				};
+				match sock.send(&buffer[..end]) {
+					Ok(_) => *counter += 1,
+					Err(e) if e.kind() == ErrorKind::WouldBlock => *counter += 1,
+					// ECONNREFUSED/EHOSTUNREACH (or any hard error): the client
+					// is gone, tear the allocation down.
+					Err(_) => expired.push(key),
+				}
+			}
+			for key in expired {
+				remove_alloc(&mut streams, &mut by_peer, &mut refresh, poll.registry(), key);
+			}
+		}
 	}
 }
 
@@ -519,6 +571,7 @@ fn handle_udp_alloc(
 	key: usize,
 	relay: &RelayRange,
 	streams: &mut Slab<Socket>,
+	refresh: &mut HashMap<usize, u8>,
 	buffer: &mut [u8],
 	network: &SyncDevice,
 ) -> Result<bool> {
@@ -547,6 +600,12 @@ fn handle_udp_alloc(
 		};
 		if msg.txid.id == [0; 12] {
 			continue;
+		}
+		// A client Refresh proves liveness: reset the heartbeat counter.
+		if msg.method == Method::Refresh {
+			if let Some(c) = refresh.get_mut(&key) {
+				*c = 0;
+			}
 		}
 		match handle_turn(relayed, remote, msg, network)? {
 			Turn::Respond(resp) => {
@@ -692,11 +751,13 @@ fn handle_turn<'i>(
 		}
 	}
 
-	let lifetime = if let Parsed::Valid(l) = lifetime {
-		*l
-	} else {
-		U32::new(60_000)
-	};
+	// Cap the reported allocation lifetime at 4min so conforming clients refresh
+	// well before the ~6min heartbeat-counter expiry.  A `Refresh` with lifetime
+	// 0 still clamps to 0 and is handled as a close below.
+	let lifetime = U32::new(match lifetime {
+		Parsed::Valid(l) => l.get().min(240),
+		_ => 240,
+	});
 
 	let add_mapped = move |msg: &mut Stun| match remote.ip().to_canonical() {
 		IpAddr::V4(v4) => {
