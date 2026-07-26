@@ -2,3 +2,5 @@ target
 *.pem
 *.der
 opt
+.claude/memory
+.claude/settings.local.json
