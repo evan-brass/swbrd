@@ -21,16 +21,17 @@ use tracing::{trace, warn};
 use tracing_subscriber::EnvFilter;
 use tun_rs::{DeviceBuilder, SyncDevice};
 use zerocopy::{
-	AlignedTryCastError, TryFromBytes,
+	AlignedTryCastError, IntoBytes, TryFromBytes,
 	network_endian::{U16, U32},
 };
 
 use common::{
-	Packet, read_network,
+	Ip6, Packet, Udp, read_network,
 	socket::{
-		UdpOpt, connected_udp, peek, recv_with_local, send_from, set_recv_pktinfo, tcp_send_space,
+		UdpOpt, connected_udp, peek, recv_with_local, send_from, set_recv_pktinfo, set_v4_pmtudisc,
+		set_v6_pmtudisc, tcp_send_space, v4_path_mtu, v6_path_mtu,
 	},
-	write_network_udp,
+	write_network_icmp, write_network_udp,
 };
 
 /// md5('user:none:password')
@@ -402,6 +403,10 @@ pub fn main() -> Result<Never> {
 									remote,
 									UdpOpt::ReusePort,
 								)?;
+								// Fail oversized client sends with EMSGSIZE (both families:
+								// v4-mapped clients send over IPv4, native v6 over IPv6).
+								let _ = set_v6_pmtudisc(&sock);
+								let _ = set_v4_pmtudisc(&sock);
 								poll.registry().register(
 									&mut SourceFd(&sock.as_raw_fd()),
 									Token(key),
@@ -425,6 +430,10 @@ pub fn main() -> Result<Never> {
 				TUN => loop {
 					let receiver;
 					let msg;
+					// The peer's original packet, for quoting in an ICMP error back to
+					// it (Port Unreachable / Packet Too Big).  `None` for inbound ICMP:
+					// we don't emit ICMP about ICMP.
+					let quote: Option<(Ip6, Udp, usize)>;
 					match read_network(&network, &mut buffer[20 + 24 + 4..], args.router.octets()) {
 						Err(e) if e.kind() == ErrorKind::WouldBlock => break,
 						Err(e) => return Err(e.into()),
@@ -434,6 +443,7 @@ pub fn main() -> Result<Never> {
 								SocketAddrV6::new(Ipv6Addr::from(ip.dst), udp.dst_port.get(), 0, 0);
 
 							let data_length = udp.length.get() - 8;
+							quote = Some((ip, udp, data_length as usize));
 							let sender =
 								Addr6::new(Ipv6Addr::from_octets(ip.src), udp.src_port.get());
 							msg = Stun::new(Class::Request, Method::Recv, &mut buffer)
@@ -458,6 +468,8 @@ pub fn main() -> Result<Never> {
 								0,
 								0,
 							);
+
+							quote = None; // no ICMP about inbound ICMP
 
 							// RFC8656 Section 11.5: XOR-PEER-ADDRESS = destination
 							// of the returned UDP packet.
@@ -488,11 +500,62 @@ pub fn main() -> Result<Never> {
 						continue;
 					};
 					let Some(sock) = streams.get_mut(key) else {
+						// Relayed address is in-pool but unallocated: tell the peer the
+						// port is unreachable, quoting its packet.
+						if let Some((ip, udp, plen)) = quote {
+							let _ = write_network_icmp(
+								&network,
+								receiver.ip().octets(),
+								1,
+								4, // ICMP Port Unreachable
+								0,
+								ip,
+								udp.as_bytes(),
+								&buffer[48..48 + plen],
+							);
+						}
 						continue;
 					};
 					let is_udp = sock.r#type().map(|t| t == Type::DGRAM).unwrap_or(false);
 					if is_udp {
-						let _ = sock.send(&buffer[..end]);
+						// Client path can't carry the relayed Data indication: tell the
+						// peer to send less (ICMPv6 Packet Too Big).  Relay overhead is STUN
+						// (20) + XOR-PEER-ADDRESS-v6(24) + DATA attr(4) = 48; the peer path
+						// is IPv6 (40 + 8), the client path may be v4 (20) or v6 (40).
+						match sock.send(&buffer[..end]) {
+							Ok(_) => {}
+							Err(e) if e.raw_os_error() == Some(libc::EMSGSIZE) => {
+								if let Some((ip, udp, plen)) = quote {
+									let is_v4 = sock
+										.peer_addr()
+										.ok()
+										.and_then(|a| a.as_socket_ipv6())
+										.and_then(|s| s.ip().to_ipv4_mapped())
+										.is_some();
+									let (pmtu, client_hdr) = if is_v4 {
+										(v4_path_mtu(sock), 20)
+									} else {
+										(v6_path_mtu(sock), 40)
+									};
+									if let Ok(pmtu) = pmtu {
+										let mtu = pmtu
+											.saturating_sub(client_hdr + 8 + 48)
+											.saturating_add(40 + 8);
+										let _ = write_network_icmp(
+											&network,
+											receiver.ip().octets(),
+											2,
+											0, // ICMPv6 Packet Too Big
+											mtu,
+											ip,
+											udp.as_bytes(),
+											&buffer[48..48 + plen],
+										);
+									}
+								}
+							}
+							Err(_) => {}
+						}
 					} else if let Write2::Abort = tcp_write_frame(sock, &buffer[..end]) {
 						remove_alloc(&mut streams, &mut by_peer, &mut refresh, poll.registry(), key);
 					}

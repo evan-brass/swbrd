@@ -158,6 +158,46 @@ pub fn v6_path_mtu(sock: &Socket) -> io::Result<u32> {
 	Ok(val as u32)
 }
 
+/// IPv4 counterpart of [`set_v6_pmtudisc`] (`IP_PMTUDISC_DO`).  Linux governs the
+/// two families independently, so a dual-stack socket that may send to v4-mapped
+/// clients must set this too — the v6 option does not cover the IPv4 send path.
+pub fn set_v4_pmtudisc(sock: &Socket) -> io::Result<()> {
+	let val: libc::c_int = libc::IP_PMTUDISC_DO;
+	let rc = unsafe {
+		libc::setsockopt(
+			sock.as_raw_fd(),
+			libc::IPPROTO_IP,
+			libc::IP_MTU_DISCOVER,
+			(&val as *const libc::c_int).cast(),
+			size_of::<libc::c_int>() as libc::socklen_t,
+		)
+	};
+	if rc != 0 {
+		return Err(io::Error::last_os_error());
+	}
+	Ok(())
+}
+
+/// IPv4 counterpart of [`v6_path_mtu`] (`IP_MTU`) — the discovered path MTU for a
+/// connected socket sending over IPv4 (including a v4-mapped dual-stack socket).
+pub fn v4_path_mtu(sock: &Socket) -> io::Result<u32> {
+	let mut val: libc::c_int = 0;
+	let mut len = size_of::<libc::c_int>() as libc::socklen_t;
+	let rc = unsafe {
+		libc::getsockopt(
+			sock.as_raw_fd(),
+			libc::IPPROTO_IP,
+			libc::IP_MTU,
+			(&mut val as *mut libc::c_int).cast(),
+			&mut len,
+		)
+	};
+	if rc != 0 {
+		return Err(io::Error::last_os_error());
+	}
+	Ok(val as u32)
+}
+
 /// `MSG_PEEK` into an initialized `&mut [u8]`, returning how many bytes are
 /// available without consuming them. Wraps socket2's `MaybeUninit`-typed `peek`;
 /// only the initialized prefix is ever read back, so the cast is sound.
