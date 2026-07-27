@@ -14,12 +14,12 @@ use std::{
 use clap::Parser;
 use common::{
 	Packet, Udp, read_network,
-	socket::{UdpOpt, connected_udp, set_v6_pmtudisc, v6_path_mtu},
+	socket::{UdpOpt, connected_udp, reconnect, set_v6_pmtudisc, v6_path_mtu},
 	write_network_icmp, write_network_udp,
 };
 use eyre::Result;
 use mio::{Events, Interest, Poll, Registry, Token, unix::SourceFd};
-use openssl::ssl::{Ssl, SslAcceptor, SslContext, SslContextRef, SslFiletype, SslMethod};
+use openssl::ssl::{Ssl, SslAcceptor, SslContext, SslContextRef, SslFiletype, SslMethod, SslVersion};
 use slab::Slab;
 use socket2::Socket;
 use tracing_subscriber::EnvFilter;
@@ -29,6 +29,7 @@ use zerocopy::{IntoBytes, network_endian::U16};
 use crate::{
 	cookie::{self, Verdict, Verified},
 	ffi::{self, SslIo},
+	keys::{ReadKeys, check_record, export_read_keys},
 };
 
 /// IPv6 (40) + UDP (8) header overhead between a link/path MTU and the UDP
@@ -60,6 +61,22 @@ struct Connection {
 	send_from: ([u8; 16], U16),
 	established: bool,
 	last_update: Instant,
+	/// Read-direction (client write) keys, derived lazily once established and
+	/// used to authenticate roamed records for client mobility.
+	read_keys: Option<ReadKeys>,
+	/// Highest record number authenticated for mobility so far; a roamed record
+	/// must strictly exceed it to re-point the socket (anti-replay).
+	highest_read_seq: u64,
+}
+
+/// Pin the negotiation to AES-128-GCM over DTLS 1.2 — the single record layout
+/// that [`keys::check_record`] can authenticate for client mobility.  Both Chrome
+/// and Firefox offer these suites for ECDSA/RSA certs (see `docs/ciphersuites.md`).
+fn pin_suite(acceptor: &mut openssl::ssl::SslAcceptorBuilder) -> Result<()> {
+	acceptor.set_cipher_list("ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256")?;
+	acceptor.set_min_proto_version(Some(SslVersion::DTLS1_2))?;
+	acceptor.set_max_proto_version(Some(SslVersion::DTLS1_2))?;
+	Ok(())
 }
 
 fn load_config() -> Result<(SslContext, SslContext)> {
@@ -68,6 +85,7 @@ fn load_config() -> Result<(SslContext, SslContext)> {
 		acceptor.set_private_key_file("key.pem", SslFiletype::PEM)?;
 		acceptor.set_certificate_file("January.der", SslFiletype::ASN1)?;
 		acceptor.check_private_key()?;
+		pin_suite(&mut acceptor)?;
 		cookie::configure(&mut acceptor);
 		acceptor.build().into_context()
 	};
@@ -76,6 +94,7 @@ fn load_config() -> Result<(SslContext, SslContext)> {
 		acceptor.set_private_key_file("key.pem", SslFiletype::PEM)?;
 		acceptor.set_certificate_file("July.der", SslFiletype::ASN1)?;
 		acceptor.check_private_key()?;
+		pin_suite(&mut acceptor)?;
 		cookie::configure(&mut acceptor);
 		acceptor.build().into_context()
 	};
@@ -138,6 +157,8 @@ fn create_connection(
 		send_from,
 		established,
 		last_update: Instant::now(),
+		read_keys: None,
+		highest_read_seq: 0,
 	});
 	by_addr.insert(send_from, key);
 	Ok(())
@@ -270,16 +291,52 @@ pub fn main() -> Result<Never> {
 					let send_from = (ip.dst, udp.dst_port);
 					let send_to = (ip.src, udp.src_port);
 					let length = udp.length.get() as usize - size_of::<Udp>();
-					let data = &buffer[..length];
 
 					match by_addr.get(&send_from).copied() {
 						// Known connection: only endpoint plaintext reaches the TUN
 						// (established client ciphertext is diverted to the socket).
 						Some(key) => {
 							if send_to != endpoint {
-								// Raced ClientHello retransmit; the socket has it.
+								// Not endpoint plaintext on a known CID: either a raced
+								// ClientHello retransmit (the socket already owns it) or a
+								// client that roamed to a new source address.  If the
+								// record authenticates against the DTLS read keys, treat it
+								// as mobility and re-point the socket at the new peer;
+								// otherwise drop it (an off-path spoofer can't forge a tag).
+								let creds = {
+									let conn = &mut streams[key];
+									if conn.established {
+										if conn.read_keys.is_none() {
+											conn.read_keys = export_read_keys(&conn.ssl);
+										}
+										let highest = conn.highest_read_seq;
+										conn.read_keys.map(|k| (k, highest))
+									} else {
+										None
+									}
+								};
+								if let Some((rkeys, highest)) = creds
+									&& let Some(seq) =
+										check_record(&rkeys, highest, &mut buffer[..length])
+								{
+									let new_peer = SocketAddrV6::new(
+										Ipv6Addr::from(send_to.0),
+										send_to.1.get(),
+										0,
+										0,
+									);
+									let conn = &mut streams[key];
+									if reconnect(&conn.sock, new_peer).is_ok() {
+										conn.highest_read_seq = seq;
+										conn.last_update = Instant::now();
+										tracing::debug!(?new_peer, "client mobility: re-pointed socket");
+									}
+								}
+								// Drop this record: the client's next packet lands on the
+								// now-matching socket, and DTLS/SCTP retransmit recovers it.
 								continue;
 							}
+							let data = &buffer[..length];
 							let teardown = {
 								let conn = &mut streams[key];
 								if !conn.established {
@@ -320,6 +377,7 @@ pub fn main() -> Result<Never> {
 
 						// Unknown relayed address.
 						None => {
+							let data = &buffer[..length];
 							// Endpoint spoke to a relayed address with no connection.
 							if send_to == endpoint {
 								let _ = write_network_icmp(

@@ -5,6 +5,7 @@ fn main() {
 
 mod cookie;
 mod ffi;
+mod keys;
 
 #[cfg(target_os = "linux")]
 mod linux;

@@ -117,6 +117,16 @@ pub fn connected_udp(
 	Ok(sock)
 }
 
+/// Re-point an already-connected UDP socket at a new peer, keeping its bound
+/// local address, fd, and sockopts (`IP_TRANSPARENT`, PMTUDISC) intact.  Used
+/// for DTLS client mobility: when an authenticated record arrives from a roamed
+/// source, the connection's socket is re-`connect`ed so both the kernel demux
+/// and the borrowed dgram BIO's `send`/`recv` follow the client to its new
+/// address.  Only the kernel's discovered PMTU resets for the new path.
+pub fn reconnect(sock: &Socket, remote: SocketAddrV6) -> io::Result<()> {
+	sock.connect(&SockAddr::from(remote))
+}
+
 /// Enable IPv6 path-MTU discovery (`IPV6_PMTUDISC_DO`) so an oversized send
 /// fails with `EMSGSIZE` instead of being fragmented, and the kernel records the
 /// discovered PMTU (readable via [`v6_path_mtu`]).  dtls-proxy sets this on each
@@ -223,4 +233,45 @@ pub fn tcp_send_space(sock: &Socket) -> io::Result<usize> {
 	Ok(sndbuf
 		.saturating_sub(outq as usize)
 		.saturating_sub(MARGIN))
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+
+	/// `reconnect` re-points a connected UDP socket at a new peer: sends and
+	/// receives follow the client to its new address, and the old peer no longer
+	/// receives.
+	#[test]
+	fn reconnect_follows_new_peer() {
+		let lo = SocketAddrV6::new(Ipv6Addr::LOCALHOST, 0, 0, 0);
+		let a = Socket::new(Domain::IPV6, Type::DGRAM, Some(Protocol::UDP)).unwrap();
+		let b1 = Socket::new(Domain::IPV6, Type::DGRAM, Some(Protocol::UDP)).unwrap();
+		let b2 = Socket::new(Domain::IPV6, Type::DGRAM, Some(Protocol::UDP)).unwrap();
+		a.bind(&lo.into()).unwrap();
+		b1.bind(&lo.into()).unwrap();
+		b2.bind(&lo.into()).unwrap();
+		let b1_addr = to_v6(b1.local_addr().unwrap());
+		let b2_addr = to_v6(b2.local_addr().unwrap());
+
+		a.connect(&SockAddr::from(b1_addr)).unwrap();
+		a.send(b"one").unwrap();
+		let mut buf = [MaybeUninit::new(0u8); 16];
+		assert_eq!(b1.recv(&mut buf).unwrap(), 3);
+
+		reconnect(&a, b2_addr).unwrap();
+		a.send(b"two").unwrap();
+		assert_eq!(b2.recv(&mut buf).unwrap(), 3);
+
+		// The old peer gets nothing more.
+		b1.set_nonblocking(true).unwrap();
+		assert!(b1.recv(&mut buf).is_err());
+	}
+
+	fn to_v6(addr: SockAddr) -> SocketAddrV6 {
+		match addr.as_socket().unwrap() {
+			std::net::SocketAddr::V6(v6) => v6,
+			other => panic!("expected v6, got {other}"),
+		}
+	}
 }
