@@ -45,10 +45,35 @@ export class Conn extends RTCPeerConnection {
 		return this.#pid;
 	}
 
+	// Make an authenticated connection to a given domain
+	// - Makes a WebPKI checked TLS TURN connection to `domain`
+	// - Conducts the same unauthenticated DTLS handshake as to_deter
+	// - Once connected, the WebRTC config is reset to allow non-tcp network paths (direct, UDP TURN etc.)
+	// - The DTLS connection remains secure over new network paths as long as the ciphersuite provides forward secrecy
+	static async to_domain({
+		domain = 'turn.evan-brass.net',
+		port = 443,
+		username = 'user',
+		credential = 'password',
+		...config
+	}) {
+		return await this.to_deter({
+			...config,
+			adjustment: {
+				iceTransportPolicy: 'relay',
+				iceServers: [{
+					urls: `turns:${domain}:${port}?transport=tcp`,
+					username, credential,
+				}]
+			},
+		})
+	}
+
 	// Make a connection to a server that's using the deterministic certificate
 	// - Prefix is roughly a /95
 	// - We use 1 bit to signal whether we are connecting to the January or July certificate giving a /96
 	// - 32 bits of randomness completes the ip address + 15 bits of randomness gives us the port
+	// - Unless using to_domain, you should think of this as an unsecured UDP connection
 	static async to_deter({
 		base,
 		...config
@@ -67,12 +92,14 @@ export class Conn extends RTCPeerConnection {
 
 	// Make a connection between two Chrome browsers
 	// - Chrome <-> Chrome via fixup
+	// - This utilizes a quirk in Chrome where the ICE credentials in the SDP offer don't need to match the ICE credentials passed in the actual candidate.  RTCPeerConnection emits normal icecandidate events, but we early bind and intercept these.  You should instead listen on the custom candidate event, which will the contain the same ICE candidate, but modified to include the corrected ICE ufrag + ICE password.
 	static with_candidates(peerid, config = null) {
 		return new this(peerid, {
 			// The default parameters in Conn match with_candidates
 			...config,
 		});
 	}
+
 	// Make a connection between two browsers using a TURN server that intercepts ICE connection tests
 	// - IPv4 only to ensure 1 candidate pair
 	// - Chrome <-> Chrome
@@ -219,21 +246,31 @@ export class Conn extends RTCPeerConnection {
 
 		// Switchover into handling renegotiation
 		for (; ;) {
-			if (this.#dc.readyState == 'connecting') {
-				await state({ 'open': this.dc, 'close': this.dc });
-			} else if (this.#dc.readyState == 'closed') {
-				break;
-			} else if (adjustment) {
+			// We don't need the datachannel to apply the adjustment, just waiting for DTLS to finish is enough.
+			if (this.connectionState == 'closed') {
+				break
+			} else if (this.connectionState != 'connected') {
+				await state({ 'connectionstatechange': this });
+			}
+			// Connection state must be 'connected'
+			else if (adjustment) {
 				adjustment = null;
 				this.setConfiguration(config);
 				this.restartIce();
-			} else if (negotiation_needed && this.#dc.readyState != 'closing') {
+			} else if (negotiation_needed) {
 				negotiation_needed = false;
 
 				await super.setLocalDescription();
+
+				// Once we have a local description to send, we can't do any more renegotiation until we've enqueued the message.
+				// If SCTP isn't being used by this connection, the signaling task will hang here until the Conn is closed.
+				while (this.#dc.readyState == 'connecting') await state({ 'open': this.dc, 'close': this.dc });
+				if (this.#dc.readyState != 'open') break; // We can no longer enqueue messages so we're done handling renegotiation.
+
 				try {
 					// HACK: Looks like Chrome is the dumbass in this situation.  It's advertising 'a=setup:actpass' even though the DTLS handshake has already been completed.  Firefox doesn't help us in this situation because it seems to pick 'a=setup:active' by default even though it was passive during setup.
 					// Fuck my life.  We need to replace 'a=setup:actpass' with the actual value as taken from the current description.
+					// Because we max bundling is in our overrides, there should only be ~one~ setup line.
 					const description = this.localDescription;
 					const { 0: current_setup } = this.currentLocalDescription.sdp.match(
 						/a=setup:.+/img,
@@ -337,7 +374,6 @@ export class Conn extends RTCPeerConnection {
 			candidate.type || 'relay',
 			...firefox_hack1,
 			// WEIRD: Best as I can tell, Firefox has strange behavior around 'localhost' or '::1' candidate addresses
-			,
 		].join(' ');
 		candidate.sdpMid ??= 'dc';
 		return await super.addIceCandidate({

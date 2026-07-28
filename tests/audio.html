@@ -17,7 +17,7 @@
 <audio controls autoplay></audio>
 <script type="module">
 	import { Conn } from 'swbrd/conn.js';
-	import { deadline, expect_open, fail, log_everything, pass } from './harness.js';
+	import { deadline, expect_connected, fail, log_everything, pass } from './harness.js';
 	import { DETER_BASE, SCTP_PORT } from './config.js';
 
 	deadline(28_000, 'the datachannel never opened');
@@ -26,9 +26,10 @@
 	let track_arrived = false;
 
 	try {
-		const h = await Conn.to_deter({
+		const h = await Conn.to_domain({
+			domain: 'turn.evan-brass.net',
 			base: DETER_BASE,
-			sctp_port: SCTP_PORT,
+			sctp_port: 2000, // Port not bound
 			audio: true,
 			timeout: 25_000,
 		});
@@ -44,7 +45,7 @@
 		// Fake device under scripts/e2e.js, a real prompt when you open this by hand.
 		const [mic] = (await navigator.mediaDevices.getUserMedia({ audio: true })).getAudioTracks();
 
-		await expect_open(h.dc, 25_000);
+		await expect_connected(h, 25_000);
 
 		const audio = h.getTransceivers().find((t) => t.mid == 'audio');
 		if (!audio) throw new Error('no transceiver came back with mid=audio');

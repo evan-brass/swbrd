@@ -306,8 +306,9 @@ pub fn read_network(
 
 			// Check the IP version
 			_ if u32::from_be(ip.flags) >> 28 != 6 => continue,
-			// Check the IP length
-			_ if ip.length.get() < 8 => continue,
+			// Check that the IP length matches length received
+			Ok(len) if ip.length.get() as usize != (len - VNET - size_of::<Ip6>()) => continue,
+
 			// Drop multicast traffic
 			_ if Ipv6Addr::from_octets(ip.dst).is_multicast() => continue,
 			// Drop IP fragments
