@@ -133,4 +133,9 @@ the same file works under `dev.sh e2e` and when opened by hand.
 
 Design docs and rationale for in-progress/finished features live in `slop/` (`close-the-loop.md`,
 `dtls-cookies.md`, `icmp-plan.md`, `turn-heartbeats.md`, `turn-icmp.md`) and `docs/`
-(`how-it-works.md`, `ciphersuites.md`). `firefox-issues/` holds browser-bug repros.
+(`how-it-works.md`, `ciphersuites.md`, `security.md`). `firefox-issues/` holds browser-bug repros.
+
+`docs/security.md` is the threat model and security analysis: what the deter path does and doesn't
+authenticate, what wrapping the handshake in TURNS actually buys, DoS surface, and a numbered findings
+list (F1–F9). Read it before changing anything in `deter.js`, `cookie.rs`, `keys.rs`, or the auth
+paths in `turnserver`.
