@@ -7,3 +7,7 @@ fn main() {
 mod linux;
 #[cfg(target_os = "linux")]
 pub use linux::main;
+
+// Not gated on Linux: pure logic, so its tests run wherever you are.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+mod nonce;

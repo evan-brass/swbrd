@@ -25,6 +25,7 @@ use zerocopy::{
 	network_endian::{U16, U32},
 };
 
+use crate::nonce::Nonces;
 use common::{
 	Ip6, Packet, Udp, read_network,
 	socket::{
@@ -261,6 +262,10 @@ pub fn main() -> Result<Never> {
 	};
 	let server_port = bind.port();
 
+	// The HMAC key behind our TURN nonces.  Fresh per process: a restart just
+	// costs live clients one extra challenge round trip.
+	let nonces = Nonces::generate();
+
 	// Setup async
 	let mut poll = Poll::new()?;
 
@@ -372,7 +377,8 @@ pub fn main() -> Result<Never> {
 						// Stateless binding reply from the correct source address.
 						Method::Bind => {
 							let unspec = SocketAddrV6::new(Ipv6Addr::UNSPECIFIED, 0, 0, 0);
-							if let Turn::Respond(resp) = handle_turn(unspec, remote, msg, &network)?
+							if let Turn::Respond(resp) =
+								handle_turn(unspec, remote, msg, &network, &nonces)?
 							{
 								let end = size_of_val(resp.trim());
 								let _ = send_from(&udp, local, remote, &buffer[..end]);
@@ -391,7 +397,8 @@ pub fn main() -> Result<Never> {
 								warn!("relay pool full; dropping Allocate");
 								continue;
 							};
-							let Turn::Respond(resp) = handle_turn(relayed, remote, msg, &network)?
+							let Turn::Respond(resp) =
+								handle_turn(relayed, remote, msg, &network, &nonces)?
 							else {
 								continue;
 							};
@@ -576,9 +583,17 @@ pub fn main() -> Result<Never> {
 						.map(|t| t == Type::DGRAM)
 						.unwrap_or(false);
 					let close = if is_udp {
-						handle_udp_alloc(key, &relay, &mut streams, &mut refresh, &mut buffer, &network)?
+						handle_udp_alloc(
+							key,
+							&relay,
+							&mut streams,
+							&mut refresh,
+							&mut buffer,
+							&network,
+							&nonces,
+						)?
 					} else {
-						handle_tcp_alloc(key, &relay, &mut streams, &mut buffer, &network)?
+						handle_tcp_alloc(key, &relay, &mut streams, &mut buffer, &network, &nonces)?
 					};
 					if close {
 						remove_alloc(&mut streams, &mut by_peer, &mut refresh, poll.registry(), key);
@@ -637,6 +652,7 @@ fn handle_udp_alloc(
 	refresh: &mut HashMap<usize, u8>,
 	buffer: &mut [u8],
 	network: &SyncDevice,
+	nonces: &Nonces,
 ) -> Result<bool> {
 	let sock = streams.get(key).unwrap();
 	let Some(relayed) = relay.from_key(key) else {
@@ -670,7 +686,7 @@ fn handle_udp_alloc(
 				*c = 0;
 			}
 		}
-		match handle_turn(relayed, remote, msg, network)? {
+		match handle_turn(relayed, remote, msg, network, nonces)? {
 			Turn::Respond(resp) => {
 				let end = size_of_val(resp.trim());
 				let _ = sock.send(&buffer[..end]);
@@ -690,6 +706,7 @@ fn handle_tcp_alloc(
 	streams: &mut Slab<Socket>,
 	buffer: &mut [u8],
 	network: &SyncDevice,
+	nonces: &Nonces,
 ) -> Result<bool> {
 	let Some(relayed) = relay.from_key(key) else {
 		return Ok(true);
@@ -743,7 +760,7 @@ fn handle_tcp_alloc(
 		if msg.txid.id == [0; 12] {
 			continue;
 		}
-		match handle_turn(relayed, remote, msg, network)? {
+		match handle_turn(relayed, remote, msg, network, nonces)? {
 			Turn::Respond(resp) => {
 				let end = size_of_val(resp.trim());
 				// Reborrow the socket mutably for the write.
@@ -764,6 +781,7 @@ fn handle_turn<'i>(
 	remote: SocketAddrV6,
 	msg: &'i mut Stun,
 	network: &SyncDevice,
+	nonces: &Nonces,
 ) -> Result<Turn<'i>> {
 	let mut username = Parsed::NotPresent;
 	let mut software = Parsed::NotPresent;
@@ -868,19 +886,27 @@ fn handle_turn<'i>(
 
 			return Ok(Turn::Silent);
 		}
-		m if realm != Parsed::Valid("none") => {
+		// No usable credentials: 401, challenging with a fresh nonce bound to
+		// this client.  Unsigned — we have no key to sign with.
+		m if integrity.is_none() || realm != Parsed::Valid("none") => {
 			msg.class = Class::Response;
 			msg.method = m.to_err();
 			msg.length.get_mut().set(0);
 			msg.append_val(known::ERROR_CODE, &[0u8, 0, 4, 1]);
 			msg.append_val(known::REALM, "none");
-			msg.append_val(known::NONCE, "none");
+			msg.append_val(known::NONCE, &nonces.issue(remote));
 		}
-		m if (nonce, integrity.is_some()) != (Parsed::Valid("none"), true) => {
+		// Credentials check out, but the nonce is forged, expired, or was issued
+		// to somebody else: 438 Stale Nonce with a fresh one to retry with.  It
+		// is this round trip — not the (public) credentials — that stops a
+		// spoofed source from creating an allocation.  Signed by the tail below.
+		m if !nonces.check(nonce, remote) => {
 			msg.class = Class::Response;
 			msg.method = m.to_err();
 			msg.length.get_mut().set(0);
-			msg.append_val(known::ERROR_CODE, &[0u8, 0, 4, 3]);
+			msg.append_val(known::ERROR_CODE, &[0u8, 0, 4, 38]);
+			msg.append_val(known::REALM, "none");
+			msg.append_val(known::NONCE, &nonces.issue(remote));
 		}
 		Method::Allocate => {
 			msg.class = Class::Response;
@@ -903,6 +929,16 @@ fn handle_turn<'i>(
 			msg.class = Class::Response;
 			msg.length.get_mut().set(0);
 		}
+		// We don't do channels.  438 with *no* NONCE attribute is the refusal
+		// that costs nothing: we've just told Chrome its nonce is expired, so it
+		// won't retransmit with that one, and we gave it no replacement, so it
+		// drops the request — without expiring the nonce it's happily using for
+		// everything else.  Anything else is fatal for the entry (400 was tried)
+		// and tears down the peer's Send/Data indication path a few seconds
+		// after it came up.  So: don't add REALM/NONCE here for symmetry with
+		// the stale-nonce arm above — that's what makes it a no-op rather than a
+		// retry loop — and don't touch any of it without an e2e that holds a
+		// relayed pair open for a minute (`tests/soak.html`).
 		Method::UseChannel => {
 			msg.class = Class::Response;
 			msg.method = msg.method.to_err();

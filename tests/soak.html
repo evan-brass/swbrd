@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<title>soak — hold a relayed pair open across TURN refreshes</title>
+<script type="importmap">
+{
+	"imports": {
+		"swbrd/": "../src/"
+	}
+}
+</script>
+<h1>soak</h1>
+<p>
+	<code>p2p.html?relay=1</code>, but held open for <code>?hold=</code> seconds (default 90) with a
+	ping every 5s, so the relayed pair outlives the client's TURN refreshes instead of being judged the
+	instant it opens. The failures this catches are the ones where the allocation comes up fine and
+	dies fifteen seconds later — a fatal error to ChannelBind, an allocation that stops being
+	refreshed, a nonce the client can't recover from. Reaching <code>connected</code> is not enough;
+	things have to keep working. Server side: <code>turnserver</code>.
+</p>
+<script type="module">
+	import { Cert } from 'swbrd/cert.js';
+	import { Conn } from 'swbrd/conn.js';
+	import { deadline, expect_open, fail, log_everything, params, pass, selected } from './harness.js';
+
+	const hold = Number(params.get('hold') ?? 90) * 1000;
+	deadline(hold + 30_000, 'never got through the hold');
+
+	const config = { iceTransportPolicy: 'relay' };
+	const certa = await Cert.generate();
+	const certb = await Cert.generate();
+	const a = Conn.with_candidates(certb, { cert: certa, timeout: 25_000, ...config });
+	const b = Conn.with_candidates(certa, { cert: certb, timeout: 25_000, ...config });
+	a.addEventListener('candidate', ({ candidate }) => b.addIceCandidate(candidate));
+	b.addEventListener('candidate', ({ candidate }) => a.addIceCandidate(candidate));
+	log_everything({ a, b });
+
+	try {
+		await Promise.all([expect_open(a.dc, 25_000), expect_open(b.dc, 25_000)]);
+		console.log(`open, a ${selected(a)}; holding ${hold / 1000}s`);
+
+		// Keep traffic on the pair and prove it still flows at the end.
+		let seen = 0;
+		b.dc.addEventListener('message', () => seen++);
+		const started = Date.now();
+		while (Date.now() - started < hold) {
+			await new Promise((res) => setTimeout(res, 5_000));
+			a.dc.send(`ping ${Math.round((Date.now() - started) / 1000)}s`);
+			console.log(`t+${Math.round((Date.now() - started) / 1000)}s: ${seen} pings received`);
+		}
+		await new Promise((res) => setTimeout(res, 1_000));
+
+		if (a.dc.readyState != 'open' || b.dc.readyState != 'open') {
+			fail(`datachannel closed during the hold (a=${a.dc.readyState} b=${b.dc.readyState})`);
+		} else if (seen < hold / 5_000 - 1) {
+			fail(`only ${seen} of ~${hold / 5_000} pings arrived`);
+		} else {
+			pass(`held ${hold / 1000}s, ${seen} pings, a ${selected(a)}`.trim());
+		}
+	} catch (e) {
+		fail(e.message ?? e);
+	}
+</script>

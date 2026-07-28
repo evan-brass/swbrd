@@ -34,6 +34,11 @@
 		the relay. Server side: <code>turnserver</code>.
 	</li>
 	<li>
+		<a href="tests/soak.html?hold=90">soak.html</a> — a relayed pair held open across TURN
+		refreshes (<code>?hold=</code> seconds), for breakage that only shows up after the connection
+		is already up. Server side: <code>turnserver</code>.
+	</li>
+	<li>
 		<a href="tests/audio.html">audio.html</a> — the fixed opus / telephone-event m-section with a
 		microphone attached. Server side: <code>dtls-proxy</code>.
 	</li>

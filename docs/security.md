@@ -182,10 +182,11 @@ STUN-level checks give the DTLS layer nothing to build on. Everything rests on D
 ### The TURN credentials authenticate nothing either
 
 `README.md` publishes `user` / `password`; `turnserver` hardcodes `USER_KEY = md5('user:none:password')`
-and the realm and nonce are both the literal string `none`. The 401 challenge round trip is therefore
-skippable — an attacker sends the authenticated Allocate directly, having computed the integrity from
-public values. See [Denial of service](#denial-of-service) for why the missing round trip matters more
-than the missing secret.
+and the realm is the literal string `none`. Anyone can therefore compute a valid MESSAGE-INTEGRITY from
+public values — the credentials gate nothing, and are not meant to. What they cannot compute is the
+nonce, which is now a real one ([F6](#state-creation-without-return-routability-f6--fixed)): the 401
+challenge round trip is no longer skippable, so the relay is open to anyone *at a real address*. See
+[Denial of service](#denial-of-service) for why that round trip mattered more than the missing secret.
 
 `Method::AddPermission` returns success without recording anything, and `Method::Send` is handled
 *before* the integrity check in `handle_turn` (`crates/turnserver/src/linux.rs:854`). There is no
@@ -315,33 +316,62 @@ it means one spoofed packet costs one path change.
 
 ## Denial of service
 
-### State creation without return routability (F6)
+### State creation without return routability (F6 — fixed)
 
 `dtls-proxy` does this correctly and it is worth crediting: `cookie.rs` implements stateless DTLS
 cookies HMAC'd over both source and destination address, and — unusually — handles the fragmented
 ClientHello case that defeats `DTLSv1_listen`. No `Ssl` object exists until a cookie has round-tripped.
 Spoofed sources cannot create state.
 
-`turnserver` does not. The 401/nonce challenge that would provide the same round trip is neutered:
-`realm` and `nonce` are both the constant `"none"` and the key is `md5('user:none:password')` with the
-credentials in the README. An attacker composes a valid authenticated Allocate offline and spoofs the
+`turnserver` used not to. The 401/nonce challenge that would provide the same round trip was neutered:
+`realm` and `nonce` were both the constant `"none"` and the key is `md5('user:none:password')` with the
+credentials in the README. An attacker composed a valid authenticated Allocate offline and spoofed the
 source address. The server then:
 
-- allocates a slab entry, a relayed transport address, and **a file descriptor** (`connected_udp`),
-- registers it with the poller,
-- starts sending heartbeat Indications to the spoofed victim once a minute for ~6 minutes
+- allocated a slab entry, a relayed transport address, and **a file descriptor** (`connected_udp`),
+- registered it with the poller,
+- started sending heartbeat Indications to the spoofed victim once a minute for ~6 minutes
   (`linux.rs:595-628`).
 
-Two problems. Resource-wise, one spoofed packet buys an fd and ~5 minutes of state, with no per-source
+Two problems. Resource-wise, one spoofed packet bought an fd and ~5 minutes of state, with no per-source
 cap; the pool is `--relay-net 2a01:4ff:1f0:7e46:0:1::/96` × ports `10000-65535`, so `RelayRange::capacity()`
-is astronomically larger than the process's fd limit. Exhaustion is bounded by `RLIMIT_NOFILE`, not by
-anything the code checks. Reflection-wise, it is a small but real amplifier: one packet in, five
+is astronomically larger than the process's fd limit. Exhaustion was bounded by `RLIMIT_NOFILE`, not by
+anything the code checked. Reflection-wise, it was a small but real amplifier: one packet in, five
 heartbeats out to an address the attacker chose.
 
-The fix is the one STUN already specifies: a real nonce, unguessable and time-bounded (an HMAC over
-the client address and a coarse timestamp, exactly like the DTLS cookies already in this tree), so
-that Allocate requires a genuine round trip. That is compatible with keeping the credentials public —
-it is the round trip, not the secret, that is load-bearing.
+**The fix**, in `crates/turnserver/src/nonce.rs`, is the one STUN already specifies — a real nonce,
+unguessable, address-bound and time-bounded, so that Allocate requires a genuine round trip:
+
+```text
+ts    u32 big-endian, seconds since the process started
+tag   HMAC-SHA256(secret, ts || client_ip || client_port)[..12]
+nonce hex(ts) || hex(tag)                                  // 32 ASCII chars
+```
+
+- The secret is 32 random bytes generated once per process, the same trade `dtls-proxy` makes for its
+  cookies: a restart costs live clients one extra challenge round trip and nothing else.
+- The tag covers the client's IP **and port**, so a nonce fetched honestly by an attacker is not
+  replayable with a spoofed source.
+- Nonces are valid for 600s. Requests carrying credentials with a forged, expired or foreign nonce get
+  **438 Stale Nonce** with a fresh nonce attached; requests with no usable credentials get the 401
+  challenge. `handle_turn` checks on every authenticated request, so the connected-UDP and TCP paths
+  are covered as well as the wildcard Allocate.
+- The timestamp is relative to process start (`Instant`), not wall clock, so there is no clock-skew or
+  `SystemTime` exposure. It is only ever compared against the same process's own clock.
+
+This is compatible with keeping the credentials public — it is the round trip, not the secret, that is
+load-bearing. It does **not** close F3: the relay is still open to anyone willing to complete a round
+trip, `Send` is still handled before the integrity check, and there are still no rate limits.
+
+One wrinkle worth knowing before touching this code: `Method::UseChannel` answers **438** too, which is
+now overloaded, and it answers with a bare ERROR-CODE — no REALM, no NONCE. Both halves are deliberate.
+libwebrtc treats any other error to ChannelBind as fatal for the entry and tears down the peer's
+Send/Data indication path a few seconds after it came up (400 was tried, and breaks a relayed pair ~15s
+in). A 438 tells Chrome not to retransmit with the nonce it used, and since the response carries no
+replacement it simply drops the request — leaving the nonce it is using for everything else alone. So
+the omission is what makes this a no-op rather than a retry loop; adding the attributes for symmetry
+with the stale-nonce arm would let it ask forever. Any change there needs an e2e that holds a relayed
+pair open for a minute, not just one that reaches `connected`.
 
 ### The relay is open (F3, continued)
 
@@ -365,6 +395,11 @@ Three unauthenticated request→response paths that will answer a spoofed source
 | `ice-dissolve` | any nftables-matched Binding request (~36 B) | Binding response with XOR-MAPPED-ADDRESS + MESSAGE-INTEGRITY + FINGERPRINT (76 B) | ~2× |
 | `turnserver` TUN | UDP to an in-pool but unallocated relayed address | ICMPv6 Port Unreachable quoting the packet | ~1× |
 | `common::read_network` | any non-UDP, non-error-ICMP packet on a TUN | ICMPv6 Host Unreachable from the router address | ~1× |
+
+The 401/438 challenge `turnserver` now sends (see [F6](#state-creation-without-return-routability-f6--fixed))
+belongs in the same band: ~72 bytes answering a ~28-byte unauthenticated Allocate, so ~2.5×. That is
+not a regression — the old constant-nonce challenge was the same size — but it is why the nonce is
+32 characters with a 12-byte truncated tag rather than a full digest. Every byte of it is amplification.
 
 None is a serious amplifier on its own — 2× is far below what makes a reflector attractive. But all
 three are stateless, unmetered, and answer spoofed sources, so they are free capacity for someone
@@ -474,7 +509,7 @@ the id. Standard same-origin hygiene applies with more than usual force.
 | **F3** | Open relay: published credentials, permissions never enforced, `Send` handled before the integrity check, no rate limits | High (abuse/reputation) | [details](#the-turn-credentials-authenticate-nothing-either) |
 | **F4** | `defaults.iceServers` mixes `turn:` and `turns:`, so the default deter handshake usually runs over plain UDP with no authentication anywhere | High | [details](#handshaking-inside-turns) |
 | **F5** | `highest_read_seq` starts at 0 and only advances on mobility events, so one captured ciphertext record lets an on-path attacker repeatedly hijack the connection's downstream direction | Medium | [details](#the-mobility-watermark-is-not-synchronised-f5) |
-| **F6** | `turnserver` creates fd-backed state from spoofed sources — the nonce is the constant `"none"`, so there is no return-routability round trip | Medium | [details](#state-creation-without-return-routability-f6) |
+| **F6** | `turnserver` created fd-backed state from spoofed sources — the nonce was the constant `"none"`, so there was no return-routability round trip | ~~Medium~~ fixed: address-bound HMAC nonce, 401/438 challenge | [details](#state-creation-without-return-routability-f6--fixed) |
 | **F7** | Three unmetered reflectors (`ice-dissolve` ~2×, two ICMP paths ~1×), bypassing kernel ICMP rate limits | Low | [details](#reflectors-f7) |
 | **F8** | `panic = "abort"` + `overflow-checks` + `Restart=no`: any panic is a permanent outage; wire-derived lengths index slices directly | Low today, high blast radius | [details](#panic-to-abort-with-no-restart-f8) |
 | **F9** | `dtls-proxy` has no per-source connection cap; ceiling is `RLIMIT_NOFILE` | Low | [details](#unbounded-connection-growth-in-dtls-proxy-f9) |
@@ -490,4 +525,5 @@ handshake in TURNS genuinely does buy real protection against active attackers, 
 TURN path afterwards genuinely does keep it, but neither helps unless the handshake actually took the
 TURNS path in the first place (**F4**), and neither changes what the relay operator can see. On the
 server side, `dtls-proxy`'s cookie handling is careful work; `turnserver`'s missing return-routability
-round trip (**F6**) and the mobility watermark bug (**F5**) are the two concrete things worth fixing.
+round trip (**F6**) has since been fixed with a real address-bound nonce, which leaves the mobility
+watermark bug (**F5**) as the concrete thing still worth fixing.
