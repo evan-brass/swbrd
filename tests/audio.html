@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<title>audio — Conn negotiated with the fixed audio m-section</title>
+<script type="importmap">
+{
+	"imports": {
+		"swbrd/": "../src/"
+	}
+}
+</script>
+<h1>audio</h1>
+<p>
+	Brings up a <code>Conn</code> with <code>audio: true</code>, so the offer carries the fixed opus /
+	telephone-event m-section, and attaches a microphone track. Passes once the datachannel is open
+	and the audio transceiver has a mid; whether a <em>remote</em> track arrives is reported in the
+	detail line, since nothing answers RTP yet — that is what the Asterisk work will add.
+</p>
+<audio controls autoplay></audio>
+<script type="module">
+	import { Conn } from 'swbrd/conn.js';
+	import { deadline, expect_open, fail, log_everything, pass } from './harness.js';
+	import { DETER_BASE, SCTP_PORT } from './config.js';
+
+	deadline(28_000, 'the datachannel never opened');
+
+	const el = document.querySelector('audio');
+	let track_arrived = false;
+
+	try {
+		const h = await Conn.to_deter({
+			base: DETER_BASE,
+			sctp_port: SCTP_PORT,
+			audio: true,
+			timeout: 25_000,
+		});
+		log_everything({ h });
+
+		h.addEventListener('track', ({ streams: [stream] }) => {
+			track_arrived = true;
+			el.srcObject = stream;
+			// Under headless Chrome autoplay is unrestricted; in a real browser this may need a click.
+			el.play().catch((e) => console.warn('autoplay blocked:', e.name));
+		});
+
+		// Fake device under scripts/e2e.js, a real prompt when you open this by hand.
+		const [mic] = (await navigator.mediaDevices.getUserMedia({ audio: true })).getAudioTracks();
+
+		await expect_open(h.dc, 25_000);
+
+		const audio = h.getTransceivers().find((t) => t.mid == 'audio');
+		if (!audio) throw new Error('no transceiver came back with mid=audio');
+		await audio.sender.replaceTrack(mic);
+
+		// Give RTP a moment to flow before deciding whether anything answered.
+		await new Promise((res) => setTimeout(res, 3_000));
+
+		// A `track` event only means the transceiver exists; inbound packets mean something is
+		// actually sending RTP back, which is what the Asterisk work has to make true.
+		let received = 0;
+		(await h.getStats()).forEach((r) => {
+			if (r.type == 'inbound-rtp' && r.kind == 'audio') received = r.packetsReceived ?? 0;
+		});
+
+		pass(
+			`dc open, mid=audio ${audio.currentDirection}, track event: ${track_arrived}, ` +
+				`inbound RTP packets: ${received}`,
+		);
+	} catch (e) {
+		fail(e.message ?? e);
+	}
+</script>

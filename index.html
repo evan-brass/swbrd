@@ -1,181 +1,55 @@
 <!DOCTYPE html>
-<script type="importmap">
-{
-	"imports": {
-		"swbrd/": "./src/"
+<title>swbrd</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+	body { max-width: 46em; margin: 3em auto; padding: 0 1em; font: 16px/1.6 system-ui, sans-serif; }
+	li { margin-bottom: .75em; }
+	code { background: #0001; padding: .1em .3em; border-radius: .2em; }
+	@media (prefers-color-scheme: dark) {
+		body { background: #16181c; color: #e6e6e6; }
+		a { color: #79b8ff; }
+		code { background: #fff2; }
 	}
-}
-</script>
-<script>
-	// Log everything.
-	async function log_everything(conns) {
-		for (const key in conns) {
-			const conn = conns[key];
-			function ondc({ channel }) {
-				['message', 'open', 'close'].forEach((e) => {
-					channel.addEventListener(e, console.log.bind(console, key, channel.label))
-				});
-			}
-			if (conn.dc) ondc({ channel: conn.dc });
-			conn.addEventListener('datachannel', ondc);
-			[
-				'connectionState',
-				'iceConnectionState',
-				'iceGatheringState',
-				'signalingState',
-			].forEach((p) => {
-				conn.addEventListener(
-					p.toLowerCase() + 'change',
-					({ target: { [p]: val }}) => console.log(key, p, val),
-				);
-			});
-			[
-				'icecandidate',
-				'candidate',
-				'datachannel',
-				'icecandidateerror',
-				'negotiationneeded',
-				'track',
-			].forEach((e) => {
-				conn.addEventListener(e, console.log.bind(console, key));
-			});
+</style>
 
-			while (!conn.sctp) {
-				await new Promise((res) =>
-					conn.addEventListener('signalingstatechange', res, { once: true })
-				);
-			}
-			conn.sctp.addEventListener(
-				'statechange',
-				({ target: { state } }) => console.log(key, 'sctp state', state),
-			);
-			conn.sctp.transport.addEventListener(
-				'error',
-				({ error }) => console.log(key, 'dtls error', error),
-			);
-			conn.sctp.transport.iceTransport.addEventListener(
-				'gatheringstatechange',
-				({ target: { gatheringState } }) =>
-					console.log(key, 'ice transport gatheringState', gatheringState),
-			);
-			conn.sctp.transport.iceTransport.addEventListener(
-				'statechange',
-				({ target: { state } }) => console.log(key, 'ice transport state', state),
-			);
-			conn.sctp.transport.iceTransport.addEventListener(
-				'selectedcandidatepairchange',
-				({ target }) =>
-					console.log(key, 'ice transport selected', target.getSelectedCandidatePair()),
-			);
-		}
-	}
-</script>
+<h1>swbrd</h1>
+<p>
+	Reduced-signalling peer-to-peer WebRTC. The library lives in <code>src/</code>; the servers it
+	talks to are the daemons in <code>crates/</code>, deployed at <code>turn.evan-brass.net</code>.
+</p>
 
-<!-- Test ICMP attributes: -->
-<script type="_module">
-import { Conn } from 'swbrd/conn.js';
+<h2>Test pages</h2>
+<p>
+	Each page drives one scenario and reports a verdict, both into the page and as a
+	<code>SWBRD-RESULT</code> console line. Open one here, or run it headless and get the matching
+	server logs back with <code>./scripts/dev.sh e2e tests/&lt;page&gt; --units=&lt;unit&gt;</code>.
+</p>
+<ul>
+	<li>
+		<a href="tests/vpn.html">vpn.html</a> — <code>Conn.to_deter()</code> into the SCTP/DataChannel
+		VPN. Server side: <code>dtls-proxy</code>, <code>swbrd</code>.
+	</li>
+	<li>
+		<a href="tests/p2p.html">p2p.html</a> — two <code>Conn</code>s connecting to each other through
+		the relay. Server side: <code>turnserver</code>.
+	</li>
+	<li>
+		<a href="tests/audio.html">audio.html</a> — the fixed opus / telephone-event m-section with a
+		microphone attached. Server side: <code>dtls-proxy</code>.
+	</li>
+	<li>
+		<a href="tests/icmp.html">icmp.html</a> — traffic at an unallocated relay address; the
+		assertion is in the <code>turnserver</code> journal, not the browser.
+	</li>
+	<li>
+		<a href="tests/relay.html">relay.html</a> — stock <code>RTCPeerConnection</code> with munged ICE
+		credentials. Server side: <code>ice-dissolve</code>. Legacy: Chrome is removing credential
+		munging, so this one is expected to stop working.
+	</li>
+</ul>
 
-const t = new Conn(42n, { setup: 'passive', iceTransportPolicy: 'relay' });
-log_everything({ t });
-t.addIceCandidate({ address: '2a01:4ff:1f0:7e46:1::', port: 50_000 });
-</script>
-
-<!-- Test swbrd VPN -->
-<script type="module">
-import { Conn } from 'swbrd/conn.js';
-
-const h = await Conn.to_deter({ sctp_port: 5001 });
-log_everything({ h });
-</script>
-
-<!-- Test audio -->
-<audio controls></audio>
-<button>Call</button>
-<script type="_module">
-import { Conn } from 'swbrd/conn.js';
-import { state } from 'swbrd/util.js';
-
-const audio = document.querySelector('audio');
-
-// User Interaction
-await state({ 'click': document.body });
-
-const h = await Conn.to_deter({ audio: true });
-log_everything({ h });
-
-h.addEventListener('track', ({ track, streams: [stream] }) => {
-	audio.srcObject = stream;
-	audio.play();
-});
-
-const user_mic = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
-debugger;
-const { sender } = h.getTransceivers().find(t => t.mid == 'audio');
-const [mic] = user_mic.getAudioTracks();
-sender.replaceTrack(mic);
-</script>
-
-<script type="_module">
-import { Cert } from 'swbrd/cert.js';
-import { Conn } from 'swbrd/conn.js';
-
-const certa = await Cert.generate();
-const certb = await Cert.generate();
-
-const a = Conn.with_candidates(certb, { cert: certa });
-const b = Conn.with_candidates(certa, { cert: certb });
-// const a = Conn.with_candidates_dissolved(certb, { cert: certa });
-// const b = Conn.with_candidates_dissolved(certa, { cert: certb });
-a.addEventListener('candidate', ({candidate}) => b.addIceCandidate(candidate));
-b.addEventListener('candidate', ({candidate}) => a.addIceCandidate(candidate));
-
-log_everything({a, b});
-</script>
-<script type="_module">
-	import { state } from './src/util.js';
-	const config = {
-		iceServers: [{
-			urls: [
-				// This was the old domain I used.
-				// 'turns:stun.evan-brass.net:443?transport=tcp',
-
-				// This domain only has an A dns record, it's only use is if you need exactly 1 ICE candidate for dissolve to work in firefox
-				// 'turns:turn-4only.evan-brass.net:443?transport=tcp',
-
-				'stun:turn.evan-brass.net',
-				'turn:turn.evan-brass.net',
-				'turn:turn.evan-brass.net?transport=tcp',
-				'turns:turn.evan-brass.net?transport=tcp',
-				'turns:turn.evan-brass.net:443?transport=tcp',
-			],
-			username: 'user',
-			credential: 'password',
-		}],
-		iceTransportPolicy: 'relay',
-	};
-
-	const a = new RTCPeerConnection(config);
-	const b = new RTCPeerConnection(config);
-
-	log_everything({ a, b });
-
-	a.createDataChannel('');
-
-	function dissolve({ type, sdp }) {
-		const new_sdp = sdp
-			.replace(/a=ice-ufrag:.+/img, 'a=ice-ufrag:dissolve')
-			.replace(/a=ice-pwd:.+/img, 'a=ice-pwd:the/ice/password/constant');
-		return { type, sdp: new_sdp };
-	}
-
-	await a.setLocalDescription();
-	while (a.iceGatheringState != 'complete') {
-		await state({ icegatheringstatechange: a });
-	}
-	await b.setRemoteDescription(dissolve(a.localDescription));
-	await b.setLocalDescription();
-	while (b.iceGatheringState != 'complete') {
-		await state({ icegatheringstatechange: b });
-	}
-	await a.setRemoteDescription(dissolve(b.localDescription));
-</script>
+<h2>Docs</h2>
+<ul>
+	<li><a href="docs/how-it-works.md">docs/how-it-works.md</a> — ids, polite peers, DTLS roles.</li>
+	<li><a href="docs/ciphersuites.md">docs/ciphersuites.md</a></li>
+</ul>

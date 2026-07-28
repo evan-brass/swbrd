@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<title>ICE dissolve — plain RTCPeerConnection with munged credentials</title>
+<h1>ICE dissolve (legacy)</h1>
+<p>
+	Two stock <code>RTCPeerConnection</code>s whose SDP has its ICE ufrag/pwd rewritten to the shared
+	constants, so <code>ice-dissolve</code> answers the connectivity checks. <strong>This path is on
+	its way out</strong>: Chrome has announced it will remove ICE credential munging, so a failure
+	here is the browser catching up rather than a server regression. Kept because it is still the
+	clearest way to exercise <code>ice-dissolve</code> from a browser.
+</p>
+<script type="module">
+	import { state } from '../src/util.js';
+	import { deadline, expect_connected, fail, log_everything, pass } from './harness.js';
+
+	deadline(25_000, 'neither side reached connected');
+
+	const config = {
+		iceServers: [{
+			urls: [
+				'stun:turn.evan-brass.net',
+				'turn:turn.evan-brass.net',
+				'turn:turn.evan-brass.net?transport=tcp',
+				'turns:turn.evan-brass.net?transport=tcp',
+				'turns:turn.evan-brass.net:443?transport=tcp',
+			],
+			username: 'user',
+			credential: 'password',
+		}],
+		iceTransportPolicy: 'relay',
+	};
+
+	const a = new RTCPeerConnection(config);
+	const b = new RTCPeerConnection(config);
+	log_everything({ a, b });
+
+	a.createDataChannel('');
+
+	function dissolve({ type, sdp }) {
+		const new_sdp = sdp
+			.replace(/a=ice-ufrag:.+/img, 'a=ice-ufrag:dissolve')
+			.replace(/a=ice-pwd:.+/img, 'a=ice-pwd:the/ice/password/constant');
+		return { type, sdp: new_sdp };
+	}
+
+	try {
+		await a.setLocalDescription();
+		while (a.iceGatheringState != 'complete') await state({ icegatheringstatechange: a });
+
+		await b.setRemoteDescription(dissolve(a.localDescription));
+		await b.setLocalDescription();
+		while (b.iceGatheringState != 'complete') await state({ icegatheringstatechange: b });
+
+		await a.setRemoteDescription(dissolve(b.localDescription));
+
+		await Promise.all([expect_connected(a, 25_000), expect_connected(b, 25_000)]);
+		pass('both peers connected through ice-dissolve');
+	} catch (e) {
+		fail(e.message ?? e);
+	}
+</script>

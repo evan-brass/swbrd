@@ -1,0 +1,15 @@
+{
+	"permissions": {
+		"allow": [
+			"Bash(./scripts/dev.sh:*)",
+			"Bash(./build.sh:*)",
+			"Bash(ssh 192.168.64.3:*)",
+			"Bash(ssh turn:*)",
+			"Bash(scp:*)",
+			"Bash(deno check:*)",
+			"Bash(deno fmt:*)",
+			"Bash(file-server:*)",
+			"Bash(tcpdump -r:*)"
+		]
+	}
+}

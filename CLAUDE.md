@@ -25,34 +25,38 @@ browser contexts; don't describe the browser library as signaling-free in new do
 ## Edit locally, build/test on the Linux VM
 
 **Edit files here on macOS** (this working copy), but **run all builds and tests on the Linux VM** — the
-daemons are Linux-only (see below) and the toolchain there is set up for them.
+daemons are Linux-only (see below) and the toolchain there is set up for them. `~/share/src/swbrd` on
+the VM is the same tree as this repo, shared over virtiofs, so nothing needs copying.
+
+`./scripts/dev.sh` drives the whole cycle over ssh; prefer it over doing the steps by hand, and read
+`.claude/skills/close-the-loop/SKILL.md` before starting anything that has to be seen working:
 
 ```sh
-ssh 192.168.64.3
-cd share/src/swbrd/        # same tree as this repo (~/share/src/swbrd), shared with the Mac
+./scripts/dev.sh test [crate...]              # cargo test on the VM
+./scripts/dev.sh check [crate...]             # cargo check on the VM
+./scripts/dev.sh build dtls-proxy             # cross compile one binary for the VPS
+./scripts/dev.sh deploy dtls-proxy            # + upload, restart, verify, roll back on failure
+./scripts/dev.sh e2e tests/vpn.html --units=dtls-proxy,swbrd --grep=app
+./scripts/dev.sh logs turnserver -10min app   # journalctl window
+./scripts/dev.sh capture 'ip6 and udp' 20     # tcpdump on the VPS into a local pcap
+./scripts/dev.sh status
 ```
 
 On the VM, **use the user's rustup toolchain, not the system Rust.** The system `/usr/bin/cargo` is
 outdated (1.85) and too old for this workspace; `~/.cargo/bin` has a current rustup toolchain. Make sure
 `~/.cargo/bin` is first on `PATH` (e.g. `PATH="$HOME/.cargo/bin:$PATH" cargo ...` or `~/.cargo/bin/cargo`).
+`dev.sh` does this for you.
 
 This is a Cargo workspace (edition 2024, `resolver = "3"`). All the daemons are **Linux-only**: on
 non-Linux their `main()` just prints a joke and exits, and the real logic lives in each crate's
 `linux.rs`, gated by `#[cfg(target_os = "linux")]`. That's the main reason builds/tests belong on the VM.
 
-```sh
-# on the VM, with ~/.cargo/bin on PATH:
-cargo build                       # whole workspace
-cargo test -p stun                # RFC 5769 STUN test vectors (no_std crate)
-cargo test -p common              # packet/checksum + socket tests
-cargo test                        # everything
-./build.sh                        # cross-compile release binaries to opt/amd64 + deploy artifacts
-```
-
-`build.sh` cross-compiles to `x86_64-unknown-linux-gnu` (needs `crossbuild-essential-amd64`; linker
-set in `.cargo/config.toml`), installs into `opt/amd64/bin`, and also `deno compile`s
-`scripts/cert-rotate.js`. Binaries are meant to land in `/opt/` on the server and run under the systemd
-units in `etc/systemd/`.
+`dev.sh build` uses `cargo build -p <crate> --target x86_64-unknown-linux-gnu` against the shared
+`target/` dir, so a one-crate turnaround is seconds. `./build.sh` remains the full release path: it
+`cargo install`s all four daemons into `opt/amd64/bin` (a cold build each time, since `cargo install`
+uses a throwaway target dir) and `deno compile`s `scripts/cert-rotate.js`. Cross compiling needs
+`crossbuild-essential-amd64`; the linker is set in `.cargo/config.toml`. Binaries land in `/opt/` on the
+server and run under the systemd units in `etc/systemd/`.
 
 Release **and** dev profiles set `overflow-checks = true` and `panic = "abort"` (`.cargo/config.toml`).
 
@@ -86,7 +90,8 @@ not rustfmt-clean; match surrounding style by hand.
 
 ## Browser library (`src/`)
 
-Plain ES modules, no build step; `index.html` maps the bare specifier `swbrd/` to `./src/` via importmap.
+Plain ES modules, no build step; the pages map the bare specifier `swbrd/` to `../src/` via importmap.
+`index.html` is an index of the test pages.
 
 - `id.js` — `Id`: a peer id as a 256-bit BigInt (SHA-256 fingerprint), base-36 encoded in ICE ufrags.
 - `cert.js` — `Cert extends RTCCertificate`: generates/loads a cert and computes its `id`. `Conn` only
@@ -111,8 +116,21 @@ Not runnable locally, but essential context for how the daemons fit together:
 - **`systemd/`** — one unit per daemon (all run as user `swbrd` with `CAP_NET_ADMIN`), plus
   `.netdev`/`.network` files for the TUN interfaces and cert-rotation timer units.
 
+## Browser tests (`tests/`)
+
+One page per scenario, each reporting a verdict as a `SWBRD-RESULT` console line and into the DOM, so
+the same file works under `dev.sh e2e` and when opened by hand.
+
+- `harness.js` — `pass()` / `fail()` / `deadline()` / `expect_open()` / `expect_connected()`, plus
+  `log_everything()`, which narrates every ICE/DTLS/SCTP transition.
+- `config.js` — the deployment constants, overridable by query parameter. Notably `DETER_BASE`:
+  `Deter`'s own default base is `fd01::/96`, which is only routable from inside the VPN, so the pages
+  aim at `2a01:4ff:1f0:7e46:0:4::` instead.
+- `vpn.html`, `p2p.html`, `audio.html`, `icmp.html`, `relay.html` — see `index.html` for what each one
+  covers and which daemon it exercises.
+
 ## Working notes
 
-Design docs and rationale for in-progress/finished features live in `slop/` (`dtls-cookies.md`,
-`icmp-plan.md`, `turn-heartbeats.md`, `turn-icmp.md`) and `docs/` (`how-it-works.md`, `ciphersuites.md`).
-`firefox-issues/` holds browser-bug repros.
+Design docs and rationale for in-progress/finished features live in `slop/` (`close-the-loop.md`,
+`dtls-cookies.md`, `icmp-plan.md`, `turn-heartbeats.md`, `turn-icmp.md`) and `docs/`
+(`how-it-works.md`, `ciphersuites.md`). `firefox-issues/` holds browser-bug repros.

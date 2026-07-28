@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<title>swbrd VPN — Conn.to_deter</title>
+<script type="importmap">
+{
+	"imports": {
+		"swbrd/": "../src/"
+	}
+}
+</script>
+<h1>swbrd VPN</h1>
+<p>
+	Connects to the deterministic certificate's dtls-proxy and expects the negotiated datachannel to
+	open, which means DTLS terminated at <code>dtls-proxy</code> and SCTP reached <code>swbrd</code>.
+</p>
+<script type="module">
+	import { Conn } from 'swbrd/conn.js';
+	import { deadline, expect_open, fail, log_everything, pass, selected } from './harness.js';
+	import { DETER_BASE, SCTP_PORT } from './config.js';
+
+	deadline(25_000, 'the datachannel never opened');
+
+	const h = await Conn.to_deter({
+		base: DETER_BASE,
+		sctp_port: SCTP_PORT,
+		timeout: 20_000,
+	});
+	log_everything({ h });
+
+	try {
+		await expect_open(h.dc, 20_000);
+		pass(`datachannel open ${selected(h)}`.trim());
+	} catch (e) {
+		fail(e.message ?? e);
+	}
+</script>
