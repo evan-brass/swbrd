@@ -89,8 +89,6 @@ export class Deter extends Uint8Array {
 			0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
 		);
 
-		this.cache.set(cache_key, ret);
-
 		const not_before = ret.subarray(27, 33);
 		const not_after = ret.subarray(44, 50);
 		const mm = String(month + 1).padStart(2, '0');
@@ -116,6 +114,8 @@ export class Deter extends Uint8Array {
 		ret.year = year;
 		ret.month = month;
 		ret.pid = new Id(await sha256(ret));
+
+		this.cache.set(cache_key, ret);
 
 		return ret;
 	}
