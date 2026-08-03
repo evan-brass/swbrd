@@ -63,10 +63,11 @@ export class Conn extends RTCPeerConnection {
 				iceTransportPolicy: 'relay',
 				iceServers: [{
 					urls: `turns:${domain}:${port}?transport=tcp`,
-					username, credential,
-				}]
+					username,
+					credential,
+				}],
 			},
-		})
+		});
 	}
 
 	// Make a connection to a server that's using the deterministic certificate
@@ -148,7 +149,7 @@ export class Conn extends RTCPeerConnection {
 		if (typeof timeout == 'number') {
 			const t = setTimeout(() => {
 				console.warn('Connection timeout expired!');
-				this.close()
+				this.close();
 			}, timeout);
 			this.addEventListener(
 				'connectionstatechange',
@@ -219,25 +220,27 @@ export class Conn extends RTCPeerConnection {
 				'a=bundle-only',
 				'a=mid:dc',
 				`a=sctp-port:${sctp_port}`,
-				...(audio ? [
-					'm=audio 0 UDP/TLS/RTP/SAVPF 100 101',
-					'c=IN IP4 0.0.0.0',
-					'a=bundle-only',
-					'a=rtcp-mux',
-					'a=mid:audio',
-					'a=sendrecv',
-					'a=rtpmap:100 opus/48000/2',
-					'a=fmtp:100 useinbandfec=1',
-					'a=rtpmap:101 telephone-event/8000',
-					'a=rtcp-mux',
-				] : []),
+				...(audio
+					? [
+						'm=audio 0 UDP/TLS/RTP/SAVPF 100 101',
+						'c=IN IP4 0.0.0.0',
+						'a=bundle-only',
+						'a=rtcp-mux',
+						'a=mid:audio',
+						'a=sendrecv',
+						'a=rtpmap:100 opus/48000/2',
+						'a=fmtp:100 useinbandfec=1',
+						'a=rtpmap:101 telephone-event/8000',
+						'a=rtcp-mux',
+					]
+					: []),
 				'',
 			].join('\n'),
 		});
 
 		// Audio
 		if (audio) {
-			const trans = super.getTransceivers().find(t => t.mid == 'audio');
+			const trans = super.getTransceivers().find((t) => t.mid == 'audio');
 			trans.direction = 'sendrecv';
 		}
 
@@ -245,14 +248,13 @@ export class Conn extends RTCPeerConnection {
 		await super.setLocalDescription();
 
 		// Switchover into handling renegotiation
-		for (; ;) {
+		for (;;) {
 			// We don't need the datachannel to apply the adjustment, just waiting for DTLS to finish is enough.
 			if (this.connectionState == 'closed') {
-				break
+				break;
 			} else if (this.connectionState != 'connected') {
 				await state({ 'connectionstatechange': this });
-			}
-			// Connection state must be 'connected'
+			} // Connection state must be 'connected'
 			else if (adjustment) {
 				adjustment = null;
 				this.setConfiguration(config);
@@ -264,7 +266,9 @@ export class Conn extends RTCPeerConnection {
 
 				// Once we have a local description to send, we can't do any more renegotiation until we've enqueued the message.
 				// If SCTP isn't being used by this connection, the signaling task will hang here until the Conn is closed.
-				while (this.#dc.readyState == 'connecting') await state({ 'open': this.dc, 'close': this.dc });
+				while (this.#dc.readyState == 'connecting') {
+					await state({ 'open': this.dc, 'close': this.dc });
+				}
 				if (this.#dc.readyState != 'open') break; // We can no longer enqueue messages so we're done handling renegotiation.
 
 				try {

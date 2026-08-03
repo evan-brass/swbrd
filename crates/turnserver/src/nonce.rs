@@ -70,8 +70,8 @@ impl Nonces {
 	/// address *and* port: a nonce issued to one client must not be replayable
 	/// with a spoofed source, which is the whole point.
 	fn tag(&self, ts: u32, client: SocketAddrV6) -> Hmac<Sha256> {
-		let mut mac = Hmac::<Sha256>::new_from_slice(&self.secret)
-			.expect("HMAC accepts a key of any length");
+		let mut mac =
+			Hmac::<Sha256>::new_from_slice(&self.secret).expect("HMAC accepts a key of any length");
 		mac.update(&ts.to_be_bytes());
 		mac.update(&client.ip().octets());
 		mac.update(&client.port().to_be_bytes());
@@ -102,7 +102,7 @@ impl Nonces {
 		};
 		// Decode before hashing: length and alphabet are cheap to reject, and
 		// nothing here indexes with a wire-derived length.
-		let Some(nonce) = (nonce.len() == LEN).then(|| nonce.as_bytes()) else {
+		let Some(nonce) = (nonce.len() == LEN).then_some(nonce.as_bytes()) else {
 			return false;
 		};
 		let Some(ts) = hex_decode::<4>(&nonce[..8]) else {

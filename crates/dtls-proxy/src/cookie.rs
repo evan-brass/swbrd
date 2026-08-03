@@ -56,8 +56,9 @@ pub fn configure(ctx: &mut SslContextBuilder) {
 		Ok(COOKIE_LEN)
 	});
 	ctx.set_cookie_verify_cb(|ssl, cookie| {
-		ssl.ex_data(*INDEX)
-			.is_some_and(|expected| cookie.len() == COOKIE_LEN && openssl::memcmp::eq(expected, cookie))
+		ssl.ex_data(*INDEX).is_some_and(|expected| {
+			cookie.len() == COOKIE_LEN && openssl::memcmp::eq(expected, cookie)
+		})
 	});
 }
 
@@ -132,7 +133,9 @@ impl Keys {
 /// job is to make OpenSSL send a HelloVerifyRequest (which happens before any
 /// version/cipher negotiation), so one dummy cipher suite and no extensions.
 #[repr(C, packed)]
-#[derive(Clone, Copy, zerocopy::KnownLayout, zerocopy::Immutable, zerocopy::Unaligned, IntoBytes)]
+#[derive(
+	Clone, Copy, zerocopy::KnownLayout, zerocopy::Immutable, zerocopy::Unaligned, IntoBytes,
+)]
 struct SyntheticHello {
 	record: RecordHeader,
 	handshake: HandshakeHeader,
@@ -317,7 +320,10 @@ mod tests {
 
 	/// A handshake step on the [`Handshake`] server that must not be fatal.
 	fn want_read_io(res: SslIo) {
-		assert!(matches!(res, SslIo::WantRead), "expected WANT_READ from server");
+		assert!(
+			matches!(res, SslIo::WantRead),
+			"expected WANT_READ from server"
+		);
 	}
 	fn is_fatal_io(res: SslIo) -> bool {
 		matches!(res, SslIo::Fatal | SslIo::Syscall(_) | SslIo::ZeroReturn)
@@ -329,8 +335,10 @@ mod tests {
 		let mut cert = X509::builder().unwrap();
 		cert.set_version(2).unwrap();
 		cert.set_pubkey(&key).unwrap();
-		cert.set_not_before(&Asn1Time::days_from_now(0).unwrap()).unwrap();
-		cert.set_not_after(&Asn1Time::days_from_now(1).unwrap()).unwrap();
+		cert.set_not_before(&Asn1Time::days_from_now(0).unwrap())
+			.unwrap();
+		cert.set_not_after(&Asn1Time::days_from_now(1).unwrap())
+			.unwrap();
 		cert.sign(&key, MessageDigest::sha256()).unwrap();
 		let cert = cert.build();
 
@@ -490,11 +498,20 @@ mod tests {
 		assert!(matches!(keys.inspect(SRC, DST, retry), Verdict::Accept(_)));
 		// Replay from elsewhere, or to another destination: back to verification
 		let other = ([3; 16], U16::new(3333));
-		assert!(matches!(keys.inspect(other, DST, retry), Verdict::HelloVerify(_)));
-		assert!(matches!(keys.inspect(SRC, other, retry), Verdict::HelloVerify(_)));
+		assert!(matches!(
+			keys.inspect(other, DST, retry),
+			Verdict::HelloVerify(_)
+		));
+		assert!(matches!(
+			keys.inspect(SRC, other, retry),
+			Verdict::HelloVerify(_)
+		));
 		// A different key (e.g. a restarted server): not accepted either
 		let fresh = Keys::generate().unwrap();
-		assert!(matches!(fresh.inspect(SRC, DST, retry), Verdict::HelloVerify(_)));
+		assert!(matches!(
+			fresh.inspect(SRC, DST, retry),
+			Verdict::HelloVerify(_)
+		));
 	}
 
 	/// Even if the stateless parse were somehow fooled, OpenSSL's cookie
@@ -532,10 +549,19 @@ mod tests {
 	fn junk_dropped() {
 		let keys = Keys::generate().unwrap();
 		assert!(matches!(keys.inspect(SRC, DST, b""), Verdict::Drop));
-		assert!(matches!(keys.inspect(SRC, DST, b"GET / HTTP/1.1"), Verdict::Drop));
+		assert!(matches!(
+			keys.inspect(SRC, DST, b"GET / HTTP/1.1"),
+			Verdict::Drop
+		));
 		// STUN magic doesn't parse as DTLS
 		assert!(matches!(
-			keys.inspect(SRC, DST, &[0, 1, 0, 0, 0x21, 0x12, 0xa4, 0x42, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]),
+			keys.inspect(
+				SRC,
+				DST,
+				&[
+					0, 1, 0, 0, 0x21, 0x12, 0xa4, 0x42, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
+				]
+			),
 			Verdict::Drop
 		));
 	}

@@ -19,7 +19,9 @@ use common::{
 };
 use eyre::Result;
 use mio::{Events, Interest, Poll, Registry, Token, unix::SourceFd};
-use openssl::ssl::{Ssl, SslAcceptor, SslContext, SslContextRef, SslFiletype, SslMethod, SslVersion};
+use openssl::ssl::{
+	Ssl, SslAcceptor, SslContext, SslContextRef, SslFiletype, SslMethod, SslVersion,
+};
 use slab::Slab;
 use socket2::Socket;
 use tracing_subscriber::EnvFilter;
@@ -329,7 +331,10 @@ pub fn main() -> Result<Never> {
 									if reconnect(&conn.sock, new_peer).is_ok() {
 										conn.highest_read_seq = seq;
 										conn.last_update = Instant::now();
-										tracing::debug!(?new_peer, "client mobility: re-pointed socket");
+										tracing::debug!(
+											?new_peer,
+											"client mobility: re-pointed socket"
+										);
 									}
 								}
 								// Drop this record: the client's next packet lands on the

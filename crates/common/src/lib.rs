@@ -39,6 +39,7 @@ pub struct Ip6 {
 	pub dst: [u8; 16],
 }
 impl Ip6 {
+	#[allow(clippy::unusual_byte_groupings)]
 	pub const FLAGS: u32 = u32::to_be(0b0110__0000_0000__0000_0000_0000_0000_0000);
 }
 
@@ -101,8 +102,9 @@ impl VirtioNet {
 	pub const GSO_NONE: u8 = 0;
 }
 
+/// Sum the Pseudo header using u32 chunks and u64 accumulator
 pub fn partial_checksum<N: Ipsum>(ip: &Ip6, next: &mut N) -> VirtioNet {
-	let [_1, _2, s1, s2, s3, s4, d1, d2, d3, d4]: &[u32; 10] = transmute_ref!(ip);
+	let [_, _, s1, s2, s3, s4, d1, d2, d3, d4]: &[u32; 10] = transmute_ref!(ip);
 	let [l1, l2] = ip.length.to_bytes();
 
 	let mut sum = 0u64;
@@ -132,6 +134,7 @@ pub fn partial_checksum<N: Ipsum>(ip: &Ip6, next: &mut N) -> VirtioNet {
 	}
 }
 
+/// Complete a partial checksum into a full checksum using u32 chunks and u64 accumulator
 pub fn full_checksum<N: Ipsum>(next: &mut N, pieces: &[&[u8]]) {
 	let [u1, u2]: &[u32; 2] = transmute_ref!(next);
 	let mut sum: u64 = *u1 as u64 + *u2 as u64;
@@ -225,6 +228,7 @@ pub fn write_network_udp(
 	Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn write_network_icmp(
 	network: &SyncDevice,
 	from: [u8; 16],
@@ -297,7 +301,7 @@ pub fn read_network(
 		let mut transport = [0u8; 8];
 		match network.recv_vectored(&mut [
 			IoSliceMut::new(&mut vnet.as_mut_bytes()[..VNET]),
-			IoSliceMut::new(&mut ip.as_mut_bytes()),
+			IoSliceMut::new(ip.as_mut_bytes()),
 			IoSliceMut::new(&mut transport),
 			IoSliceMut::new(buffer),
 		]) {

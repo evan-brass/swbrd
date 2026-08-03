@@ -165,7 +165,13 @@ fn hmac(pkey: &PKey<Private>, parts: &[&[u8]]) -> [u8; 32] {
 /// `true` iff `tag` authenticates; on success `data` holds the plaintext, which
 /// the caller discards.  No Rust heap allocation — only libcrypto's own context,
 /// as with any `SSL_read`.
-fn gcm_verify(key: &[u8; 16], nonce: &[u8; 12], aad: &[u8], data: &mut [u8], tag: &[u8; 16]) -> bool {
+fn gcm_verify(
+	key: &[u8; 16],
+	nonce: &[u8; 12],
+	aad: &[u8],
+	data: &mut [u8],
+	tag: &[u8; 16],
+) -> bool {
 	unsafe {
 		let ctx = EVP_CIPHER_CTX_new();
 		if ctx.is_null() {
@@ -188,20 +194,43 @@ unsafe fn gcm_verify_inner(
 	unsafe {
 		let mut outl: c_int = 0;
 		// Select the cipher, then the (default 12-byte) IV length, then key + nonce.
-		if EVP_DecryptInit_ex(ctx, EVP_aes_128_gcm(), ptr::null_mut(), ptr::null(), ptr::null()) != 1
+		if EVP_DecryptInit_ex(
+			ctx,
+			EVP_aes_128_gcm(),
+			ptr::null_mut(),
+			ptr::null(),
+			ptr::null(),
+		) != 1
 		{
 			return false;
 		}
-		if EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_SET_IVLEN, nonce.len() as c_int, ptr::null_mut())
-			!= 1
+		if EVP_CIPHER_CTX_ctrl(
+			ctx,
+			EVP_CTRL_GCM_SET_IVLEN,
+			nonce.len() as c_int,
+			ptr::null_mut(),
+		) != 1
 		{
 			return false;
 		}
-		if EVP_DecryptInit_ex(ctx, ptr::null(), ptr::null_mut(), key.as_ptr(), nonce.as_ptr()) != 1 {
+		if EVP_DecryptInit_ex(
+			ctx,
+			ptr::null(),
+			ptr::null_mut(),
+			key.as_ptr(),
+			nonce.as_ptr(),
+		) != 1
+		{
 			return false;
 		}
 		// Additional authenticated data (out == null).
-		if EVP_DecryptUpdate(ctx, ptr::null_mut(), &mut outl, aad.as_ptr(), aad.len() as c_int) != 1
+		if EVP_DecryptUpdate(
+			ctx,
+			ptr::null_mut(),
+			&mut outl,
+			aad.as_ptr(),
+			aad.len() as c_int,
+		) != 1
 		{
 			return false;
 		}
@@ -282,7 +311,8 @@ mod tests {
 		aad[11..13].copy_from_slice(&(pt.len() as u16).to_be_bytes());
 
 		let mut tag = [0u8; 16];
-		let ct = encrypt_aead(Cipher::aes_128_gcm(), key, Some(&nonce), &aad, pt, &mut tag).unwrap();
+		let ct =
+			encrypt_aead(Cipher::aes_128_gcm(), key, Some(&nonce), &aad, pt, &mut tag).unwrap();
 
 		let body_len = 8 + ct.len() + 16;
 		let mut rec = vec![23u8];
@@ -328,7 +358,11 @@ mod tests {
 		assert!(check_record(&keys, 0, &mut tampered).is_none());
 
 		// The wrong key fails authentication.
-		let other = ReadKeys { key: [0x55; 16], iv, epoch: 1 };
+		let other = ReadKeys {
+			key: [0x55; 16],
+			iv,
+			epoch: 1,
+		};
 		let mut rec2 = build_record(&key, &iv, 1, [0, 0, 0, 0, 0, 8], [13; 8], pt);
 		assert!(check_record(&other, 0, &mut rec2).is_none());
 	}

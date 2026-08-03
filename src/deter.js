@@ -29,12 +29,14 @@ export class Deter extends Uint8Array {
 		},
 	} = {}) {
 		if (!(base instanceof Uint16Array) || base.length != 8) {
-			throw new Error("The base IPv6 address should be a 8 element Uint16Array");
+			throw new Error(
+				'The base IPv6 address should be a 8 element Uint16Array',
+			);
 		}
 
 		// Randomize the last 32 bits and format it into an ipv6 address
 		crypto.getRandomValues(new Uint16Array(base.buffer, 12, 2));
-		const address = Array.from(base, n => n.toString(16)).join(':');
+		const address = Array.from(base, (n) => n.toString(16)).join(':');
 
 		// Generate a random port
 		let port = 0;
@@ -100,7 +102,8 @@ export class Deter extends Uint8Array {
 		let v = await sha256(tbs);
 		v *= 0x8c30c30ba49249251e79e79e79e79e79c2e0032e55685ce74884382dd35add94n;
 		v += 0xac3ae13966985907df3e457106cad5b0201959ac977c53d8432788913a296a3bn;
-		const n = 0xffffffff00000000ffffffffffffffffbce6faada7179e84f3b9cac2fc632551n;
+		const n =
+			0xffffffff00000000ffffffffffffffffbce6faada7179e84f3b9cac2fc632551n;
 		v %= n;
 		v += n;
 		v %= n;
@@ -109,7 +112,6 @@ export class Deter extends Uint8Array {
 			signature[i] = Number(v & 0xffn);
 			v >>= 8n;
 		}
-
 
 		ret.year = year;
 		ret.month = month;

@@ -1,45 +1,73 @@
 <!DOCTYPE html>
 <title>peer to peer — two Conns relayed through turnserver</title>
 <script type="importmap">
-{
-	"imports": {
-		"swbrd/": "../src/"
+	{
+		"imports": {
+			"swbrd/": "../src/"
+		}
 	}
-}
 </script>
 <h1>peer to peer</h1>
 <p>
-	Two <code>Conn</code>s in this one page connect to each other by exchanging candidates directly
-	(standing in for whatever signalling a real app would use). Exercises candidate fixup, the
-	polite-peer / DTLS-role derivation and TURN allocation on <code>turnserver</code> — though when
-	both peers are on this machine ICE will normally settle on a host pair. Add
+	Two <code>Conn</code>s in this one page connect to each other by exchanging
+	candidates directly (standing in for whatever signalling a real app would
+	use). Exercises candidate fixup, the polite-peer / DTLS-role derivation and
+	TURN allocation on <code>turnserver</code> — though when both peers are on
+	this machine ICE will normally settle on a host pair. Add
 	<code>?relay=1</code> to force the traffic through the relay.
 </p>
 <script type="module">
 	import { Cert } from 'swbrd/cert.js';
-	import { Conn } from 'swbrd/conn.js';
-	import { deadline, expect_open, fail, log_everything, params, pass, selected } from './harness.js';
+		import { Conn } from 'swbrd/conn.js';
+		import {
+			deadline,
+			expect_open,
+			fail,
+			log_everything,
+			params,
+			pass,
+			selected,
+		} from './harness.js';
 
-	deadline(27_000, 'one or both datachannels never opened');
+		deadline(27_000, 'one or both datachannels never opened');
 
-	// Both peers are in this page, so ICE would otherwise pick a host pair and never touch the server.
-	const config = params.has('relay') ? { iceTransportPolicy: 'relay' } : {};
+		// Both peers are in this page, so ICE would otherwise pick a host pair and never touch the server.
+		const config = params.has('relay')
+			? { iceTransportPolicy: 'relay' }
+			: {};
 
-	const certa = await Cert.generate();
-	const certb = await Cert.generate();
+		const certa = await Cert.generate();
+		const certb = await Cert.generate();
 
-	const a = Conn.with_candidates(certb, { cert: certa, timeout: 25_000, ...config });
-	const b = Conn.with_candidates(certa, { cert: certb, timeout: 25_000, ...config });
+		const a = Conn.with_candidates(certb, {
+			cert: certa,
+			timeout: 25_000,
+			...config,
+		});
+		const b = Conn.with_candidates(certa, {
+			cert: certb,
+			timeout: 25_000,
+			...config,
+		});
 
-	a.addEventListener('candidate', ({ candidate }) => b.addIceCandidate(candidate));
-	b.addEventListener('candidate', ({ candidate }) => a.addIceCandidate(candidate));
+		a.addEventListener(
+			'candidate',
+			({ candidate }) => b.addIceCandidate(candidate),
+		);
+		b.addEventListener(
+			'candidate',
+			({ candidate }) => a.addIceCandidate(candidate),
+		);
 
-	log_everything({ a, b });
+		log_everything({ a, b });
 
-	try {
-		await Promise.all([expect_open(a.dc, 25_000), expect_open(b.dc, 25_000)]);
-		pass(`both open, a ${selected(a)}`.trim());
-	} catch (e) {
-		fail(e.message ?? e);
-	}
+		try {
+			await Promise.all([
+				expect_open(a.dc, 25_000),
+				expect_open(b.dc, 25_000),
+			]);
+			pass(`both open, a ${selected(a)}`.trim());
+		} catch (e) {
+			fail(e.message ?? e);
+		}
 </script>

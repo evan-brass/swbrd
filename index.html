@@ -2,59 +2,87 @@
 <title>swbrd</title>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <style>
-	body { max-width: 46em; margin: 3em auto; padding: 0 1em; font: 16px/1.6 system-ui, sans-serif; }
-	li { margin-bottom: .75em; }
-	code { background: #0001; padding: .1em .3em; border-radius: .2em; }
+	body {
+		max-width: 46em;
+		margin: 3em auto;
+		padding: 0 1em;
+		font: 16px/1.6 system-ui, sans-serif;
+	}
+	li {
+		margin-bottom: 0.75em;
+	}
+	code {
+		background: #0001;
+		padding: 0.1em 0.3em;
+		border-radius: 0.2em;
+	}
 	@media (prefers-color-scheme: dark) {
-		body { background: #16181c; color: #e6e6e6; }
-		a { color: #79b8ff; }
-		code { background: #fff2; }
+		body {
+			background: #16181c;
+			color: #e6e6e6;
+		}
+		a {
+			color: #79b8ff;
+		}
+		code {
+			background: #fff2;
+		}
 	}
 </style>
 
 <h1>swbrd</h1>
 <p>
-	Reduced-signalling peer-to-peer WebRTC. The library lives in <code>src/</code>; the servers it
-	talks to are the daemons in <code>crates/</code>, deployed at <code>turn.evan-brass.net</code>.
+	Reduced-signalling peer-to-peer WebRTC. The library lives in <code
+	>src/</code>; the servers it talks to are the daemons in <code>crates/</code>,
+	deployed at <code>turn.evan-brass.net</code>.
 </p>
 
 <h2>Test pages</h2>
 <p>
-	Each page drives one scenario and reports a verdict, both into the page and as a
-	<code>SWBRD-RESULT</code> console line. Open one here, or run it headless and get the matching
-	server logs back with <code>./scripts/dev.sh e2e tests/&lt;page&gt; --units=&lt;unit&gt;</code>.
+	Each page drives one scenario and reports a verdict, both into the page and as
+	a
+	<code>SWBRD-RESULT</code> console line. Open one here, or run it headless and
+	get the matching server logs back with <code>./scripts/dev.sh e2e
+		tests/&lt;page&gt; --units=&lt;unit&gt;</code>.
 </p>
 <ul>
 	<li>
-		<a href="tests/vpn.html">vpn.html</a> — <code>Conn.to_deter()</code> into the SCTP/DataChannel
-		VPN. Server side: <code>dtls-proxy</code>, <code>swbrd</code>.
+		<a href="tests/vpn.html">vpn.html</a> — <code>Conn.to_deter()</code> into
+		the SCTP/DataChannel VPN. Server side: <code>dtls-proxy</code>, <code
+		>swbrd</code>.
 	</li>
 	<li>
-		<a href="tests/p2p.html">p2p.html</a> — two <code>Conn</code>s connecting to each other through
-		the relay. Server side: <code>turnserver</code>.
+		<a href="tests/p2p.html">p2p.html</a> — two <code>Conn</code>s connecting to
+		each other through the relay. Server side: <code>turnserver</code>.
 	</li>
 	<li>
-		<a href="tests/soak.html?hold=90">soak.html</a> — a relayed pair held open across TURN
-		refreshes (<code>?hold=</code> seconds), for breakage that only shows up after the connection
-		is already up. Server side: <code>turnserver</code>.
+		<a href="tests/soak.html?hold=90">soak.html</a> — a relayed pair held open
+		across TURN refreshes (<code>?hold=</code> seconds), for breakage that only
+		shows up after the connection is already up. Server side: <code
+		>turnserver</code>.
 	</li>
 	<li>
-		<a href="tests/audio.html">audio.html</a> — the fixed opus / telephone-event m-section with a
-		microphone attached. Server side: <code>dtls-proxy</code>.
+		<a href="tests/audio.html">audio.html</a> — the fixed opus / telephone-event
+		m-section with a microphone attached. Server side: <code>dtls-proxy</code>.
 	</li>
 	<li>
-		<a href="tests/icmp.html">icmp.html</a> — traffic at an unallocated relay address; the
-		assertion is in the <code>turnserver</code> journal, not the browser.
+		<a href="tests/icmp.html">icmp.html</a> — traffic at an unallocated relay
+		address; the assertion is in the <code>turnserver</code> journal, not the
+		browser.
 	</li>
 	<li>
-		<a href="tests/relay.html">relay.html</a> — stock <code>RTCPeerConnection</code> with munged ICE
-		credentials. Server side: <code>ice-dissolve</code>. Legacy: Chrome is removing credential
-		munging, so this one is expected to stop working.
+		<a href="tests/relay.html">relay.html</a> — stock <code
+		>RTCPeerConnection</code> with munged ICE credentials. Server side: <code
+		>ice-dissolve</code>. Legacy: Chrome is removing credential munging, so this
+		one is expected to stop working.
 	</li>
 </ul>
 
 <h2>Docs</h2>
 <ul>
-	<li><a href="docs/how-it-works.md">docs/how-it-works.md</a> — ids, polite peers, DTLS roles.</li>
+	<li>
+		<a href="docs/how-it-works.md">docs/how-it-works.md</a> — ids, polite peers,
+		DTLS roles.
+	</li>
 	<li><a href="docs/ciphersuites.md">docs/ciphersuites.md</a></li>
 </ul>

@@ -149,8 +149,9 @@ pub(crate) fn main() -> Result<Never> {
 		for e in events.into_iter() {
 			match e.token() {
 				TUN => loop {
-					let Ok(length) = network.recv(&mut buffer) else {
-						break;
+					let length = match network.recv(&mut buffer) {
+						Err(e) if e.kind() == ErrorKind::WouldBlock => break,
+						v => v?,
 					};
 					if length < size_of::<Ip6>() {
 						panic!("WAT?");
@@ -173,7 +174,7 @@ pub(crate) fn main() -> Result<Never> {
 
 					// Tunnel the packet
 					let mut control = nix::cmsg_space!(sctp_sndinfo, sctp_prinfo);
-					control.truncate(0);
+					control.clear();
 					write_control(
 						&mut control,
 						&[
@@ -232,7 +233,7 @@ pub(crate) fn main() -> Result<Never> {
 								IoSlice::new(protocol.as_bytes()),
 							];
 							let mut control = nix::cmsg_space!(sctp_sndinfo);
-							control.truncate(0);
+							control.clear();
 							write_control(
 								&mut control,
 								&[&sctp_sndinfo {
@@ -280,7 +281,7 @@ pub(crate) fn main() -> Result<Never> {
 									trace!(?aip, ?stream, ?data, "DCEP Ack")
 								}
 								(50, _) if fb == Some(&3) => {
-									if let Some((open, label, proto)) = DcepOpenHeader::parse(&data)
+									if let Some((open, label, proto)) = DcepOpenHeader::parse(data)
 									{
 										info!(?aip, ?stream, ?open, ?label, ?proto, "DCEP Open");
 										if !proto.starts_with(':') || !proto.ends_with("/tcp") {
@@ -306,7 +307,7 @@ pub(crate) fn main() -> Result<Never> {
 									warn!(?aip, ?stream, ?data, "Unrecognized DCEP Message");
 								}
 								(51, _) => {
-									let Ok(data) = from_utf8(&data) else {
+									let Ok(data) = from_utf8(data) else {
 										continue;
 									};
 									// I'm expecting that most commands will come as JSON messages.
@@ -316,14 +317,14 @@ pub(crate) fn main() -> Result<Never> {
 								}
 								// VPN traffic
 								(53, 1) => {
-									let Ok((ip, _)) = Ip6::ref_from_prefix(&data) else {
+									let Ok((ip, _)) = Ip6::ref_from_prefix(data) else {
 										continue;
 									};
 									if ip.src != aip.as_bytes() {
 										trace!(?ip, "Wrong IP6 src");
 										continue;
 									}
-									let _ = network.send(&data);
+									let _ = network.send(data);
 								}
 								_ => trace!(?aip, ?stream, ?ppid, ?data, "Other message"),
 							}

@@ -103,6 +103,7 @@ impl RelayRange {
 
 	/// The relayed address for a slab key, or `None` if the key is outside the
 	/// pool (server full).
+	#[allow(clippy::wrong_self_convention)]
 	fn from_key(&self, key: usize) -> Option<SocketAddrV6> {
 		let key = key as u128;
 		let ports = self.ports as u128;
@@ -677,10 +678,10 @@ fn handle_udp_alloc(
 			continue;
 		}
 		// A client Refresh proves liveness: reset the heartbeat counter.
-		if msg.method == Method::Refresh {
-			if let Some(c) = refresh.get_mut(&key) {
-				*c = 0;
-			}
+		if msg.method == Method::Refresh
+			&& let Some(c) = refresh.get_mut(&key)
+		{
+			*c = 0;
 		}
 		match handle_turn(relayed, remote, msg, network, nonces)? {
 			Turn::Respond(resp) => {
@@ -947,7 +948,7 @@ fn handle_turn<'i>(
 	if let Some(authkey) = integrity {
 		msg.append_val(
 			known::MESSAGE_INTEGRITY,
-			&msg.trim().expected_message_integrity(&authkey),
+			&msg.trim().expected_message_integrity(authkey),
 		);
 	}
 

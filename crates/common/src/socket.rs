@@ -75,7 +75,12 @@ pub fn recv_with_local(
 /// Send `buf` to `to` from local address `local`, off an *unconnected* socket.
 /// Used for stateless Binding replies on the wildcard socket so the reply's
 /// source IP matches the address the request was sent to.
-pub fn send_from(sock: &Socket, local: Ipv6Addr, to: SocketAddrV6, buf: &[u8]) -> io::Result<usize> {
+pub fn send_from(
+	sock: &Socket,
+	local: Ipv6Addr,
+	to: SocketAddrV6,
+	buf: &[u8],
+) -> io::Result<usize> {
 	let pi = libc::in6_pktinfo {
 		ipi6_addr: libc::in6_addr {
 			s6_addr: local.octets(),
@@ -99,17 +104,15 @@ pub fn send_from(sock: &Socket, local: Ipv6Addr, to: SocketAddrV6, buf: &[u8]) -
 /// connected to `remote`.  The connected 4-tuple outscores a wildcard socket in
 /// the kernel UDP demux, so this flow is delivered here while unknown flows keep
 /// hitting the wildcard.
-pub fn connected_udp(
-	local: SocketAddrV6,
-	remote: SocketAddrV6,
-	opt: UdpOpt,
-) -> io::Result<Socket> {
+pub fn connected_udp(local: SocketAddrV6, remote: SocketAddrV6, opt: UdpOpt) -> io::Result<Socket> {
 	let sock = Socket::new(Domain::IPV6, Type::DGRAM, Some(Protocol::UDP))?;
 	sock.set_only_v6(false)?;
 	sock.set_reuse_address(true)?;
 	match opt {
 		UdpOpt::ReusePort => sock.set_reuse_port(true)?,
-		UdpOpt::Transparent => setsockopt(&sock, sockopt::IpTransparent, &true).map_err(io::Error::from)?,
+		UdpOpt::Transparent => {
+			setsockopt(&sock, sockopt::IpTransparent, &true).map_err(io::Error::from)?
+		}
 	}
 	sock.bind(&SockAddr::from(local))?;
 	sock.connect(&SockAddr::from(remote))?;
@@ -212,8 +215,9 @@ pub fn v4_path_mtu(sock: &Socket) -> io::Result<u32> {
 /// available without consuming them. Wraps socket2's `MaybeUninit`-typed `peek`;
 /// only the initialized prefix is ever read back, so the cast is sound.
 pub fn peek(sock: &Socket, buf: &mut [u8]) -> io::Result<usize> {
-	let uninit =
-		unsafe { core::slice::from_raw_parts_mut(buf.as_mut_ptr().cast::<MaybeUninit<u8>>(), buf.len()) };
+	let uninit = unsafe {
+		core::slice::from_raw_parts_mut(buf.as_mut_ptr().cast::<MaybeUninit<u8>>(), buf.len())
+	};
 	sock.peek(uninit)
 }
 
@@ -230,9 +234,7 @@ pub fn tcp_send_space(sock: &Socket) -> io::Result<usize> {
 	if rc != 0 {
 		return Err(io::Error::last_os_error());
 	}
-	Ok(sndbuf
-		.saturating_sub(outq as usize)
-		.saturating_sub(MARGIN))
+	Ok(sndbuf.saturating_sub(outq as usize).saturating_sub(MARGIN))
 }
 
 #[cfg(test)]

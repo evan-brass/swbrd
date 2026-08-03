@@ -10,20 +10,20 @@ impl Stun {
 		use sha1::{Digest, Sha1};
 		// This is just a manual HMAC
 		let mut hash1 = Sha1::new();
-		hash1.update(&authkey.ipad);
-		hash1.update(&[self.class as u8, self.method as u8]);
-		hash1.update(&u16::to_be_bytes(size_of_val(&self.body) as u16 + 24));
+		hash1.update(authkey.ipad);
+		hash1.update([self.class as u8, self.method as u8]);
+		hash1.update(u16::to_be_bytes(size_of_val(&self.body) as u16 + 24));
 		hash1.update(self.txid.as_bytes());
 		hash1.update(self.body.as_flattened());
 
 		let sum1 = hash1.finalize().0;
 
 		let mut hash2 = Sha1::new();
-		hash2.update(&authkey.opad);
-		hash2.update(&sum1);
-		let sum2 = hash2.finalize().0;
+		hash2.update(authkey.opad);
+		hash2.update(sum1);
+		
 
-		sum2
+		hash2.finalize().0
 	}
 
 	#[cfg(feature = "crc")]

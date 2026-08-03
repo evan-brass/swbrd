@@ -66,6 +66,12 @@ pub struct Txid {
 	cookie: Cookie,
 	pub id: [u8; 12],
 }
+impl Default for Txid {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Txid {
 	pub fn new() -> Self {
 		#[cfg(feature = "rand")]
