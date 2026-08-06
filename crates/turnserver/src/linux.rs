@@ -1,15 +1,21 @@
 use clap::Parser;
 use eyre::{Result, eyre};
+use intrusive_collections::{
+	KeyAdapter, LinkedList, LinkedListLink, RBTree, RBTreeLink, intrusive_adapter,
+};
 use ipnet::Ipv6Net;
-use mio::{Events, Interest, Poll, Registry, Token, unix::SourceFd};
-use slab::Slab;
-use socket2::{Domain, Protocol, SockAddr, Socket, Type};
+use mio::{Events, Interest, Poll, Token, unix::SourceFd};
+use nix::sys::socket::{SetSockOpt, sockopt::Ipv6RecvPacketInfo};
+use rand::random_range;
+use socket2::{Domain, Protocol, SockAddr, SockRef, Socket, Type};
 use std::{
-	collections::HashMap,
-	io::{ErrorKind, Read, Write},
-	net::{IpAddr, Ipv6Addr, SocketAddr, SocketAddrV6},
-	os::fd::AsRawFd,
-	str::FromStr,
+	cell::Cell,
+	io::{Error, ErrorKind, Read, Write},
+	mem::ManuallyDrop,
+	net::{IpAddr, Ipv6Addr, SocketAddr, SocketAddrV4, SocketAddrV6, TcpStream, UdpSocket},
+	ops::RangeInclusive,
+	os::fd::{AsFd, AsRawFd},
+	rc::{Rc, Weak},
 	sync::LazyLock,
 	time::{Duration, Instant},
 };
@@ -26,14 +32,14 @@ use zerocopy::{
 	network_endian::{U16, U32},
 };
 
-use crate::nonce::Nonces;
 use common::{
-	Ip6, Packet, Udp, read_network,
-	socket::{
-		UdpOpt, connected_udp, peek, recv_with_local, send_from, set_recv_pktinfo, set_v4_pmtudisc,
-		set_v6_pmtudisc, tcp_send_space, v4_path_mtu, v6_path_mtu,
-	},
-	write_network_icmp, write_network_udp,
+	Ip6,
+	Packet,
+	Udp,
+	read_network,
+	//	socket::{UdpOpt, connected_udp, peek, recv_with_local, send_from, v4_path_mtu, v6_path_mtu},
+	write_network_icmp,
+	write_network_udp,
 };
 
 /// md5('user:none:password')
@@ -42,12 +48,235 @@ static USER_KEY: LazyLock<Authkey> =
 static GUEST_KEY: LazyLock<Authkey> =
 	LazyLock::new(|| Authkey::new(md5::compute(b"guest:none:password").as_slice()));
 
+// let mut outq: libc::c_int = 0;
+// // SIOCOUTQ == TIOCOUTQ (0x5411) on Linux: unsent bytes in the send queue.
+// let rc = unsafe { libc::ioctl(sock.as_raw_fd(), libc::TIOCOUTQ as _, &mut outq) };
+nix::ioctl_read_bad!(ioctl_unsent_queued, libc::TIOCOUTQ, core::ffi::c_int);
+enum Conn {
+	Udp(UdpSocket),
+	// An alternative would be to use Socket.type() == Type::STREAM, but...
+	Tcp(TcpStream),
+}
+impl AsRawFd for Conn {
+	fn as_raw_fd(&self) -> std::os::fd::RawFd {
+		match self {
+			Self::Udp(v) => v.as_raw_fd(),
+			Self::Tcp(v) => v.as_raw_fd(),
+		}
+	}
+}
+impl AsFd for Conn {
+	fn as_fd(&self) -> std::os::unix::prelude::BorrowedFd<'_> {
+		match self {
+			Self::Udp(v) => v.as_fd(),
+			Self::Tcp(v) => v.as_fd(),
+		}
+	}
+}
+impl Conn {
+	fn recv_msg<'i>(&self, buffer: &'i mut [u8]) -> Result<&'i mut Stun, Error> {
+		match self {
+			Self::Udp(udp) => {
+				let retry = Error::new(ErrorKind::Interrupted, "");
+				let len = udp.recv(buffer)?;
+				if len < 20 {
+					return Err(retry);
+				}
+				let msg = Stun::try_mut_from_bytes(buffer).map_err(|_| retry)?;
+				Ok(msg)
+			}
+			Self::Tcp(tcp) => {
+				let blocked = Error::new(ErrorKind::WouldBlock, "");
+				let invalid = Error::new(ErrorKind::InvalidData, "");
+				// Peek then read, to leave partial STUN frames in the kernel recv buffer
+				let available = tcp.peek(buffer)?;
+				if available < 20 {
+					return Err(blocked);
+				}
+				let msg = Stun::try_mut_from_bytes(buffer).map_err(|_| invalid)?;
+				let expected = size_of_val(msg.trim());
+				// TODO: msg.trim() doesn't expose errors.  Should check if length is unaligned or is too big for buffer.
+				if available < expected {
+					return Err(blocked);
+				}
+				(&*tcp)
+					.read_exact(&mut buffer[..expected])
+					.expect("Read after peek failed");
+				Ok(Stun::try_mut_from_bytes(buffer).expect("Parse after read failed"))
+			}
+		}
+	}
+	fn maybe_send_frame(&self, frame: &[u8]) -> Result<(), Error> {
+		let blocked = Error::new(ErrorKind::WouldBlock, "");
+
+		let t = SockRef::from(self);
+		let bufflen = t.send_buffer_size()?;
+		let mut unsent = 0;
+		assert_eq!(
+			unsafe { ioctl_unsent_queued(self.as_raw_fd(), &mut unsent) }?,
+			0,
+			"TIOCOUTQ returned nonzero"
+		);
+
+		// Never fill past half the buffer size
+		let available = (bufflen / 2).saturating_sub(unsent as usize);
+
+		if frame.len() > available {
+			return Err(blocked);
+		}
+		match self {
+			Self::Udp(v) => {
+				v.send(frame)?;
+			}
+			Self::Tcp(v) => (&*v).write_all(frame)?,
+		}
+		Ok(())
+	}
+}
+
+struct Client {
+	conn: Conn,
+
+	keepalives: Cell<u8>,
+	timeout: Cell<Instant>,
+	timeout_link: LinkedListLink,
+
+	relayed: SocketAddrV6,
+	relayed_link: RBTreeLink,
+}
+impl AsRawFd for Client {
+	fn as_raw_fd(&self) -> std::os::fd::RawFd {
+		self.conn.as_raw_fd()
+	}
+}
+intrusive_adapter!(Relayed = Rc<Client>: Client { relayed_link => RBTreeLink });
+intrusive_adapter!(Timeout = Rc<Client>: Client { timeout_link => LinkedListLink });
+impl<'a> KeyAdapter<'a> for Relayed {
+	type Key = &'a SocketAddrV6;
+	fn get_key(
+		&self,
+		value: &'a <Self::PointerOps as intrusive_collections::PointerOps>::Value,
+	) -> Self::Key {
+		&value.relayed
+	}
+}
+
+/// Poller is a wrapper that handles the Token(usize) -> Weak<T> registration/deregistration
+struct Poller<T> {
+	poll: Poll,
+	deregistered: Vec<Weak<T>>,
+}
+impl<T: AsRawFd> Poller<T> {
+	fn new(poll: Poll) -> Self {
+		Self {
+			poll,
+			deregistered: Vec::new(),
+		}
+	}
+	fn register(&self, client: &Rc<T>, interest: Interest) -> Result<(), Error> {
+		let fd = client.as_raw_fd();
+		let weak = Rc::downgrade(client).into_raw();
+		let token = Token(weak as usize);
+		if let Err(reason) = self
+			.poll
+			.registry()
+			.register(&mut SourceFd(&fd), token, interest)
+		{
+			// If registration fails, reconstruct the Weak immediately
+			unsafe {
+				Weak::from_raw(weak);
+			}
+			Err(reason)
+		} else {
+			Ok(())
+		}
+	}
+	fn deregister(&mut self, client: Rc<T>) -> Result<(), Error> {
+		let fd = client.as_raw_fd();
+		let temp = Rc::downgrade(&client);
+		// Reconstruct the Weak we loaned to the OS as the Token, then keep it in our list for final disposal immediately before re-polling
+		self.deregistered
+			.push(unsafe { Weak::from_raw(temp.as_ptr()) });
+
+		self.poll.registry().deregister(&mut SourceFd(&fd))
+	}
+	fn poll(&mut self, events: &mut Events, timeout: Option<Duration>) -> Result<(), Error> {
+		// The Token Weak is released right before we poll, since it will no longer appear in any future Event
+		self.deregistered.clear();
+		self.poll.poll(events, timeout)
+	}
+	/// This method must only be called with Tokens that were registered using the Poller *not* on Poll directly, prior to constructing the Poller
+	fn get(&self, token: Token) -> Option<Rc<T>> {
+		let ptr = token.0 as *const T;
+		// Attempt to upgrade our *shared* Weak (multiple copies between the registry, and multiple Event's), without decrementing the weak ptr.
+		let t = ManuallyDrop::new(unsafe { Weak::from_raw(ptr) });
+		// Upgrade takes &self, therefore the ManuallyDrop<Weak<T>> survives past this call.
+		t.upgrade()
+	}
+}
+
+struct Server {
+	ip_range: RangeInclusive<u128>,
+	port_range: RangeInclusive<u16>,
+	poll: Poller<Client>,
+	relayed: RBTree<Relayed>,
+	timeouts: LinkedList<Timeout>,
+}
+impl Server {
+	fn remove_client(&mut self, client: &Client) -> Result<(), Error> {
+		// TODO: Probably use a better way like RBTree::cursor_from_ptr_mut or something
+		// We only have 1 tree/list per link type, thus if the object is linked it must be linked in that collection
+		let mut t = None;
+		if client.relayed_link.is_linked() {
+			t = t.or(unsafe { self.relayed.cursor_mut_from_ptr(&*client) }.remove());
+		}
+		if client.timeout_link.is_linked() {
+			t = t.or(unsafe { self.timeouts.cursor_mut_from_ptr(&*client) }.remove());
+		}
+		let client = t.expect("Fuck, in order to *recover* the Rc<Client> from a list/tree we must *remove* it which returns Option<Rc<Client>>.  Since the object presumably is in at least one collection, we tried both and failed.");
+		self.poll.deregister(client)
+	}
+	/// All of our timeouts are the same duration, so keeping the list sorted is just pushing to the back of the list
+	fn timeout() -> Instant {
+		Instant::now() + Duration::from_mins(1)
+	}
+	fn new_client(&mut self, conn: Conn) -> Result<(), Error> {
+		// 1. Find a random ip+port that's not currently occupied
+		let (relayed, i) = loop {
+			let ret = SocketAddrV6::new(
+				random_range(self.ip_range.clone()).into(),
+				random_range(self.port_range.clone()),
+				0,
+				0,
+			);
+			match self.relayed.entry(&ret) {
+				intrusive_collections::rbtree::Entry::Vacant(v) => break (ret, v),
+				_ => {}
+			}
+		};
+		// 2. Create the client
+		let client = Rc::new(Client {
+			conn,
+			relayed,
+			relayed_link: Default::default(),
+
+			keepalives: Cell::new(0),
+			timeout: Cell::new(Self::timeout()),
+			timeout_link: Default::default(),
+		});
+		// 3. Try to register the new client
+		self.poll.register(&client, Interest::READABLE)?;
+		// 4. Insert the client into the timeout list
+		self.timeouts.push_back(client.clone());
+		// 5. Insert the client into the relayed tree
+		i.insert(client);
+		Ok(())
+	}
+}
+
 #[derive(Parser)]
 #[command(version, about)]
 struct Args {
-	#[arg(long, short, default_value = "[::]:3478")]
-	address: String,
-
 	#[arg(long, short)]
 	router: Ipv6Addr,
 
@@ -55,167 +284,20 @@ struct Args {
 	if_name: Option<String>,
 
 	/// IPv6 subnet the relayed transport addresses are drawn from.
-	#[arg(long)]
-	relay_net: Ipv6Net,
+	#[arg(long, short)]
+	net: Ipv6Net,
 
-	/// Port range for relayed addresses, as `start-end` (inclusive).
-	#[arg(long)]
-	relay_ports: String,
+	#[arg(long, default_value_t = 10_000)]
+	min_port: u16,
+
+	#[arg(long, default_value_t = u16::MAX)]
+	max_port: u16,
 }
 
 // Tokens used by everything that isn't an allocation socket.
 const UDP: Token = Token(usize::MAX);
 const TCP: Token = Token(usize::MAX - 1);
 const TUN: Token = Token(usize::MAX - 2);
-
-/// Linear map between a slab key and a relayed transport address, laid out
-/// port-first then IP: `key = ip_index * ports + port_index`.  The pool is
-/// IPv6-only (as the relayed/subnet address always has been).
-struct RelayRange {
-	base: u128, // relay_net.network() as bits
-	ips: u128,  // number of addresses in the subnet
-	port_start: u16,
-	ports: u32, // number of ports (end - start + 1)
-}
-impl RelayRange {
-	fn new(net: Ipv6Net, ports: &str) -> Result<Self> {
-		let (a, b) = ports
-			.split_once('-')
-			.ok_or_else(|| eyre!("--relay-ports must be start-end"))?;
-		let port_start: u16 = a.trim().parse()?;
-		let port_end: u16 = b.trim().parse()?;
-		if port_end < port_start {
-			return Err(eyre!("--relay-ports end < start"));
-		}
-		let prefix = net.prefix_len();
-		let ips = if prefix == 0 {
-			u128::MAX
-		} else {
-			1u128 << (128 - prefix)
-		};
-		Ok(Self {
-			base: net.network().to_bits(),
-			ips,
-			port_start,
-			ports: (port_end - port_start) as u32 + 1,
-		})
-	}
-
-	/// The relayed address for a slab key, or `None` if the key is outside the
-	/// pool (server full).
-	#[allow(clippy::wrong_self_convention)]
-	fn from_key(&self, key: usize) -> Option<SocketAddrV6> {
-		let key = key as u128;
-		let ports = self.ports as u128;
-		let ip_index = key / ports;
-		if ip_index >= self.ips {
-			return None;
-		}
-		let port = self.port_start as u128 + (key % ports);
-		let ip = Ipv6Addr::from_bits(self.base + ip_index);
-		Some(SocketAddrV6::new(ip, port as u16, 0, 0))
-	}
-
-	/// The slab key a relayed address maps to, or `None` if the address is
-	/// outside the pool.  Occupancy is checked separately against the slab.
-	fn to_key(&self, ip: Ipv6Addr, port: u16) -> Option<usize> {
-		if port < self.port_start {
-			return None;
-		}
-		let port_index = (port - self.port_start) as u128;
-		if port_index >= self.ports as u128 {
-			return None;
-		}
-		let bits = ip.to_bits();
-		if bits < self.base {
-			return None;
-		}
-		let ip_index = bits - self.base;
-		if ip_index >= self.ips {
-			return None;
-		}
-		usize::try_from(ip_index * self.ports as u128 + port_index).ok()
-	}
-
-	/// Upper bound on concurrent allocations (`ips * ports`), saturated to fit a
-	/// `usize` for the slab cap.
-	fn capacity(&self) -> usize {
-		usize::try_from(self.ips.saturating_mul(self.ports as u128)).unwrap_or(usize::MAX)
-	}
-}
-
-/// What `handle_turn` decided to do with a message.
-enum Turn<'i> {
-	/// Send this message back to the client.
-	Respond(&'i mut Stun),
-	/// Nothing to send (relayed out the TUN, or dropped).
-	Silent,
-	/// Tear the allocation down (Refresh with lifetime 0).
-	Close,
-}
-
-enum Write2 {
-	Kept,
-	Abort,
-}
-
-/// Write a whole STUN frame to a TCP allocation with no remainder buffer: drop
-/// the frame if it will not fit the send buffer, otherwise write it fully
-/// (retrying `EINTR`); any mid-frame stall or error aborts the connection.
-fn tcp_write_frame(sock: &mut Socket, frame: &[u8]) -> Write2 {
-	match tcp_send_space(sock) {
-		Ok(space) if frame.len() > space => {
-			warn!(
-				len = frame.len(),
-				space, "dropping TCP frame: send buffer full"
-			);
-			return Write2::Kept;
-		}
-		Ok(_) => {}
-		Err(reason) => {
-			trace!(?reason, "tcp_send_space failed; aborting");
-			return Write2::Abort;
-		}
-	}
-	let mut off = 0;
-	while off < frame.len() {
-		match sock.write(&frame[off..]) {
-			Ok(0) => return Write2::Abort,
-			Ok(n) => off += n,
-			Err(e) if e.kind() == ErrorKind::Interrupted => continue,
-			Err(reason) => {
-				trace!(?reason, "TCP write failed mid-frame; aborting");
-				return Write2::Abort;
-			}
-		}
-	}
-	Write2::Kept
-}
-
-/// Deregister, drop, and forget an allocation.  Removes the `by_peer` entry for
-/// connected UDP sockets; a no-op for TCP whose client addr was never indexed.
-fn remove_alloc(
-	streams: &mut Slab<Socket>,
-	by_peer: &mut HashMap<SocketAddrV6, usize>,
-	refresh: &mut HashMap<usize, u8>,
-	registry: &Registry,
-	key: usize,
-) {
-	// Drop the heartbeat counter first: slab keys are reused, so a stale entry
-	// must never outlive its allocation (no-op for TCP allocs, never indexed).
-	refresh.remove(&key);
-	let Some(sock) = streams.get(key) else {
-		return;
-	};
-	let fd = sock.as_raw_fd();
-	let _ = registry.deregister(&mut SourceFd(&fd));
-	if let Ok(peer) = sock.peer_addr()
-		&& let Some(peer) = peer.as_socket_ipv6()
-	{
-		by_peer.remove(&peer);
-	}
-	streams.remove(key);
-}
 
 type Never = core::convert::Infallible;
 pub fn main() -> Result<Never> {
@@ -226,30 +308,22 @@ pub fn main() -> Result<Never> {
 
 	// Parse command line arguments
 	let args = Args::try_parse()?;
-
-	let relay = RelayRange::new(args.relay_net, &args.relay_ports)?;
-
-	let bind = match SocketAddr::from_str(&args.address)? {
-		SocketAddr::V6(a) => a,
-		SocketAddr::V4(_) => return Err(eyre!("--address must be an IPv6 socket address")),
-	};
-	let server_port = bind.port();
-
-	// The HMAC key behind our TURN nonces.  Fresh per process: a restart just
-	// costs live clients one extra challenge round trip.
-	let nonces = Nonces::generate();
+	// WARN: The Iterator and DoubleEndedIterator implementation for Ipv6AddrRange are O(1) for these functions
+	let first_ip = args.net.hosts().nth(0).expect("Empty IP subnet");
+	let last_ip = args.net.hosts().nth_back(0).expect("Empty IP subnet");
 
 	// Setup async
-	let mut poll = Poll::new()?;
+	let poll = Poll::new()?;
 
+	let bind = SockAddr::from(SocketAddrV6::new(Ipv6Addr::UNSPECIFIED, 3478, 0, 0));
 	// Wildcard UDP socket: dual-stack, REUSEPORT (so connected allocation sockets
 	// can share the port), IPV6_RECVPKTINFO (so we learn the local dest address).
 	let udp = Socket::new(Domain::IPV6, Type::DGRAM, Some(Protocol::UDP))?;
 	udp.set_only_v6(false)?;
 	udp.set_reuse_address(true)?;
 	udp.set_reuse_port(true)?;
-	set_recv_pktinfo(&udp)?;
-	udp.bind(&SockAddr::from(bind))?;
+	Ipv6RecvPacketInfo.set(&udp, &true)?;
+	udp.bind(&bind)?;
 	udp.set_nonblocking(true)?;
 	poll.registry()
 		.register(&mut SourceFd(&udp.as_raw_fd()), UDP, Interest::READABLE)?;
@@ -259,7 +333,7 @@ pub fn main() -> Result<Never> {
 	listener.set_only_v6(false)?;
 	listener.set_reuse_address(true)?;
 	listener.set_reuse_port(true)?;
-	listener.bind(&SockAddr::from(bind))?;
+	listener.bind(&bind)?;
 	listener.listen(128)?;
 	listener.set_nonblocking(true)?;
 	poll.registry().register(
@@ -287,143 +361,129 @@ pub fn main() -> Result<Never> {
 	let mut events = Events::with_capacity(128);
 	let mut buffer = vec![0; 65536];
 
-	// Every allocation is a connected socket (connected UDP or accepted TCP);
-	// the slab key is the allocation identity and drives the relayed address.
-	let mut streams: Slab<Socket> = Slab::with_capacity(64.min(relay.capacity()));
-	// Dedup index for Allocate retransmits that race the fork (keyed by client).
-	let mut by_peer: HashMap<SocketAddrV6, usize> = HashMap::new();
-	// Per-allocation heartbeat counter, connected-UDP allocations only.  Bumped
-	// each tick we send a Refresh Indication; reset by a client Refresh; at the
-	// cap the allocation is expired.  Keyed by slab key, so every teardown path
-	// must drop the entry (see `remove_alloc`) since slab keys get reused.
-	let mut refresh: HashMap<usize, u8> = HashMap::new();
-
-	// Fire a heartbeat sweep every minute; the poll below wakes for it.
-	let mut next_tick = Instant::now() + Duration::from_secs(60);
+	// Collect all the mutable state and mediate access to it via methods
+	let mut server = Server {
+		poll: Poller::new(poll),
+		ip_range: u128::from(first_ip)..=u128::from(last_ip),
+		port_range: args.min_port..=args.max_port,
+		relayed: RBTree::new(Relayed::new()),
+		timeouts: LinkedList::new(Timeout::new()),
+	};
 
 	loop {
 		for e in events.into_iter() {
 			match e.token() {
 				TCP => loop {
-					let stream = match listener.accept() {
-						Ok((stream, _sender)) => stream,
+					let (stream, _sender) = match listener.accept() {
+						Err(e) if e.kind() == ErrorKind::Interrupted => continue,
 						Err(e) if e.kind() == ErrorKind::WouldBlock => break,
-						Err(e) => return Err(e.into()),
+						v => v?,
 					};
-					if streams.len() >= relay.capacity() {
-						warn!("relay pool full; dropping TCP connection");
-						continue;
-					}
 					stream.set_tcp_nodelay(true)?;
 					stream.set_nonblocking(true)?;
-					let entry = streams.vacant_entry();
-					poll.registry().register(
-						&mut SourceFd(&stream.as_raw_fd()),
-						Token(entry.key()),
-						Interest::READABLE,
-					)?;
-					entry.insert(stream);
+
+					server.new_client(Conn::Tcp(stream.into()))?;
 				},
 				UDP => loop {
-					let (n, remote, local) = match recv_with_local(&udp, &mut buffer) {
-						Ok(v) => v,
-						Err(e) if e.kind() == ErrorKind::WouldBlock => break,
-						Err(e) => return Err(e.into()),
-					};
-					if n < 20 {
-						continue;
-					}
-					let Ok(msg) = Stun::try_mut_from_bytes(&mut buffer).map_err(|_| ()) else {
-						continue;
-					};
-					if msg.txid.id == [0; 12] {
-						continue;
-					}
-					if msg.class != Class::Request
-						|| msg.method == Method::Recv
-						|| msg.method.is_err()
-					{
-						continue;
-					}
+					// let (n, remote, local) = match recv_with_local(&udp, &mut buffer) {
+					// 	Ok(v) => v,
+					// 	Err(e) if e.kind() == ErrorKind::WouldBlock => break,
+					// 	Err(e) => return Err(e.into()),
+					// };
+					// if n < 20 {
+					// 	continue;
+					// }
+					// let Ok(msg) = Stun::try_mut_from_bytes(&mut buffer).map_err(|_| ()) else {
+					// 	continue;
+					// };
+					// if msg.txid.id == [0; 12] {
+					// 	continue;
+					// }
+					// if msg.class != Class::Request
+					// 	|| msg.method == Method::Recv
+					// 	|| msg.method.is_err()
+					// {
+					// 	continue;
+					// }
 
-					match msg.method {
-						// Stateless binding reply from the correct source address.
-						Method::Bind => {
-							let unspec = SocketAddrV6::new(Ipv6Addr::UNSPECIFIED, 0, 0, 0);
-							if let Turn::Respond(resp) =
-								handle_turn(unspec, remote, msg, &network, &nonces)?
-							{
-								let end = size_of_val(resp.trim());
-								let _ = send_from(&udp, local, remote, &buffer[..end]);
-							}
-						}
-						// Fork a connected socket for a new allocation.
-						Method::Allocate => {
-							if by_peer.contains_key(&remote) {
-								// Retransmit that raced the fork; the connected
-								// socket will service further retransmits.
-								continue;
-							}
-							let entry = streams.vacant_entry();
-							let key = entry.key();
-							let Some(relayed) = relay.from_key(key) else {
-								warn!("relay pool full; dropping Allocate");
-								continue;
-							};
-							let Turn::Respond(resp) =
-								handle_turn(relayed, remote, msg, &network, &nonces)?
-							else {
-								continue;
-							};
-							let success = !resp.method.is_err();
-							let end = size_of_val(resp.trim());
-							if success {
-								let sock = connected_udp(
-									SocketAddrV6::new(local, server_port, 0, 0),
-									remote,
-									UdpOpt::ReusePort,
-								)?;
-								// Fail oversized client sends with EMSGSIZE (both families:
-								// v4-mapped clients send over IPv4, native v6 over IPv6).
-								let _ = set_v6_pmtudisc(&sock);
-								let _ = set_v4_pmtudisc(&sock);
-								poll.registry().register(
-									&mut SourceFd(&sock.as_raw_fd()),
-									Token(key),
-									Interest::READABLE,
-								)?;
-								let _ = sock.send(&buffer[..end]);
-								entry.insert(sock);
-								by_peer.insert(remote, key);
-								refresh.insert(key, 0);
-							} else {
-								// Auth/validation error: reply off the wildcard,
-								// do not allocate (vacant entry is dropped).
-								let _ = send_from(&udp, local, remote, &buffer[..end]);
-							}
-						}
-						// Refresh/CreatePermission/Send/... on the wildcard are
-						// packets queued before the split: drop them.
-						_ => continue,
-					}
+					// match msg.method {
+					// 	// Stateless binding reply from the correct source address.
+					// 	Method::Bind => {
+					// 		let unspec = SocketAddrV6::new(Ipv6Addr::UNSPECIFIED, 0, 0, 0);
+					// 		if let Turn::Respond(resp) =
+					// 			handle_turn(unspec, remote, msg, &network, &nonces)?
+					// 		{
+					// 			let end = size_of_val(resp.trim());
+					// 			let _ = send_from(&udp, local, remote, &buffer[..end]);
+					// 		}
+					// 	}
+					// 	// Fork a connected socket for a new allocation.
+					// 	Method::Allocate => {
+					// 		if by_peer.contains_key(&remote) {
+					// 			// Retransmit that raced the fork; the connected
+					// 			// socket will service further retransmits.
+					// 			continue;
+					// 		}
+					// 		let entry = streams.vacant_entry();
+					// 		let key = entry.key();
+					// 		let Some(relayed) = relay.from_key(key) else {
+					// 			warn!("relay pool full; dropping Allocate");
+					// 			continue;
+					// 		};
+					// 		let Turn::Respond(resp) =
+					// 			handle_turn(relayed, remote, msg, &network, &nonces)?
+					// 		else {
+					// 			continue;
+					// 		};
+					// 		let success = !resp.method.is_err();
+					// 		let end = size_of_val(resp.trim());
+					// 		if success {
+					// 			let sock = connected_udp(
+					// 				SocketAddrV6::new(local, server_port, 0, 0),
+					// 				remote,
+					// 				UdpOpt::ReusePort,
+					// 			)?;
+					// 			poll.registry().register(
+					// 				&mut SourceFd(&sock.as_raw_fd()),
+					// 				Token(key),
+					// 				Interest::READABLE,
+					// 			)?;
+					// 			let _ = sock.send(&buffer[..end]);
+					// 			entry.insert(sock);
+					// 			by_peer.insert(remote, key);
+					// 			refresh.insert(key, 0);
+					// 		} else {
+					// 			// Auth/validation error: reply off the wildcard,
+					// 			// do not allocate (vacant entry is dropped).
+					// 			let _ = send_from(&udp, local, remote, &buffer[..end]);
+					// 		}
+					// 	}
+					// 	// Refresh/CreatePermission/Send/... on the wildcard are
+					// 	// packets queued before the split: drop them.
+					// 	_ => continue,
+					// }
+					break;
 				},
 				TUN => loop {
-					let receiver;
-					let msg;
-					// The peer's original packet, for quoting in an ICMP error back to
-					// it (Port Unreachable / Packet Too Big).  `None` for inbound ICMP:
-					// we don't emit ICMP about ICMP.
-					let quote: Option<(Ip6, Udp, usize)>;
-					match read_network(&network, &mut buffer[20 + 24 + 4..], args.router.octets()) {
+					let packet = match read_network(
+						&network,
+						&mut buffer[20 + 24 + 4..],
+						args.router.octets(),
+					) {
+						Err(e) if e.kind() == ErrorKind::Interrupted => continue,
 						Err(e) if e.kind() == ErrorKind::WouldBlock => break,
-						Err(e) => return Err(e.into()),
-						Ok(Packet::Udp { ip, udp }) => {
+						v => v?,
+					};
+
+					let msg;
+					let receiver;
+					match packet {
+						Packet::Udp { ip, udp } => {
 							// Peer -> relayed: dst is the relayed address.
 							receiver =
 								SocketAddrV6::new(Ipv6Addr::from(ip.dst), udp.dst_port.get(), 0, 0);
 
 							let data_length = udp.length.get() - 8;
-							quote = Some((ip, udp, data_length as usize));
 							let sender =
 								Addr6::new(Ipv6Addr::from_octets(ip.src), udp.src_port.get());
 							msg = Stun::new(Class::Request, Method::Recv, &mut buffer)
@@ -434,22 +494,18 @@ pub fn main() -> Result<Never> {
 								a.length.set(data_length); // UDP data already in position.
 							});
 						}
-						Ok(Packet::Icmp {
-							ip: _,
+						Packet::Icmp {
+							ip,
 							icmp,
 							inner_ip,
 							inner_udp,
-						}) => {
-							// ICMP quotes a packet we sent (src = relayed): key on
-							// its source; peer is the quoted destination.
+						} => {
 							receiver = SocketAddrV6::new(
 								Ipv6Addr::from(inner_ip.src),
 								inner_udp.src_port.get(),
 								0,
 								0,
 							);
-
-							quote = None; // no ICMP about inbound ICMP
 
 							// RFC8656 Section 11.5: XOR-PEER-ADDRESS = destination
 							// of the returned UDP packet.
@@ -471,532 +527,324 @@ pub fn main() -> Result<Never> {
 								a.put_u32(icmp.mtu.get());
 							});
 						}
-					};
+					}
 
-					let end = size_of_val(msg.trim());
-
-					// Which allocation does the relayed address belong to?
-					let Some(key) = relay.to_key(*receiver.ip(), receiver.port()) else {
-						continue;
-					};
-					let Some(sock) = streams.get_mut(key) else {
-						// Relayed address is in-pool but unallocated: tell the peer the
-						// port is unreachable, quoting its packet.
-						if let Some((ip, udp, plen)) = quote {
-							let _ = write_network_icmp(
-								&network,
-								receiver.ip().octets(),
-								1,
-								4, // ICMP Port Unreachable
-								0,
-								ip,
-								udp.as_bytes(),
-								&buffer[48..48 + plen],
-							);
-						}
-						continue;
-					};
-					let is_udp = sock.r#type().map(|t| t == Type::DGRAM).unwrap_or(false);
-					if is_udp {
-						// Client path can't carry the relayed Data indication: tell the
-						// peer to send less (ICMPv6 Packet Too Big).  Relay overhead is STUN
-						// (20) + XOR-PEER-ADDRESS-v6(24) + DATA attr(4) = 48; the peer path
-						// is IPv6 (40 + 8), the client path may be v4 (20) or v6 (40).
-						match sock.send(&buffer[..end]) {
+					let cursor = server.relayed.find_mut(&receiver);
+					// UDP/ICMP for existant client
+					if let Some(client) = cursor.get() {
+						let end = size_of_val(msg.trim());
+						match client.conn.maybe_send_frame(&buffer[..end]) {
 							Ok(_) => {}
-							Err(e) if e.raw_os_error() == Some(libc::EMSGSIZE) => {
-								if let Some((ip, udp, plen)) = quote {
-									let is_v4 = sock
-										.peer_addr()
-										.ok()
-										.and_then(|a| a.as_socket_ipv6())
-										.and_then(|s| s.ip().to_ipv4_mapped())
-										.is_some();
-									let (pmtu, client_hdr) = if is_v4 {
-										(v4_path_mtu(sock), 20)
-									} else {
-										(v6_path_mtu(sock), 40)
-									};
-									if let Ok(pmtu) = pmtu {
-										let mtu = pmtu
-											.saturating_sub(client_hdr + 8 + 48)
-											.saturating_add(40 + 8);
-										let _ = write_network_icmp(
-											&network,
-											receiver.ip().octets(),
-											2,
-											0, // ICMPv6 Packet Too Big
-											mtu,
-											ip,
-											udp.as_bytes(),
-											&buffer[48..48 + plen],
-										);
-									}
-								}
+							// Client path can't carry the relayed Data indication: tell the
+							// peer to send less (ICMPv6 Packet Too Big).  Relay overhead is STUN
+							// (20) + XOR-PEER-ADDRESS-v6(24) + DATA attr(4) = 48; the peer path
+							// is IPv6 (40 + 8), the client path may be v4 (20) or v6 (40).
+							Err(e)
+								if let (Some(libc::EMSGSIZE), Packet::Udp { ip, udp }) =
+									(e.raw_os_error(), packet) =>
+							{
+								// TODO: Cleanup these sockopts and shit
+								// let is_v4 = SockRef::from(&client.conn)
+								// 	.peer_addr()
+								// 	.ok()
+								// 	.and_then(|a| a.as_socket_ipv6())
+								// 	.and_then(|s| s.ip().to_ipv4_mapped())
+								// 	.is_some();
+								// let (pmtu, client_hdr) = if is_v4 {
+								// 	(v4_path_mtu(sock), 20)
+								// } else {
+								// 	(v6_path_mtu(sock), 40)
+								// };
+								// if let Ok(pmtu) = pmtu {
+								// 	let mtu = pmtu
+								// 		.saturating_sub(client_hdr + 8 + 48)
+								// 		.saturating_add(40 + 8);
+								// 	let _ = write_network_icmp(
+								// 		&network,
+								// 		receiver.ip().octets(),
+								// 		2,
+								// 		0, // ICMPv6 Packet Too Big
+								// 		mtu,
+								// 		ip,
+								// 		udp.as_bytes(),
+								// 		&buffer[48..48 + plen],
+								// 	);
+								// }
 							}
 							Err(_) => {}
 						}
-					} else if let Write2::Abort = tcp_write_frame(sock, &buffer[..end]) {
-						remove_alloc(
-							&mut streams,
-							&mut by_peer,
-							&mut refresh,
-							poll.registry(),
-							key,
+					}
+					// UDP For non-existant client
+					else if let Packet::Udp { ip, udp } = packet {
+						let datalen = udp.length.get() as usize - size_of::<Udp>();
+						let _ = write_network_icmp(
+							&network,
+							receiver.ip().octets(),
+							1,
+							4, // ICMP Port Unreachable
+							0,
+							ip,
+							udp.as_bytes(),
+							&buffer[48..][..datalen],
 						);
 					}
 				},
-				Token(key) => {
-					if streams.get(key).is_none() {
-						continue;
-					}
+				// Event on a non-released client
+				t if let Some(client) = server.poll.get(t) => loop {
 					if e.is_read_closed() || e.is_error() {
 						trace!(?e, "closing allocation (is_error / is_read_closed)");
-						remove_alloc(
-							&mut streams,
-							&mut by_peer,
-							&mut refresh,
-							poll.registry(),
-							key,
-						);
+						server.remove_client(&client)?;
 						continue;
 					}
 
-					let is_udp = streams
-						.get(key)
-						.and_then(|s| s.r#type().ok())
-						.map(|t| t == Type::DGRAM)
-						.unwrap_or(false);
-					let close = if is_udp {
-						handle_udp_alloc(
-							key,
-							&relay,
-							&mut streams,
-							&mut refresh,
-							&mut buffer,
-							&network,
-							&nonces,
-						)?
-					} else {
-						handle_tcp_alloc(key, &relay, &mut streams, &mut buffer, &network, &nonces)?
+					let msg = match client.conn.recv_msg(&mut buffer) {
+						Err(e) if e.kind() == ErrorKind::WouldBlock => break,
+						Err(reason) => {
+							trace!(?reason, "closing allocation read error");
+							server.remove_client(&client)?;
+							continue;
+						}
+						v => v?,
 					};
-					if close {
-						remove_alloc(
-							&mut streams,
-							&mut by_peer,
-							&mut refresh,
-							poll.registry(),
-							key,
+
+					let mut username = Parsed::NotPresent;
+					let mut software = Parsed::NotPresent;
+					let mut channel = Parsed::NotPresent;
+					let mut lifetime = Parsed::NotPresent;
+					let mut peer = Parsed::NotPresent;
+					let mut data = Parsed::NotPresent;
+					let mut realm = Parsed::NotPresent;
+					let mut nonce = Parsed::NotPresent;
+					let mut transport = Parsed::NotPresent;
+					let mut integrity = None;
+
+					let attrs = msg
+						.trim()
+						.parse::<{ known::USERNAME }, str>(&mut username)
+						.parse::<{ known::SOFTWARE }, str>(&mut software)
+						.parse::<{ known::CHANNEL_NUMBER }, [u8; 4]>(&mut channel)
+						.parse::<{ known::LIFETIME }, U32>(&mut lifetime)
+						.parse::<{ known::XOR_PEER_ADDRESS }, Addr6<Xor>>(&mut peer)
+						.parse::<{ known::DATA }, [u8]>(&mut data)
+						.parse::<{ known::REALM }, str>(&mut realm)
+						.parse::<{ known::NONCE }, [u8; 24]>(&mut nonce)
+						.parse::<{ known::REQUESTED_TRANSPORT }, [u8; 4]>(&mut transport);
+
+					let mut unk = Vec::new();
+					msg.length.set(U16::new(0));
+
+					for (prefix, attr) in attrs {
+						match attr.typ {
+							known::MESSAGE_INTEGRITY => {
+								integrity = match username {
+									Parsed::Valid("guest")
+										if attr.value
+											== prefix.expected_message_integrity(&GUEST_KEY) =>
+									{
+										Some(&GUEST_KEY)
+									}
+									Parsed::Valid("user")
+										if attr.value
+											== prefix.expected_message_integrity(&USER_KEY) =>
+									{
+										Some(&USER_KEY)
+									}
+									_ => None,
+								};
+								break;
+							}
+							_ if attr.is_optional() => {}
+							t => unk.push(t),
+						}
+					}
+
+					// Cap the reported allocation lifetime at 4min so conforming clients refresh
+					// well before the ~6min heartbeat-counter expiry.  A `Refresh` with lifetime
+					// 0 still clamps to 0 and is handled as a close below.
+					let lifetime = U32::new(match lifetime {
+						Parsed::Valid(l) => l.get().min(240),
+						_ => 240,
+					});
+
+					// Get the canonical peer address off the established socket
+					let sock = SockRef::from(&client.conn);
+					let mapped = sock.peer_addr()?.as_socket().expect("fuck");
+					let mapped = match mapped.ip().to_canonical() {
+						IpAddr::V4(v4) => SocketAddr::V4(SocketAddrV4::new(v4, mapped.port())),
+						IpAddr::V6(v4) => {
+							SocketAddr::V6(SocketAddrV6::new(v4, mapped.port(), 0, 0))
+						}
+					};
+					let add_mapped = |msg: &mut Stun| match mapped {
+						SocketAddr::V4(v4) => {
+							msg.append_val(
+								known::XOR_MAPPED_ADDRESS,
+								&Addr4::new(*v4.ip(), v4.port()).xor(&msg.txid),
+							);
+						}
+						SocketAddr::V6(v6) => {
+							msg.append_val(
+								known::XOR_MAPPED_ADDRESS,
+								&Addr6::new(*v6.ip(), v6.port()).xor(&msg.txid),
+							);
+						}
+					};
+
+					match msg.method {
+						Method::Allocate if !unk.is_empty() => {
+							msg.class = Class::Response;
+							msg.method = msg.method.to_err();
+							msg.length.get_mut().set(0);
+							msg.append_val(known::UNKNOWN_ATTRIBUTES, unk.as_slice());
+						}
+						_ if !unk.is_empty() => continue,
+
+						Method::Bind => {
+							msg.class = Class::Response;
+							msg.length.get_mut().set(0);
+							add_mapped(msg);
+						}
+						Method::Send => {
+							let (Parsed::Valid(peer), Parsed::Valid(data)) = (peer, data) else {
+								continue;
+							};
+							let peer = peer.xor(&msg.txid);
+
+							// Realy the data as UDP
+							let _ = write_network_udp(
+								&network,
+								(
+									client.relayed.ip().octets(),
+									U16::new(client.relayed.port()),
+								),
+								(peer.ip().octets(), U16::new(peer.port())),
+								data,
+							);
+
+							continue;
+						}
+						// No usable credentials: 401, challenging with a fresh nonce bound to
+						// this client.  Unsigned — we have no key to sign with.
+						m if integrity.is_none()
+							|| realm != Parsed::Valid("none")
+							|| !crate::nonce::verify_nonce(&nonce, &mapped) =>
+						{
+							msg.class = Class::Response;
+							msg.method = m.to_err();
+							msg.length.get_mut().set(0);
+							if integrity.is_none() {
+								msg.append_val(known::ERROR_CODE, &[0u8, 0, 4, 1]);
+							} else {
+								msg.append_val(known::ERROR_CODE, &[0u8, 0, 4, 38]);
+							}
+							msg.append_val(known::REALM, "none");
+							// TODO: For Client's, this is the peer_addr on the socket, but for the unconnected UDP (which I haven't worked through yet) this would come from recv_from stuff.
+							msg.append_val(
+								known::NONCE,
+								// Even though this could be a 401 we still issue a 30 min nonce since
+								&crate::nonce::issue_nonce(&mapped, Duration::from_mins(30)),
+							);
+						}
+						Method::Allocate => {
+							msg.class = Class::Response;
+							msg.length.get_mut().set(0);
+							add_mapped(msg);
+							let xor_relayed =
+								Addr6::new(*client.relayed.ip(), client.relayed.port())
+									.xor(&msg.txid);
+							msg.append_val(known::XOR_RELAYED_ADDRESS, &xor_relayed);
+							msg.append_val(known::LIFETIME, &lifetime);
+						}
+						// Close notification: tear the allocation down.
+						Method::Refresh if lifetime.get() == 0 => {
+							server.remove_client(&client)?;
+							break;
+						}
+						Method::Refresh => {
+							msg.class = Class::Response;
+							msg.length.get_mut().set(0);
+							msg.append_val(known::LIFETIME, &lifetime);
+
+							// Update keepalive tracking
+							client.keepalives.set(0);
+							client.timeout.set(Server::timeout());
+							server.timeouts.push_back(client);
+						}
+						Method::AddPermission => {
+							msg.class = Class::Response;
+							msg.length.get_mut().set(0);
+						}
+						// We don't do channels.  438 with *no* NONCE attribute is the refusal
+						// that costs nothing: we've just told Chrome its nonce is expired, so it
+						// won't retransmit with that one, and we gave it no replacement, so it
+						// drops the request — without expiring the nonce it's happily using for
+						// everything else.  Anything else is fatal for the entry (400 was tried)
+						// and tears down the peer's Send/Data indication path a few seconds
+						// after it came up.  So: don't add REALM/NONCE here for symmetry with
+						// the stale-nonce arm above — that's what makes it a no-op rather than a
+						// retry loop — and don't touch any of it without an e2e that holds a
+						// relayed pair open for a minute (`tests/soak.html`).
+						Method::UseChannel => {
+							msg.class = Class::Response;
+							msg.method = msg.method.to_err();
+							msg.length.get_mut().set(0);
+							msg.append_val(known::ERROR_CODE, &[0u8, 0, 4, 38]);
+						}
+						_ => continue,
+					}
+
+					if let Some(authkey) = integrity {
+						msg.append_val(
+							known::MESSAGE_INTEGRITY,
+							&msg.trim().expected_message_integrity(authkey),
 						);
 					}
-				}
-			}
-		}
-
-		poll.poll(
-			&mut events,
-			Some(next_tick.saturating_duration_since(Instant::now())),
-		)?;
-
-		// Heartbeat sweep: once per minute, keep connected-UDP allocations warm
-		// and expire the ones whose clients have gone silent.
-		let now = Instant::now();
-		if now >= next_tick {
-			next_tick = now + Duration::from_secs(60);
-			let mut expired: Vec<usize> = Vec::new();
-			for (&key, counter) in refresh.iter_mut() {
-				// Five sent heartbeats with no client Refresh in between; the
-				// next tick (~6min) expires it.
-				if *counter >= 5 {
-					expired.push(key);
-					continue;
-				}
-				let Some(sock) = streams.get(key) else {
-					expired.push(key);
-					continue;
-				};
-				// Fresh txid per send.
-				let end = match Stun::new(Class::Request, Method::Shit, &mut buffer) {
-					Ok(msg) => size_of_val(msg.trim()),
-					Err(_) => continue,
-				};
-				match sock.send(&buffer[..end]) {
-					Ok(_) => *counter += 1,
-					Err(e) if e.kind() == ErrorKind::WouldBlock => *counter += 1,
-					// ECONNREFUSED/EHOSTUNREACH (or any hard error): the client
-					// is gone, tear the allocation down.
-					Err(_) => expired.push(key),
-				}
-			}
-			for key in expired {
-				remove_alloc(
-					&mut streams,
-					&mut by_peer,
-					&mut refresh,
-					poll.registry(),
-					key,
-				);
-			}
-		}
-	}
-}
-
-/// Drain a connected UDP allocation. Returns `true` if it should be torn down.
-fn handle_udp_alloc(
-	key: usize,
-	relay: &RelayRange,
-	streams: &mut Slab<Socket>,
-	refresh: &mut HashMap<usize, u8>,
-	buffer: &mut [u8],
-	network: &SyncDevice,
-	nonces: &Nonces,
-) -> Result<bool> {
-	let sock = streams.get(key).unwrap();
-	let Some(relayed) = relay.from_key(key) else {
-		return Ok(true);
-	};
-	let Some(remote) = sock.peer_addr().ok().and_then(|a| a.as_socket_ipv6()) else {
-		return Ok(true);
-	};
-
-	loop {
-		let n = match recv_with_local(sock, buffer) {
-			Ok((n, _, _)) => n,
-			Err(e) if e.kind() == ErrorKind::WouldBlock => break,
-			Err(reason) => {
-				trace!(?reason, "UDP allocation recv error; closing");
-				return Ok(true);
-			}
-		};
-		if n < 20 {
-			continue;
-		}
-		let Ok(msg) = Stun::try_mut_from_bytes(buffer).map_err(|_| ()) else {
-			continue;
-		};
-		if msg.txid.id == [0; 12] {
-			continue;
-		}
-		// A client Refresh proves liveness: reset the heartbeat counter.
-		if msg.method == Method::Refresh
-			&& let Some(c) = refresh.get_mut(&key)
-		{
-			*c = 0;
-		}
-		match handle_turn(relayed, remote, msg, network, nonces)? {
-			Turn::Respond(resp) => {
-				let end = size_of_val(resp.trim());
-				let _ = sock.send(&buffer[..end]);
-			}
-			Turn::Silent => {}
-			Turn::Close => return Ok(true),
-		}
-	}
-	Ok(false)
-}
-
-/// Read framed STUN from a TCP allocation. Returns `true` if it should be torn
-/// down.
-fn handle_tcp_alloc(
-	key: usize,
-	relay: &RelayRange,
-	streams: &mut Slab<Socket>,
-	buffer: &mut [u8],
-	network: &SyncDevice,
-	nonces: &Nonces,
-) -> Result<bool> {
-	let Some(relayed) = relay.from_key(key) else {
-		return Ok(true);
-	};
-	let Some(remote) = streams
-		.get(key)
-		.and_then(|s| s.peer_addr().ok())
-		.and_then(|a| a.as_socket_ipv6())
-	else {
-		return Ok(true);
-	};
-
-	loop {
-		let sock = streams.get_mut(key).unwrap();
-		let available = match peek(sock, buffer) {
-			Ok(0) => return Ok(true), // peer closed
-			Ok(n) => n,
-			Err(e) if e.kind() == ErrorKind::WouldBlock => break,
-			Err(reason) => {
-				trace!(?reason, "TCP peek error; closing");
-				return Ok(true);
-			}
-		};
-		let end = match Stun::try_mut_from_bytes(buffer).map_err(AlignedTryCastError::from) {
-			Err(AlignedTryCastError::Validity(reason)) if available >= 20 => {
-				trace!(?reason, "Non-STUN frame; closing");
-				return Ok(true);
-			}
-			Ok(m) => {
-				let end = size_of_val(m.trim());
-				if available < end {
-					break;
-				}
-				end
-			}
-			_ => break,
-		};
-		// Consume exactly one framed message.
-		let n = sock.read(&mut buffer[..end])?;
-		if n < end {
-			// Shouldn't happen: peek reported >= end bytes buffered.
-			trace!(n, end, "short read after peek; closing");
-			return Ok(true);
-		}
-		// Parse over the FULL buffer (not buffer[..end]) so handle_turn has
-		// headroom to append the response; the STUN length header bounds the
-		// request and trim() handles trailing bytes.
-		let Ok(msg) = Stun::try_mut_from_bytes(buffer).map_err(|_| ()) else {
-			continue;
-		};
-		if msg.txid.id == [0; 12] {
-			continue;
-		}
-		match handle_turn(relayed, remote, msg, network, nonces)? {
-			Turn::Respond(resp) => {
-				let end = size_of_val(resp.trim());
-				// Reborrow the socket mutably for the write.
-				let sock = streams.get_mut(key).unwrap();
-				if let Write2::Abort = tcp_write_frame(sock, &buffer[..end]) {
-					return Ok(true);
-				}
-			}
-			Turn::Silent => {}
-			Turn::Close => return Ok(true),
-		}
-	}
-	Ok(false)
-}
-
-fn handle_turn<'i>(
-	relayed: SocketAddrV6,
-	remote: SocketAddrV6,
-	msg: &'i mut Stun,
-	network: &SyncDevice,
-	nonces: &Nonces,
-) -> Result<Turn<'i>> {
-	let mut username = Parsed::NotPresent;
-	let mut software = Parsed::NotPresent;
-	let mut channel = Parsed::NotPresent;
-	let mut lifetime = Parsed::NotPresent;
-	let mut peer = Parsed::NotPresent;
-	let mut data = Parsed::NotPresent;
-	let mut realm = Parsed::NotPresent;
-	let mut nonce = Parsed::NotPresent;
-	let mut transport = Parsed::NotPresent;
-	let mut integrity = None;
-
-	let attrs = msg
-		.trim()
-		.parse::<{ known::USERNAME }, str>(&mut username)
-		.parse::<{ known::SOFTWARE }, str>(&mut software)
-		.parse::<{ known::CHANNEL_NUMBER }, [u8; 4]>(&mut channel)
-		.parse::<{ known::LIFETIME }, U32>(&mut lifetime)
-		.parse::<{ known::XOR_PEER_ADDRESS }, Addr6<Xor>>(&mut peer)
-		.parse::<{ known::DATA }, [u8]>(&mut data)
-		.parse::<{ known::REALM }, str>(&mut realm)
-		.parse::<{ known::NONCE }, str>(&mut nonce)
-		.parse::<{ known::REQUESTED_TRANSPORT }, [u8; 4]>(&mut transport);
-
-	let mut unk = Vec::new();
-	msg.length.set(U16::new(0));
-
-	for (prefix, attr) in attrs {
-		match attr.typ {
-			known::MESSAGE_INTEGRITY => {
-				integrity = match username {
-					Parsed::Valid("guest")
-						if attr.value == prefix.expected_message_integrity(&GUEST_KEY) =>
-					{
-						Some(&GUEST_KEY)
+					let end = size_of_val(msg.trim());
+					match client.conn.maybe_send_frame(&buffer[..end]) {
+						Err(e) if e.kind() == ErrorKind::Interrupted => continue,
+						Err(e) if e.kind() == ErrorKind::WouldBlock => break,
+						Ok(_) => continue,
+						Err(reason) => {
+							trace!(?reason, "closing client");
+							server.remove_client(&client)?;
+							break;
+						}
 					}
-					Parsed::Valid("user")
-						if attr.value == prefix.expected_message_integrity(&USER_KEY) =>
-					{
-						Some(&USER_KEY)
-					}
-					_ => None,
-				};
+				},
+				// Event for an already closed/released client
+				_ => {}
+			}
+		}
+
+		let mut cursor = server.timeouts.front_mut();
+		while let Some(client) = cursor.get() {
+			if client.keepalives.get() >= 5 {
+				// 5 keepalives ~6min without seeing a refresh request means the lifetime (4min) has expired
+				server.remove_client(client)?;
+				cursor.move_next();
+			} else if client.timeout.get() > Instant::now() {
 				break;
+			} else {
+				// Try to send a keepalive message:
+				let msg = Stun::new(Class::Request, Method::Shit, &mut buffer).unwrap();
+				let end = size_of_val(msg.trim());
+				client.keepalives.update(|v| v + 1);
+				client.timeout.set(Server::timeout());
+				server.timeouts.push_back(cursor.remove().unwrap());
+				match client.conn.maybe_send_frame(&buffer[..end]) {
+					Err(e) if e.kind() == ErrorKind::Interrupted => {}
+					Err(e) if e.kind() == ErrorKind::WouldBlock => {}
+					Ok(_) => {}
+					Err(reason) => {
+						trace!(?reason, "Closing client");
+						server.remove_client(client);
+					}
+				}
 			}
-			_ if attr.is_optional() => {}
-			t => unk.push(t),
 		}
-	}
 
-	// Cap the reported allocation lifetime at 4min so conforming clients refresh
-	// well before the ~6min heartbeat-counter expiry.  A `Refresh` with lifetime
-	// 0 still clamps to 0 and is handled as a close below.
-	let lifetime = U32::new(match lifetime {
-		Parsed::Valid(l) => l.get().min(240),
-		_ => 240,
-	});
-
-	let add_mapped = move |msg: &mut Stun| match remote.ip().to_canonical() {
-		IpAddr::V4(v4) => {
-			msg.append_val(
-				known::XOR_MAPPED_ADDRESS,
-				&Addr4::new(v4, remote.port()).xor(&msg.txid),
-			);
-		}
-		IpAddr::V6(v6) => {
-			msg.append_val(
-				known::XOR_MAPPED_ADDRESS,
-				&Addr6::new(v6, remote.port()).xor(&msg.txid),
-			);
-		}
-	};
-
-	match msg.method {
-		Method::Allocate if !unk.is_empty() => {
-			msg.class = Class::Response;
-			msg.method = msg.method.to_err();
-			msg.length.get_mut().set(0);
-			msg.append_val(known::UNKNOWN_ATTRIBUTES, unk.as_slice());
-		}
-		_ if !unk.is_empty() => return Ok(Turn::Silent),
-
-		Method::Bind => {
-			msg.class = Class::Response;
-			msg.length.get_mut().set(0);
-			add_mapped(msg);
-		}
-		Method::Send => {
-			let (Parsed::Valid(peer), Parsed::Valid(data)) = (peer, data) else {
-				return Ok(Turn::Silent);
-			};
-			let peer = peer.xor(&msg.txid);
-
-			// Relay with src = the relayed transport address; peers must see the
-			// relayed address, not the client's mapped address.
-			let _ = write_network_udp(
-				network,
-				(relayed.ip().octets(), U16::new(relayed.port())),
-				(peer.ip().octets(), U16::new(peer.port())),
-				data,
-			);
-
-			return Ok(Turn::Silent);
-		}
-		// No usable credentials: 401, challenging with a fresh nonce bound to
-		// this client.  Unsigned — we have no key to sign with.
-		m if integrity.is_none() || realm != Parsed::Valid("none") => {
-			msg.class = Class::Response;
-			msg.method = m.to_err();
-			msg.length.get_mut().set(0);
-			msg.append_val(known::ERROR_CODE, &[0u8, 0, 4, 1]);
-			msg.append_val(known::REALM, "none");
-			msg.append_val(known::NONCE, &nonces.issue(remote));
-		}
-		// Credentials check out, but the nonce is forged, expired, or was issued
-		// to somebody else: 438 Stale Nonce with a fresh one to retry with.  It
-		// is this round trip — not the (public) credentials — that stops a
-		// spoofed source from creating an allocation.  Signed by the tail below.
-		m if !nonces.check(nonce, remote) => {
-			msg.class = Class::Response;
-			msg.method = m.to_err();
-			msg.length.get_mut().set(0);
-			msg.append_val(known::ERROR_CODE, &[0u8, 0, 4, 38]);
-			msg.append_val(known::REALM, "none");
-			msg.append_val(known::NONCE, &nonces.issue(remote));
-		}
-		Method::Allocate => {
-			msg.class = Class::Response;
-			msg.length.get_mut().set(0);
-			add_mapped(msg);
-			msg.append_val(
-				known::XOR_RELAYED_ADDRESS,
-				&Addr6::new(*relayed.ip(), relayed.port()).xor(&msg.txid),
-			);
-			msg.append_val(known::LIFETIME, &lifetime);
-		}
-		// Close notification: tear the allocation down.
-		Method::Refresh if lifetime.get() == 0 => return Ok(Turn::Close),
-		Method::Refresh => {
-			msg.class = Class::Response;
-			msg.length.get_mut().set(0);
-			msg.append_val(known::LIFETIME, &lifetime);
-		}
-		Method::AddPermission => {
-			msg.class = Class::Response;
-			msg.length.get_mut().set(0);
-		}
-		// We don't do channels.  438 with *no* NONCE attribute is the refusal
-		// that costs nothing: we've just told Chrome its nonce is expired, so it
-		// won't retransmit with that one, and we gave it no replacement, so it
-		// drops the request — without expiring the nonce it's happily using for
-		// everything else.  Anything else is fatal for the entry (400 was tried)
-		// and tears down the peer's Send/Data indication path a few seconds
-		// after it came up.  So: don't add REALM/NONCE here for symmetry with
-		// the stale-nonce arm above — that's what makes it a no-op rather than a
-		// retry loop — and don't touch any of it without an e2e that holds a
-		// relayed pair open for a minute (`tests/soak.html`).
-		Method::UseChannel => {
-			msg.class = Class::Response;
-			msg.method = msg.method.to_err();
-			msg.length.get_mut().set(0);
-			msg.append_val(known::ERROR_CODE, &[0u8, 0, 4, 38]);
-		}
-		_ => return Ok(Turn::Silent),
-	}
-
-	if let Some(authkey) = integrity {
-		msg.append_val(
-			known::MESSAGE_INTEGRITY,
-			&msg.trim().expected_message_integrity(authkey),
-		);
-	}
-
-	Ok(Turn::Respond(msg))
-}
-
-#[cfg(test)]
-mod tests {
-	use super::*;
-
-	fn range() -> RelayRange {
-		// 2 addresses (::/127-ish via a /127) x 3 ports.
-		RelayRange::new(Ipv6Net::from_str("2001:db8::/127").unwrap(), "50000-50002").unwrap()
-	}
-
-	#[test]
-	fn round_trip() {
-		let r = range();
-		assert_eq!(r.capacity(), 2 * 3);
-		for key in 0..r.capacity() {
-			let addr = r.from_key(key).expect("in range");
-			let back = r.to_key(*addr.ip(), addr.port()).expect("maps back");
-			assert_eq!(back, key, "round trip for {addr}");
-		}
-	}
-
-	#[test]
-	fn port_first_layout() {
-		let r = range();
-		// key 0..3 share the base IP, ascending port; key 3 rolls to next IP.
-		let base = Ipv6Addr::from_str("2001:db8::").unwrap();
-		let next = Ipv6Addr::from_str("2001:db8::1").unwrap();
-		assert_eq!(r.from_key(0).unwrap(), SocketAddrV6::new(base, 50000, 0, 0));
-		assert_eq!(r.from_key(2).unwrap(), SocketAddrV6::new(base, 50002, 0, 0));
-		assert_eq!(r.from_key(3).unwrap(), SocketAddrV6::new(next, 50000, 0, 0));
-		assert_eq!(r.from_key(5).unwrap(), SocketAddrV6::new(next, 50002, 0, 0));
-	}
-
-	#[test]
-	fn bounds() {
-		let r = range();
-		let base = Ipv6Addr::from_str("2001:db8::").unwrap();
-		assert!(r.from_key(6).is_none(), "past capacity");
-		assert!(r.to_key(base, 49999).is_none(), "port below range");
-		assert!(r.to_key(base, 50003).is_none(), "port above range");
-		let outside = Ipv6Addr::from_str("2001:db8::2").unwrap();
-		assert!(r.to_key(outside, 50000).is_none(), "ip outside subnet");
-		let below = Ipv6Addr::from_str("2001:db7::").unwrap();
-		assert!(r.to_key(below, 50000).is_none(), "ip below base");
+		server
+			.poll
+			.poll(&mut events, Some(Duration::from_mins(1)))?;
 	}
 }
