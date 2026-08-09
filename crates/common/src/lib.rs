@@ -13,9 +13,6 @@ use zerocopy::{
 
 pub mod dtls;
 
-#[cfg(target_os = "linux")]
-pub mod socket;
-
 pub mod proto {
 	pub const UDP: u8 = 17;
 	pub const ICMP6: u8 = 58;

@@ -37,7 +37,7 @@ mod linux {
 	use std::os::fd::AsRawFd;
 
 	nix::ioctl_read_bad!(ioctl_tiocoutq, libc::TIOCOUTQ, std::ffi::c_int);
-	impl SocketQueueExt for socket2::Socket {
+	impl SocketQueueExt for socket2::SockRef<'_> {
 		fn send_queue_len(&self) -> io::Result<usize> {
 			let mut ret = 0;
 			assert_eq!(
@@ -62,7 +62,7 @@ mod linux {
 		libc::IP_MTU_DISCOVER,
 		std::ffi::c_int
 	);
-	impl SocketMtuExt for socket2::Socket {
+	impl SocketMtuExt for socket2::SockRef<'_> {
 		fn path_mtu(&self) -> io::Result<u32> {
 			let info = Ip6MtuInfo.get(&self.as_fd())?;
 			Ok(info.ip6m_mtu)
@@ -105,7 +105,7 @@ mod macos {
 		IPV6_PATHMTU,
 		ip6_mtuinfo
 	);
-	impl SocketQueueExt for socket2::Socket {
+	impl SocketQueueExt for socket2::SockRef<'_> {
 		fn send_queue_len(&self) -> io::Result<usize> {
 			let ret = SoNWrite
 				.get(&self.as_fd())
@@ -113,7 +113,7 @@ mod macos {
 			Ok(ret as usize)
 		}
 	}
-	impl SocketMtuExt for socket2::Socket {
+	impl SocketMtuExt for socket2::SockRef<'_> {
 		fn path_mtu(&self) -> io::Result<u32> {
 			let mtu_info = Ip6MtuInfo.get(&self.as_fd())?;
 			Ok(mtu_info.ip6m_mtu)

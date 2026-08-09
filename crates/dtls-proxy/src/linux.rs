@@ -12,11 +12,7 @@ use std::{
 };
 
 use clap::Parser;
-use common::{
-	Packet, Udp, read_network,
-	socket::{UdpOpt, connected_udp, reconnect, set_v6_pmtudisc, v6_path_mtu},
-	write_network_icmp, write_network_udp,
-};
+use common::{Packet, Udp, read_network, write_network_icmp, write_network_udp};
 use eyre::Result;
 use mio::{Events, Interest, Poll, Registry, Token, unix::SourceFd};
 use openssl::ssl::{
