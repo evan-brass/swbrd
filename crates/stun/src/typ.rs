@@ -41,8 +41,8 @@ pub enum Method {
 	Ass = 0x19, // UseChannel Error
 }
 impl Method {
-	pub fn to_err(self) -> Self {
-		try_transmute!(self as u8 ^ 0x10).unwrap()
+	pub fn to_err(self) -> Option<Self> {
+		try_transmute!(self as u8 ^ 0x10).ok()
 	}
 	pub fn is_err(&self) -> bool {
 		!matches!(self, Self::Send | Self::Recv) && *self as u8 & 0x10 != 0
@@ -67,9 +67,9 @@ pub struct Txid {
 	pub id: [u8; 12],
 }
 impl Default for Txid {
-    fn default() -> Self {
-        Self::new()
-    }
+	fn default() -> Self {
+		Self::new()
+	}
 }
 
 impl Txid {

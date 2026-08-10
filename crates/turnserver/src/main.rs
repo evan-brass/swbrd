@@ -315,6 +315,9 @@ fn handle_turn(msg: &mut Stun, mapped: SocketAddr) -> Action {
 	if msg.txid.id == [0; 12] {
 		return Action::Drop;
 	}
+	if msg.class != Class::Request {
+		return Action::Drop;
+	}
 
 	let mut username = Parsed::NotPresent;
 	let mut software = Parsed::NotPresent;
@@ -391,7 +394,7 @@ fn handle_turn(msg: &mut Stun, mapped: SocketAddr) -> Action {
 	match msg.method {
 		Method::Allocate if !unk.is_empty() => {
 			msg.class = Class::Response;
-			msg.method = msg.method.to_err();
+			msg.method = msg.method.to_err().unwrap();
 			msg.length.get_mut().set(0);
 			msg.append_val(known::UNKNOWN_ATTRIBUTES, unk.as_slice());
 		}
@@ -409,7 +412,11 @@ fn handle_turn(msg: &mut Stun, mapped: SocketAddr) -> Action {
 			|| !crate::nonce::verify_nonce(&nonce, &mapped) =>
 		{
 			msg.class = Class::Response;
-			msg.method = m.to_err();
+			let Some(err_method) = m.to_err() else {
+				trace!(?msg.method, "to_err failed?");
+				return Action::Drop;
+			};
+			msg.method = err_method;
 			msg.length.get_mut().set(0);
 			if integrity.is_none() {
 				msg.append_val(known::ERROR_CODE, &[0u8, 0, 4, 1]);
@@ -459,7 +466,7 @@ fn handle_turn(msg: &mut Stun, mapped: SocketAddr) -> Action {
 		// relayed pair open for a minute (`tests/soak.html`).
 		Method::UseChannel => {
 			msg.class = Class::Response;
-			msg.method = msg.method.to_err();
+			msg.method = msg.method.to_err().unwrap();
 			msg.length.get_mut().set(0);
 			msg.append_val(known::ERROR_CODE, &[0u8, 0, 4, 38]);
 		}
