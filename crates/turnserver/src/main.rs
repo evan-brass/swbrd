@@ -5,10 +5,10 @@ use intrusive_collections::{
 };
 use ipnet::Ipv6Net;
 use mio::{Events, Interest, Poll, Token, unix::SourceFd};
-use nix::sys::socket::{SetSockOpt, sockopt::Ipv6RecvPacketInfo};
+use nix::sys::socket::{MsgFlags, SetSockOpt, sockopt::Ipv6RecvPacketInfo};
 use rand::random_range;
 use socket2::{Domain, Protocol, SockAddr, SockRef, Socket, Type};
-use socket3::SocketQueueExt;
+use socket3::{SocketMtuExt, SocketQueueExt};
 use std::{
 	cell::Cell,
 	io::{Error, ErrorKind, Read, Write},
@@ -25,11 +25,11 @@ use stun::{
 	addr::{Addr4, Addr6, Xor},
 	known,
 };
-use tracing::{trace, warn};
+use tracing::trace;
 use tracing_subscriber::EnvFilter;
-use tun_rs::{DeviceBuilder, SyncDevice};
+use tun_rs::DeviceBuilder;
 use zerocopy::{
-	AlignedTryCastError, IntoBytes, TryFromBytes,
+	IntoBytes, TryFromBytes,
 	network_endian::{U16, U32},
 };
 
@@ -88,7 +88,12 @@ impl Conn {
 				let blocked = Error::new(ErrorKind::WouldBlock, "");
 				let invalid = Error::new(ErrorKind::InvalidData, "");
 				// Peek then read, to leave partial STUN frames in the kernel recv buffer
-				let available = tcp.peek(buffer)?;
+				// Our tcp streams are blocking, but we only want to block when sending frames or doing consuming reads
+				let available = nix::sys::socket::recv(
+					tcp.as_raw_fd(),
+					buffer,
+					MsgFlags::MSG_PEEK | MsgFlags::MSG_DONTWAIT,
+				)?;
 				if available < 20 {
 					return Err(blocked);
 				}
@@ -372,7 +377,6 @@ pub fn main() -> Result<Never> {
 						v => v?,
 					};
 					stream.set_tcp_nodelay(true)?;
-					stream.set_nonblocking(true)?;
 
 					server.new_client(Conn::Tcp(stream.into()))?;
 				},
@@ -457,9 +461,10 @@ pub fn main() -> Result<Never> {
 					break;
 				},
 				TUN => loop {
+					const TURN_DATA_OVERHEAD: usize = 20 + 24 + 4;
 					let packet = match read_network(
 						&network,
-						&mut buffer[20 + 24 + 4..],
+						&mut buffer[TURN_DATA_OVERHEAD..],
 						args.router.octets(),
 					) {
 						Err(e) if e.kind() == ErrorKind::Interrupted => continue,
@@ -475,7 +480,7 @@ pub fn main() -> Result<Never> {
 							receiver =
 								SocketAddrV6::new(Ipv6Addr::from(ip.dst), udp.dst_port.get(), 0, 0);
 
-							let data_length = udp.length.get() - 8;
+							let datagram_length = udp.length.get() - size_of::<Udp>() as u16;
 							let sender =
 								Addr6::new(Ipv6Addr::from_octets(ip.src), udp.src_port.get());
 							msg = Stun::new(Class::Request, Method::Recv, &mut buffer)
@@ -483,11 +488,11 @@ pub fn main() -> Result<Never> {
 							msg.append_val(known::XOR_PEER_ADDRESS, &sender.xor(&msg.txid));
 							msg.append_once(|_, a| {
 								a.typ = known::DATA;
-								a.length.set(data_length); // UDP data already in position.
+								a.length.set(datagram_length); // UDP data already in position.
 							});
 						}
 						Packet::Icmp {
-							ip,
+							ip: _,
 							icmp,
 							inner_ip,
 							inner_udp,
@@ -528,40 +533,51 @@ pub fn main() -> Result<Never> {
 						match client.conn.maybe_send_frame(&buffer[..end]) {
 							Ok(_) => {}
 							// Client path can't carry the relayed Data indication: tell the
-							// peer to send less (ICMPv6 Packet Too Big).  Relay overhead is STUN
-							// (20) + XOR-PEER-ADDRESS-v6(24) + DATA attr(4) = 48; the peer path
-							// is IPv6 (40 + 8), the client path may be v4 (20) or v6 (40).
+							// peer to send less (ICMPv6 Packet Too Big).
 							Err(e)
 								if let (Some(libc::EMSGSIZE), Packet::Udp { ip, udp }) =
 									(e.raw_os_error(), packet) =>
 							{
-								// TODO: Cleanup these sockopts and shit
-								// let is_v4 = SockRef::from(&client.conn)
-								// 	.peer_addr()
-								// 	.ok()
-								// 	.and_then(|a| a.as_socket_ipv6())
-								// 	.and_then(|s| s.ip().to_ipv4_mapped())
-								// 	.is_some();
-								// let (pmtu, client_hdr) = if is_v4 {
-								// 	(v4_path_mtu(sock), 20)
-								// } else {
-								// 	(v6_path_mtu(sock), 40)
-								// };
-								// if let Ok(pmtu) = pmtu {
-								// 	let mtu = pmtu
-								// 		.saturating_sub(client_hdr + 8 + 48)
-								// 		.saturating_add(40 + 8);
-								// 	let _ = write_network_icmp(
-								// 		&network,
-								// 		receiver.ip().octets(),
-								// 		2,
-								// 		0, // ICMPv6 Packet Too Big
-								// 		mtu,
-								// 		ip,
-								// 		udp.as_bytes(),
-								// 		&buffer[48..48 + plen],
-								// 	);
-								// }
+								let t = SockRef::from(&client.conn);
+								let pmtu = t.path_mtu()?;
+								let peer_addr = t
+									.peer_addr()?
+									.as_socket_ipv6()
+									.expect("Our sockets should dual stack/mapped?");
+
+								// To compute the MTU we should report in our ICMPv6 PTB:
+								// - We only expect EMSGSIZE errors for UDP clients (Subtract out IP4/6 + UDP)
+								// - We only issue/relay IPv6 UDP packets (XOR-PEER-ADDRESS is always Family=IPv6)
+								// - Add back in IP6+UDP since the information in those is accounted for in the TURN prefix
+								let reported_mtu = pmtu
+									.saturating_sub(
+										// IP Header
+										if peer_addr.ip().to_ipv4_mapped().is_some() {
+											20 // IPv4 Header
+										} else {
+											size_of::<Ip6>() as u32
+										}
+										// UDP Header
+										+ size_of::<Udp>() as u32
+										// TURN DATA Indication Prefix (With IPv6 Peer address)
+										+ TURN_DATA_OVERHEAD as u32,
+									)
+									.saturating_add(
+										size_of::<Ip6>() as u32 + size_of::<Udp>() as u32,
+									);
+								let datagram_length = udp.length.get() as usize - size_of::<Udp>();
+								let _ = write_network_icmp(
+									&network,
+									receiver.ip().octets(),
+									2,
+									0, // ICMPv6 Packet Too Big
+									reported_mtu,
+									ip,
+									udp.as_bytes(),
+									// The UDP payload was untouched when writing the TURN data indication above.
+									// However, don't use end (size_of_val(msg.trim())) here since the STUN message may include padding bytes that follow after the original UDP payload:
+									&buffer[TURN_DATA_OVERHEAD..][..datagram_length],
+								);
 							}
 							Err(_) => {}
 						}
@@ -760,7 +776,8 @@ pub fn main() -> Result<Never> {
 							// Update keepalive tracking
 							client.keepalives.set(0);
 							client.timeout.set(Server::timeout());
-							server.timeouts.push_back(client);
+							// TODO: This *Should* remove the client from the timeouts linked list, and reinsert it at the end
+							server.timeouts.push_back(client.clone());
 						}
 						Method::AddPermission => {
 							msg.class = Class::Response;
@@ -808,30 +825,34 @@ pub fn main() -> Result<Never> {
 			}
 		}
 
-		let mut cursor = server.timeouts.front_mut();
-		while let Some(client) = cursor.get() {
+		while let Some(client) = server.timeouts.pop_front() {
+			let now = Instant::now();
 			if client.keepalives.get() >= 5 {
 				// 5 keepalives ~6min without seeing a refresh request means the lifetime (4min) has expired
-				server.remove_client(client)?;
-				cursor.move_next();
-			} else if client.timeout.get() > Instant::now() {
+				server.remove_client(&client)?;
+			} else if now < client.timeout.get() {
+				// Put the client back and continue
+				server.timeouts.push_front(client);
 				break;
 			} else {
 				// Try to send a keepalive message:
 				let msg = Stun::new(Class::Request, Method::Shit, &mut buffer).unwrap();
 				let end = size_of_val(msg.trim());
 				client.keepalives.update(|v| v + 1);
-				client.timeout.set(Server::timeout());
-				server.timeouts.push_back(cursor.remove().unwrap());
 				match client.conn.maybe_send_frame(&buffer[..end]) {
 					Err(e) if e.kind() == ErrorKind::Interrupted => {}
 					Err(e) if e.kind() == ErrorKind::WouldBlock => {}
 					Ok(_) => {}
 					Err(reason) => {
 						trace!(?reason, "Closing client");
-						server.remove_client(client);
+						server.remove_client(&client)?;
+						continue;
 					}
 				}
+
+				// Put the client back in the timeouts eueue with a new timeout
+				client.timeout.set(Server::timeout());
+				server.timeouts.push_back(client);
 			}
 		}
 
