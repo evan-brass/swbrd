@@ -4,14 +4,17 @@ use intrusive_collections::{
 	KeyAdapter, LinkedList, LinkedListLink, RBTree, RBTreeLink, intrusive_adapter,
 };
 use ipnet::Ipv6Net;
+use libc::in6_pktinfo;
 use mio::{Events, Interest, Poll, Token, unix::SourceFd};
-use nix::sys::socket::{MsgFlags, SetSockOpt, sockopt::Ipv6RecvPacketInfo};
+use nix::sys::socket::{
+	ControlMessageOwned, MsgFlags, SetSockOpt, SockaddrIn6, sockopt::Ipv6RecvPacketInfo,
+};
 use rand::random_range;
 use socket2::{Domain, Protocol, SockAddr, SockRef, Socket, Type};
 use socket3::{SocketMtuExt, SocketQueueExt};
 use std::{
 	cell::Cell,
-	io::{Error, ErrorKind, Read, Write},
+	io::{Error, ErrorKind, IoSliceMut, Read, Write},
 	mem::ManuallyDrop,
 	net::{IpAddr, Ipv6Addr, SocketAddr, SocketAddrV4, SocketAddrV6, TcpStream, UdpSocket},
 	ops::RangeInclusive,
@@ -381,6 +384,40 @@ pub fn main() -> Result<Never> {
 					server.new_client(Conn::Tcp(stream.into()))?;
 				},
 				UDP => loop {
+					let mut control_buffer = nix::cmsg_space!(in6_pktinfo);
+					let mut iovs = [IoSliceMut::new(&mut buffer)];
+					let msg = match nix::sys::socket::recvmsg::<SockaddrIn6>(
+						udp.as_raw_fd(),
+						&mut iovs,
+						Some(&mut control_buffer),
+						MsgFlags::empty(),
+					)
+					.map_err(Error::from)
+					{
+						Err(e) if e.kind() == ErrorKind::Interrupted => continue,
+						Err(e) if e.kind() == ErrorKind::WouldBlock => break,
+						v => v?,
+					};
+					let local = msg
+						.cmsgs()?
+						.find_map(|cmsg| {
+							if let ControlMessageOwned::Ipv6PacketInfo(ret) = cmsg {
+								Some(ret)
+							} else {
+								None
+							}
+						})
+						.expect("No local ipv6 packet info?");
+					let sender = msg.address.expect("No sender address");
+					let len = msg.bytes;
+					let Ok(msg) = Stun::try_mut_from_bytes(&mut buffer) else {
+						continue;
+					};
+					// Verify the expected length of the STUN message against the received datagram
+					if size_of_val(msg.trim()) != len {
+						continue;
+					}
+
 					// let (n, remote, local) = match recv_with_local(&udp, &mut buffer) {
 					// 	Ok(v) => v,
 					// 	Err(e) if e.kind() == ErrorKind::WouldBlock => break,
