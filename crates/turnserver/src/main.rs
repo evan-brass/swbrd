@@ -220,7 +220,7 @@ struct Server {
 	timeouts: LinkedList<Timeout>,
 }
 impl Server {
-	fn remove_client(&mut self, client: &Client) -> Result<(), Error> {
+	fn remove_client(&mut self, client: Rc<Client>) -> Result<(), Error> {
 		// TODO: Probably use a better way like RBTree::cursor_from_ptr_mut or something
 		// We only have 1 tree/list per link type, thus if the object is linked it must be linked in that collection
 		let mut t = None;
@@ -601,16 +601,16 @@ pub fn main() -> Result<Never> {
 				t if let Some(client) = server.poll.get(t) => loop {
 					if e.is_read_closed() || e.is_error() {
 						trace!(?e, "closing allocation (is_error / is_read_closed)");
-						server.remove_client(&client)?;
-						continue;
+						server.remove_client(client)?;
+						break;
 					}
 
 					let msg = match client.conn.recv_msg(&mut buffer) {
 						Err(e) if e.kind() == ErrorKind::WouldBlock => break,
 						Err(reason) => {
 							trace!(?reason, "closing allocation read error");
-							server.remove_client(&client)?;
-							continue;
+							server.remove_client(client)?;
+							break;
 						}
 						v => v?,
 					};
@@ -765,7 +765,7 @@ pub fn main() -> Result<Never> {
 						}
 						// Close notification: tear the allocation down.
 						Method::Refresh if lifetime.get() == 0 => {
-							server.remove_client(&client)?;
+							server.remove_client(client)?;
 							break;
 						}
 						Method::Refresh => {
@@ -776,7 +776,11 @@ pub fn main() -> Result<Never> {
 							// Update keepalive tracking
 							client.keepalives.set(0);
 							client.timeout.set(Server::timeout());
-							// TODO: This *Should* remove the client from the timeouts linked list, and reinsert it at the end
+
+							// Interesting: The linked list refuses to insert an object if it's already in a list.
+							if client.timeout_link.is_linked() {
+								unsafe { server.timeouts.cursor_mut_from_ptr(&*client) }.remove();
+							};
 							server.timeouts.push_back(client.clone());
 						}
 						Method::AddPermission => {
@@ -815,7 +819,7 @@ pub fn main() -> Result<Never> {
 						Ok(_) => continue,
 						Err(reason) => {
 							trace!(?reason, "closing client");
-							server.remove_client(&client)?;
+							server.remove_client(client)?;
 							break;
 						}
 					}
@@ -829,7 +833,7 @@ pub fn main() -> Result<Never> {
 			let now = Instant::now();
 			if client.keepalives.get() >= 5 {
 				// 5 keepalives ~6min without seeing a refresh request means the lifetime (4min) has expired
-				server.remove_client(&client)?;
+				server.remove_client(client)?;
 			} else if now < client.timeout.get() {
 				// Put the client back and continue
 				server.timeouts.push_front(client);
@@ -845,7 +849,7 @@ pub fn main() -> Result<Never> {
 					Ok(_) => {}
 					Err(reason) => {
 						trace!(?reason, "Closing client");
-						server.remove_client(&client)?;
+						server.remove_client(client)?;
 						continue;
 					}
 				}
