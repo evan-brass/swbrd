@@ -7,14 +7,15 @@ use ipnet::Ipv6Net;
 use libc::in6_pktinfo;
 use mio::{Events, Interest, Poll, Token, unix::SourceFd};
 use nix::sys::socket::{
-	ControlMessageOwned, MsgFlags, SetSockOpt, SockaddrIn6, sockopt::Ipv6RecvPacketInfo,
+	ControlMessage, ControlMessageOwned, MsgFlags, SetSockOpt, SockaddrIn6,
+	sockopt::Ipv6RecvPacketInfo,
 };
 use rand::random_range;
 use socket2::{Domain, Protocol, SockAddr, SockRef, Socket, Type};
 use socket3::{SocketMtuExt, SocketQueueExt};
 use std::{
 	cell::Cell,
-	io::{Error, ErrorKind, IoSliceMut, Read, Write},
+	io::{Error, ErrorKind, IoSlice, IoSliceMut, Read, Write},
 	mem::ManuallyDrop,
 	net::{IpAddr, Ipv6Addr, SocketAddr, SocketAddrV4, SocketAddrV6, TcpStream, UdpSocket},
 	ops::RangeInclusive,
@@ -240,7 +241,7 @@ impl Server {
 	fn timeout() -> Instant {
 		Instant::now() + Duration::from_mins(1)
 	}
-	fn new_client(&mut self, conn: Conn) -> Result<(), Error> {
+	fn new_client(&mut self, conn: Conn) -> Result<SocketAddrV6, Error> {
 		// 1. Find a random ip+port that's not currently occupied
 		let (relayed, i) = loop {
 			let ret = SocketAddrV6::new(
@@ -270,7 +271,7 @@ impl Server {
 		self.timeouts.push_back(client.clone());
 		// 5. Insert the client into the relayed tree
 		i.insert(client);
-		Ok(())
+		Ok(relayed)
 	}
 }
 
@@ -298,6 +299,181 @@ struct Args {
 const UDP: Token = Token(usize::MAX);
 const TCP: Token = Token(usize::MAX - 1);
 const TUN: Token = Token(usize::MAX - 2);
+
+enum Action {
+	Drop,
+	/// Stateless Responses
+	Reply(usize),
+	/// Stateless Refresh (if received over an established socket: respond, generate new timeout, push_back client)
+	Refresh(usize),
+	/// Nonce+Integrity were valid, proceed with allocation and return the XOR-RELAYED-ADDRESS once you have it
+	Allocate(&'static Authkey),
+	/// Refresh lifetime=0
+	Close,
+}
+fn handle_turn(msg: &mut Stun, mapped: SocketAddr) -> Action {
+	if msg.txid.id == [0; 12] {
+		return Action::Drop;
+	}
+
+	let mut username = Parsed::NotPresent;
+	let mut software = Parsed::NotPresent;
+	let mut channel = Parsed::NotPresent;
+	let mut lifetime = Parsed::NotPresent;
+	let mut peer = Parsed::NotPresent;
+	let mut data = Parsed::NotPresent;
+	let mut realm = Parsed::NotPresent;
+	let mut nonce = Parsed::NotPresent;
+	let mut transport = Parsed::NotPresent;
+	let mut integrity = None;
+
+	let attrs = msg
+		.trim()
+		.parse::<{ known::USERNAME }, str>(&mut username)
+		.parse::<{ known::SOFTWARE }, str>(&mut software)
+		.parse::<{ known::CHANNEL_NUMBER }, [u8; 4]>(&mut channel)
+		.parse::<{ known::LIFETIME }, U32>(&mut lifetime)
+		.parse::<{ known::XOR_PEER_ADDRESS }, Addr6<Xor>>(&mut peer)
+		.parse::<{ known::DATA }, [u8]>(&mut data)
+		.parse::<{ known::REALM }, str>(&mut realm)
+		.parse::<{ known::NONCE }, [u8; 24]>(&mut nonce)
+		.parse::<{ known::REQUESTED_TRANSPORT }, [u8; 4]>(&mut transport);
+
+	let mut unk = Vec::new();
+	msg.length.set(U16::new(0));
+
+	for (prefix, attr) in attrs {
+		match attr.typ {
+			known::MESSAGE_INTEGRITY => {
+				integrity = match username {
+					Parsed::Valid("guest")
+						if attr.value == prefix.expected_message_integrity(&GUEST_KEY) =>
+					{
+						Some(&GUEST_KEY)
+					}
+					Parsed::Valid("user")
+						if attr.value == prefix.expected_message_integrity(&USER_KEY) =>
+					{
+						Some(&USER_KEY)
+					}
+					_ => None,
+				};
+				break;
+			}
+			_ if attr.is_optional() => {}
+			t => unk.push(t),
+		}
+	}
+
+	// Cap the reported allocation lifetime at 4min so conforming clients refresh
+	// well before the ~6min heartbeat-counter expiry.  A `Refresh` with lifetime
+	// 0 still clamps to 0 and is handled as a close below.
+	let lifetime = U32::new(match lifetime {
+		Parsed::Valid(l) => l.get().min(240),
+		_ => 240,
+	});
+
+	let add_mapped = |msg: &mut Stun| match mapped {
+		SocketAddr::V4(v4) => {
+			msg.append_val(
+				known::XOR_MAPPED_ADDRESS,
+				&Addr4::new(*v4.ip(), v4.port()).xor(&msg.txid),
+			);
+		}
+		SocketAddr::V6(v6) => {
+			msg.append_val(
+				known::XOR_MAPPED_ADDRESS,
+				&Addr6::new(*v6.ip(), v6.port()).xor(&msg.txid),
+			);
+		}
+	};
+
+	match msg.method {
+		Method::Allocate if !unk.is_empty() => {
+			msg.class = Class::Response;
+			msg.method = msg.method.to_err();
+			msg.length.get_mut().set(0);
+			msg.append_val(known::UNKNOWN_ATTRIBUTES, unk.as_slice());
+		}
+		_ if !unk.is_empty() => return Action::Drop,
+
+		Method::Bind => {
+			msg.class = Class::Response;
+			msg.length.get_mut().set(0);
+			add_mapped(msg);
+		}
+		// No usable credentials: 401, challenging with a fresh nonce bound to
+		// this client.  Unsigned — we have no key to sign with.
+		m if integrity.is_none()
+			|| realm != Parsed::Valid("none")
+			|| !crate::nonce::verify_nonce(&nonce, &mapped) =>
+		{
+			msg.class = Class::Response;
+			msg.method = m.to_err();
+			msg.length.get_mut().set(0);
+			if integrity.is_none() {
+				msg.append_val(known::ERROR_CODE, &[0u8, 0, 4, 1]);
+			} else {
+				msg.append_val(known::ERROR_CODE, &[0u8, 0, 4, 38]);
+			}
+			msg.append_val(known::REALM, "none");
+			// TODO: For Client's, this is the peer_addr on the socket, but for the unconnected UDP (which I haven't worked through yet) this would come from recv_from stuff.
+			msg.append_val(
+				known::NONCE,
+				// Even though this could be a 401 we still issue a 30 min nonce since
+				&crate::nonce::issue_nonce(&mapped, Duration::from_mins(30)),
+			);
+		}
+		Method::Allocate => {
+			msg.class = Class::Response;
+			msg.length.get_mut().set(0);
+			add_mapped(msg);
+			msg.append_val(known::LIFETIME, &lifetime);
+			return Action::Allocate(integrity.unwrap());
+		}
+		// Close notification: tear the allocation down.
+		Method::Refresh if lifetime.get() == 0 => return Action::Close,
+		Method::Refresh => {
+			msg.class = Class::Response;
+			msg.length.get_mut().set(0);
+			msg.append_val(known::LIFETIME, &lifetime);
+			msg.append_val(
+				known::MESSAGE_INTEGRITY,
+				&msg.trim().expected_message_integrity(integrity.unwrap()),
+			);
+			return Action::Refresh(size_of_val(msg.trim()));
+		}
+		Method::AddPermission => {
+			msg.class = Class::Response;
+			msg.length.get_mut().set(0);
+		}
+		// We don't do channels.  438 with *no* NONCE attribute is the refusal
+		// that costs nothing: we've just told Chrome its nonce is expired, so it
+		// won't retransmit with that one, and we gave it no replacement, so it
+		// drops the request — without expiring the nonce it's happily using for
+		// everything else.  Anything else is fatal for the entry (400 was tried)
+		// and tears down the peer's Send/Data indication path a few seconds
+		// after it came up.  So: don't add REALM/NONCE here for symmetry with
+		// the stale-nonce arm above — that's what makes it a no-op rather than a
+		// retry loop — and don't touch any of it without an e2e that holds a
+		// relayed pair open for a minute (`tests/soak.html`).
+		Method::UseChannel => {
+			msg.class = Class::Response;
+			msg.method = msg.method.to_err();
+			msg.length.get_mut().set(0);
+			msg.append_val(known::ERROR_CODE, &[0u8, 0, 4, 38]);
+		}
+		_ => return Action::Drop,
+	}
+
+	if let Some(authkey) = integrity {
+		msg.append_val(
+			known::MESSAGE_INTEGRITY,
+			&msg.trim().expected_message_integrity(authkey),
+		);
+	}
+	Action::Reply(size_of_val(msg.trim()))
+}
 
 type Never = core::convert::Infallible;
 pub fn main() -> Result<Never> {
@@ -418,84 +594,79 @@ pub fn main() -> Result<Never> {
 						continue;
 					}
 
-					// let (n, remote, local) = match recv_with_local(&udp, &mut buffer) {
-					// 	Ok(v) => v,
-					// 	Err(e) if e.kind() == ErrorKind::WouldBlock => break,
-					// 	Err(e) => return Err(e.into()),
-					// };
-					// if n < 20 {
-					// 	continue;
-					// }
-					// let Ok(msg) = Stun::try_mut_from_bytes(&mut buffer).map_err(|_| ()) else {
-					// 	continue;
-					// };
-					// if msg.txid.id == [0; 12] {
-					// 	continue;
-					// }
-					// if msg.class != Class::Request
-					// 	|| msg.method == Method::Recv
-					// 	|| msg.method.is_err()
-					// {
-					// 	continue;
-					// }
+					let mapped = match sender.ip().to_canonical() {
+						IpAddr::V4(v4) => SocketAddr::V4(SocketAddrV4::new(v4, sender.port())),
+						IpAddr::V6(v4) => {
+							SocketAddr::V6(SocketAddrV6::new(v4, sender.port(), 0, 0))
+						}
+					};
+					// NOTE: For when sending, the local address is already sitting in the control_buffer.  I think we can just sendmsg using the same value we received.
 
-					// match msg.method {
-					// 	// Stateless binding reply from the correct source address.
-					// 	Method::Bind => {
-					// 		let unspec = SocketAddrV6::new(Ipv6Addr::UNSPECIFIED, 0, 0, 0);
-					// 		if let Turn::Respond(resp) =
-					// 			handle_turn(unspec, remote, msg, &network, &nonces)?
-					// 		{
-					// 			let end = size_of_val(resp.trim());
-					// 			let _ = send_from(&udp, local, remote, &buffer[..end]);
-					// 		}
-					// 	}
-					// 	// Fork a connected socket for a new allocation.
-					// 	Method::Allocate => {
-					// 		if by_peer.contains_key(&remote) {
-					// 			// Retransmit that raced the fork; the connected
-					// 			// socket will service further retransmits.
-					// 			continue;
-					// 		}
-					// 		let entry = streams.vacant_entry();
-					// 		let key = entry.key();
-					// 		let Some(relayed) = relay.from_key(key) else {
-					// 			warn!("relay pool full; dropping Allocate");
-					// 			continue;
-					// 		};
-					// 		let Turn::Respond(resp) =
-					// 			handle_turn(relayed, remote, msg, &network, &nonces)?
-					// 		else {
-					// 			continue;
-					// 		};
-					// 		let success = !resp.method.is_err();
-					// 		let end = size_of_val(resp.trim());
-					// 		if success {
-					// 			let sock = connected_udp(
-					// 				SocketAddrV6::new(local, server_port, 0, 0),
-					// 				remote,
-					// 				UdpOpt::ReusePort,
-					// 			)?;
-					// 			poll.registry().register(
-					// 				&mut SourceFd(&sock.as_raw_fd()),
-					// 				Token(key),
-					// 				Interest::READABLE,
-					// 			)?;
-					// 			let _ = sock.send(&buffer[..end]);
-					// 			entry.insert(sock);
-					// 			by_peer.insert(remote, key);
-					// 			refresh.insert(key, 0);
-					// 		} else {
-					// 			// Auth/validation error: reply off the wildcard,
-					// 			// do not allocate (vacant entry is dropped).
-					// 			let _ = send_from(&udp, local, remote, &buffer[..end]);
-					// 		}
-					// 	}
-					// 	// Refresh/CreatePermission/Send/... on the wildcard are
-					// 	// packets queued before the split: drop them.
-					// 	_ => continue,
-					// }
-					break;
+					let end = match handle_turn(msg, mapped) {
+						// Drop everything that isn't stateless or allocate
+						Action::Close | Action::Drop | Action::Refresh(_) => {
+							continue;
+						}
+						Action::Reply(end) => end,
+						Action::Allocate(authkey) => {
+							let socket =
+								Socket::new(Domain::IPV6, Type::DGRAM, Some(Protocol::UDP))?;
+							let local = SockAddr::from(SocketAddrV6::new(
+								Ipv6Addr::from_octets(local.ipi6_addr.s6_addr),
+								3478,
+								0,
+								0,
+							));
+							let peer =
+								SockAddr::from(SocketAddrV6::new(sender.ip(), sender.port(), 0, 0));
+
+							socket.set_reuse_address(true)?;
+							socket.set_reuse_port(true)?;
+							socket.set_nonblocking(true)?;
+							// Bind to whatever local address the packet was received to
+							socket.bind(&local)?;
+							// Connect to whatever remote address
+							match socket.connect(&peer) {
+								Ok(_) => {}
+								// If the address is inuse then we must have already issued an allocation / established a UDP socket to them:
+								Err(reason) => {
+									trace!(
+										?reason,
+										"Failed to connect socket.  Claude says linux won't check for duplicate 4tuple during connect only during bind.  I find that hard to believe."
+									);
+									continue;
+								}
+							};
+
+							let relayed = server.new_client(Conn::Udp(socket.into()))?;
+							// Since we successfully allocated a client, we respond from our unconnected socket (connected socket gets eaten by server)
+							let xor_relayed =
+								Addr6::new(*relayed.ip(), relayed.port()).xor(&msg.txid);
+							msg.append_val(known::XOR_RELAYED_ADDRESS, &xor_relayed);
+							msg.append_val(
+								known::MESSAGE_INTEGRITY,
+								&msg.trim().expected_message_integrity(authkey),
+							);
+							size_of_val(msg.trim())
+						}
+					};
+
+					// Send the reply/allocated message
+					let iov = [IoSlice::new(&buffer[..end])];
+					let _ = match nix::sys::socket::sendmsg(
+						udp.as_raw_fd(),
+						&iov,
+						// The local socket address is already in the control buffer from when we read it:
+						&[ControlMessage::Ipv6PacketInfo(&local)],
+						MsgFlags::empty(),
+						Some(&sender),
+					)
+					.map_err(Error::from)
+					{
+						Err(e) if e.kind() == ErrorKind::Interrupted => continue,
+						Err(e) if e.kind() == ErrorKind::WouldBlock => continue,
+						v => v?,
+					};
 				},
 				TUN => loop {
 					const TURN_DATA_OVERHEAD: usize = 20 + 24 + 4;
@@ -652,64 +823,36 @@ pub fn main() -> Result<Never> {
 						v => v?,
 					};
 
-					let mut username = Parsed::NotPresent;
-					let mut software = Parsed::NotPresent;
-					let mut channel = Parsed::NotPresent;
-					let mut lifetime = Parsed::NotPresent;
-					let mut peer = Parsed::NotPresent;
-					let mut data = Parsed::NotPresent;
-					let mut realm = Parsed::NotPresent;
-					let mut nonce = Parsed::NotPresent;
-					let mut transport = Parsed::NotPresent;
-					let mut integrity = None;
+					// Handle Send indications here since we only want to process them via established sockets
+					if msg.class == Class::Request && msg.method == Method::Send {
+						let mut peer = Parsed::NotPresent;
+						let mut data = Parsed::NotPresent;
 
-					let attrs = msg
-						.trim()
-						.parse::<{ known::USERNAME }, str>(&mut username)
-						.parse::<{ known::SOFTWARE }, str>(&mut software)
-						.parse::<{ known::CHANNEL_NUMBER }, [u8; 4]>(&mut channel)
-						.parse::<{ known::LIFETIME }, U32>(&mut lifetime)
-						.parse::<{ known::XOR_PEER_ADDRESS }, Addr6<Xor>>(&mut peer)
-						.parse::<{ known::DATA }, [u8]>(&mut data)
-						.parse::<{ known::REALM }, str>(&mut realm)
-						.parse::<{ known::NONCE }, [u8; 24]>(&mut nonce)
-						.parse::<{ known::REQUESTED_TRANSPORT }, [u8; 4]>(&mut transport);
+						let mut attrs = msg
+							.trim()
+							.parse::<{ known::XOR_PEER_ADDRESS }, Addr6<Xor>>(&mut peer)
+							.parse::<{ known::DATA }, [u8]>(&mut data)
+							.filter(|(_, a)| !a.is_optional());
+						msg.length.set(U16::new(0));
+						// Ensure that there are no unknown attributes (but no need to collect them into unk, since we can't respond to an indication anyway)
+						let None = attrs.next() else { continue };
 
-					let mut unk = Vec::new();
-					msg.length.set(U16::new(0));
-
-					for (prefix, attr) in attrs {
-						match attr.typ {
-							known::MESSAGE_INTEGRITY => {
-								integrity = match username {
-									Parsed::Valid("guest")
-										if attr.value
-											== prefix.expected_message_integrity(&GUEST_KEY) =>
-									{
-										Some(&GUEST_KEY)
-									}
-									Parsed::Valid("user")
-										if attr.value
-											== prefix.expected_message_integrity(&USER_KEY) =>
-									{
-										Some(&USER_KEY)
-									}
-									_ => None,
-								};
-								break;
-							}
-							_ if attr.is_optional() => {}
-							t => unk.push(t),
-						}
+						let (Parsed::Valid(peer), Parsed::Valid(data)) = (peer, data) else {
+							continue;
+						};
+						let peer = peer.xor(&msg.txid);
+						// Realy the data as UDP
+						let _ = write_network_udp(
+							&network,
+							(
+								client.relayed.ip().octets(),
+								U16::new(client.relayed.port()),
+							),
+							(peer.ip().octets(), U16::new(peer.port())),
+							data,
+						);
+						continue;
 					}
-
-					// Cap the reported allocation lifetime at 4min so conforming clients refresh
-					// well before the ~6min heartbeat-counter expiry.  A `Refresh` with lifetime
-					// 0 still clamps to 0 and is handled as a close below.
-					let lifetime = U32::new(match lifetime {
-						Parsed::Valid(l) => l.get().min(240),
-						_ => 240,
-					});
 
 					// Get the canonical peer address off the established socket
 					let sock = SockRef::from(&client.conn);
@@ -720,96 +863,28 @@ pub fn main() -> Result<Never> {
 							SocketAddr::V6(SocketAddrV6::new(v4, mapped.port(), 0, 0))
 						}
 					};
-					let add_mapped = |msg: &mut Stun| match mapped {
-						SocketAddr::V4(v4) => {
-							msg.append_val(
-								known::XOR_MAPPED_ADDRESS,
-								&Addr4::new(*v4.ip(), v4.port()).xor(&msg.txid),
-							);
-						}
-						SocketAddr::V6(v6) => {
-							msg.append_val(
-								known::XOR_MAPPED_ADDRESS,
-								&Addr6::new(*v6.ip(), v6.port()).xor(&msg.txid),
-							);
-						}
-					};
 
-					match msg.method {
-						Method::Allocate if !unk.is_empty() => {
-							msg.class = Class::Response;
-							msg.method = msg.method.to_err();
-							msg.length.get_mut().set(0);
-							msg.append_val(known::UNKNOWN_ATTRIBUTES, unk.as_slice());
+					// Handle the TURN message
+					let end = match handle_turn(msg, mapped) {
+						Action::Drop => continue,
+						Action::Reply(end) => end,
+						Action::Close => {
+							server.remove_client(client)?;
+							break;
 						}
-						_ if !unk.is_empty() => continue,
-
-						Method::Bind => {
-							msg.class = Class::Response;
-							msg.length.get_mut().set(0);
-							add_mapped(msg);
-						}
-						Method::Send => {
-							let (Parsed::Valid(peer), Parsed::Valid(data)) = (peer, data) else {
-								continue;
-							};
-							let peer = peer.xor(&msg.txid);
-
-							// Realy the data as UDP
-							let _ = write_network_udp(
-								&network,
-								(
-									client.relayed.ip().octets(),
-									U16::new(client.relayed.port()),
-								),
-								(peer.ip().octets(), U16::new(peer.port())),
-								data,
-							);
-
-							continue;
-						}
-						// No usable credentials: 401, challenging with a fresh nonce bound to
-						// this client.  Unsigned — we have no key to sign with.
-						m if integrity.is_none()
-							|| realm != Parsed::Valid("none")
-							|| !crate::nonce::verify_nonce(&nonce, &mapped) =>
-						{
-							msg.class = Class::Response;
-							msg.method = m.to_err();
-							msg.length.get_mut().set(0);
-							if integrity.is_none() {
-								msg.append_val(known::ERROR_CODE, &[0u8, 0, 4, 1]);
-							} else {
-								msg.append_val(known::ERROR_CODE, &[0u8, 0, 4, 38]);
-							}
-							msg.append_val(known::REALM, "none");
-							// TODO: For Client's, this is the peer_addr on the socket, but for the unconnected UDP (which I haven't worked through yet) this would come from recv_from stuff.
-							msg.append_val(
-								known::NONCE,
-								// Even though this could be a 401 we still issue a 30 min nonce since
-								&crate::nonce::issue_nonce(&mapped, Duration::from_mins(30)),
-							);
-						}
-						Method::Allocate => {
-							msg.class = Class::Response;
-							msg.length.get_mut().set(0);
-							add_mapped(msg);
+						Action::Allocate(authkey) => {
+							// Allocate received over a connected socket (likely TCP, though could be retransmission hitting a newly connected UDP socket)
 							let xor_relayed =
 								Addr6::new(*client.relayed.ip(), client.relayed.port())
 									.xor(&msg.txid);
 							msg.append_val(known::XOR_RELAYED_ADDRESS, &xor_relayed);
-							msg.append_val(known::LIFETIME, &lifetime);
+							msg.append_val(
+								known::MESSAGE_INTEGRITY,
+								&msg.trim().expected_message_integrity(authkey),
+							);
+							size_of_val(msg.trim())
 						}
-						// Close notification: tear the allocation down.
-						Method::Refresh if lifetime.get() == 0 => {
-							server.remove_client(client)?;
-							break;
-						}
-						Method::Refresh => {
-							msg.class = Class::Response;
-							msg.length.get_mut().set(0);
-							msg.append_val(known::LIFETIME, &lifetime);
-
+						Action::Refresh(end) => {
 							// Update keepalive tracking
 							client.keepalives.set(0);
 							client.timeout.set(Server::timeout());
@@ -819,37 +894,10 @@ pub fn main() -> Result<Never> {
 								unsafe { server.timeouts.cursor_mut_from_ptr(&*client) }.remove();
 							};
 							server.timeouts.push_back(client.clone());
+							end
 						}
-						Method::AddPermission => {
-							msg.class = Class::Response;
-							msg.length.get_mut().set(0);
-						}
-						// We don't do channels.  438 with *no* NONCE attribute is the refusal
-						// that costs nothing: we've just told Chrome its nonce is expired, so it
-						// won't retransmit with that one, and we gave it no replacement, so it
-						// drops the request — without expiring the nonce it's happily using for
-						// everything else.  Anything else is fatal for the entry (400 was tried)
-						// and tears down the peer's Send/Data indication path a few seconds
-						// after it came up.  So: don't add REALM/NONCE here for symmetry with
-						// the stale-nonce arm above — that's what makes it a no-op rather than a
-						// retry loop — and don't touch any of it without an e2e that holds a
-						// relayed pair open for a minute (`tests/soak.html`).
-						Method::UseChannel => {
-							msg.class = Class::Response;
-							msg.method = msg.method.to_err();
-							msg.length.get_mut().set(0);
-							msg.append_val(known::ERROR_CODE, &[0u8, 0, 4, 38]);
-						}
-						_ => continue,
-					}
+					};
 
-					if let Some(authkey) = integrity {
-						msg.append_val(
-							known::MESSAGE_INTEGRITY,
-							&msg.trim().expected_message_integrity(authkey),
-						);
-					}
-					let end = size_of_val(msg.trim());
 					match client.conn.maybe_send_frame(&buffer[..end]) {
 						Err(e) if e.kind() == ErrorKind::Interrupted => continue,
 						Err(e) if e.kind() == ErrorKind::WouldBlock => break,
