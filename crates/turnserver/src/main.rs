@@ -1,7 +1,7 @@
 use clap::Parser;
 use eyre::{Result, eyre};
 use intrusive_collections::{
-	KeyAdapter, LinkedList, LinkedListLink, RBTree, RBTreeLink, intrusive_adapter,
+	KeyAdapter, LinkedList, LinkedListLink, RBTree, RBTreeLink, intrusive_adapter, rbtree::Entry,
 };
 use ipnet::Ipv6Net;
 use libc::in6_pktinfo;
@@ -243,6 +243,7 @@ impl Server {
 	}
 	fn new_client(&mut self, conn: Conn) -> Result<SocketAddrV6, Error> {
 		// 1. Find a random ip+port that's not currently occupied
+		let mut tries = 5;
 		let (relayed, i) = loop {
 			let ret = SocketAddrV6::new(
 				random_range(self.ip_range.clone()).into(),
@@ -250,10 +251,14 @@ impl Server {
 				0,
 				0,
 			);
-			match self.relayed.entry(&ret) {
-				intrusive_collections::rbtree::Entry::Vacant(v) => break (ret, v),
-				_ => {}
-			}
+			let Entry::Vacant(v) = self.relayed.entry(&ret) else {
+				if tries == 0 {
+					return Err(Error::new(ErrorKind::QuotaExceeded, ""));
+				}
+				tries -= 1;
+				continue;
+			};
+			break (ret, v);
 		};
 		// 2. Create the client
 		let client = Rc::new(Client {
@@ -492,6 +497,7 @@ pub fn main() -> Result<Never> {
 	// Parse command line arguments
 	let args = Args::try_parse()?;
 	// WARN: The Iterator and DoubleEndedIterator implementation for Ipv6AddrRange are O(1) for these functions
+	#[allow(clippy::iter_nth_zero)]
 	let first_ip = args.net.hosts().nth(0).expect("Empty IP subnet");
 	let last_ip = args.net.hosts().nth_back(0).expect("Empty IP subnet");
 

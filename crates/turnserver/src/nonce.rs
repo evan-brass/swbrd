@@ -7,8 +7,8 @@ use std::{
 };
 use stun::Parsed;
 
-static NONCE_KEY: LazyLock<[u8; 32]> = LazyLock::new(|| rand::random());
-static STARTUP: LazyLock<Instant> = LazyLock::new(|| Instant::now());
+static NONCE_KEY: LazyLock<[u8; 32]> = LazyLock::new(rand::random);
+static STARTUP: LazyLock<Instant> = LazyLock::new(Instant::now);
 
 // We don't use HMAC here, just a hash.
 fn expected_tag(ts: u32, client: &SocketAddr) -> u64 {
