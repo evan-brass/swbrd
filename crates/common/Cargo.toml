@@ -5,6 +5,7 @@ edition = "2024"
 license = "MIT-0"
 
 [dependencies]
+mio = { version = "1.2.2", features = ["os-ext", "os-poll"] }
 tun-rs = "2.8.3"
 zerocopy = { version = "0.8.50", features = ["derive"] }
 

@@ -12,6 +12,7 @@ use zerocopy::{
 };
 
 pub mod dtls;
+pub mod poller;
 
 pub mod proto {
 	pub const UDP: u8 = 17;
