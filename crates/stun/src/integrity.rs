@@ -21,7 +21,6 @@ impl Stun {
 		let mut hash2 = Sha1::new();
 		hash2.update(authkey.opad);
 		hash2.update(sum1);
-		
 
 		hash2.finalize().0
 	}
