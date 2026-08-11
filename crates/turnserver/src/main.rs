@@ -636,6 +636,7 @@ pub fn main() -> Result<Never> {
 							socket.set_reuse_address(true)?;
 							socket.set_reuse_port(true)?;
 							socket.set_nonblocking(true)?;
+							SockRef::from(&socket).set_path_mtu_discovery(true)?;
 							// Bind to whatever local address the packet was received to
 							socket.bind(&local)?;
 							// Connect to whatever remote address
