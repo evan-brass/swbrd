@@ -297,6 +297,7 @@ dependencies = [
  "signal-hook",
  "slab",
  "socket2",
+ "socket3",
  "tracing",
  "tracing-subscriber",
  "tun-rs",

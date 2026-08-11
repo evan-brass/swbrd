@@ -19,7 +19,8 @@ use openssl::ssl::{
 	Ssl, SslAcceptor, SslContext, SslContextRef, SslFiletype, SslMethod, SslVersion,
 };
 use slab::Slab;
-use socket2::Socket;
+use socket2::{Domain, Protocol, SockAddr, SockRef, Socket, Type};
+use socket3::SocketMtuExt;
 use tracing_subscriber::EnvFilter;
 use tun_rs::{DeviceBuilder, SyncDevice};
 use zerocopy::{IntoBytes, network_endian::U16};
@@ -133,8 +134,14 @@ fn create_connection(
 ) -> Result<()> {
 	let local = SocketAddrV6::new(Ipv6Addr::from(send_from.0), send_from.1.get(), 0, 0);
 	let remote = SocketAddrV6::new(Ipv6Addr::from(send_to.0), send_to.1.get(), 0, 0);
-	let sock = connected_udp(local, remote, UdpOpt::Transparent)?;
-	set_v6_pmtudisc(&sock)?;
+	let sock = Socket::new(Domain::IPV6, Type::DGRAM, Some(Protocol::UDP))?;
+	sock.set_only_v6(true)?;
+	#[cfg(target_os = "linux")]
+	sock.set_ip_transparent_v6(true)?;
+	SockRef::from(&sock).set_path_mtu_discovery(true)?;
+	sock.bind(&SockAddr::from(local))?;
+	sock.connect(&SockAddr::from(remote))?;
+	sock.set_nonblocking(true)?;
 
 	let hs = cookie::promote(ctx, verified)?;
 
@@ -235,7 +242,10 @@ pub fn main() -> Result<Never> {
 	// connection's connected transparent socket by nftables `socket transparent`.
 	let network = {
 		let mut builder = DeviceBuilder::new();
-		builder = builder.offload(true); // checksum offload
+		#[cfg(target_os = "linux")]
+		{
+			builder = builder.offload(true); // checksum offload
+		}
 		if let Some(if_name) = args.if_name {
 			builder = builder.name(if_name);
 		}
@@ -327,7 +337,7 @@ pub fn main() -> Result<Never> {
 										0,
 									);
 									let conn = &mut streams[key];
-									if reconnect(&conn.sock, new_peer).is_ok() {
+									if conn.sock.connect(&SockAddr::from(new_peer)).is_ok() {
 										conn.highest_read_seq = seq;
 										conn.last_update = Instant::now();
 										tracing::debug!(
@@ -354,7 +364,7 @@ pub fn main() -> Result<Never> {
 									SslIo::Syscall(err)
 										if err.raw_os_error() == Some(libc::EMSGSIZE) =>
 									{
-										if let Ok(pmtu) = v6_path_mtu(&conn.sock) {
+										if let Ok(pmtu) = SockRef::from(&conn.sock).path_mtu() {
 											let _ = conn.ssl.set_mtu(pmtu.saturating_sub(IP_UDP));
 											let data_mtu = ffi::data_mtu(&conn.ssl) as u32;
 											let _ = write_network_icmp(
