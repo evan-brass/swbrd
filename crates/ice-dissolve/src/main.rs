@@ -1,3 +1,5 @@
+use std::net::{Ipv6Addr, SocketAddrV6};
+
 use eyre::Result;
 
 use common::{Packet, read_network, write_network_udp};
@@ -28,7 +30,7 @@ fn main() -> Result<Never> {
 		let Packet::Udp { ip, udp } = read_network(
 			&network,
 			&mut buffer,
-			[0; 16], /* ICE Dissolve can't emit ICMP errors because our firewall rules only redirect UDP packets to this interface. */
+			&Ipv6Addr::UNSPECIFIED, /* ICE Dissolve can't emit ICMP errors because our firewall rules only redirect UDP packets to this interface. */
 		)?
 		else {
 			continue;
@@ -55,8 +57,8 @@ fn main() -> Result<Never> {
 
 		let _ = write_network_udp(
 			&network,
-			(ip.dst, udp.dst_port),
-			(ip.src, udp.src_port),
+			&SocketAddrV6::new(Ipv6Addr::from_octets(ip.dst), udp.dst_port.get(), 0, 0),
+			&SocketAddrV6::new(Ipv6Addr::from_octets(ip.src), udp.src_port.get(), 0, 0),
 			frame,
 		);
 	}

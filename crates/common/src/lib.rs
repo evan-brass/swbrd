@@ -1,7 +1,7 @@
 use core::mem::{offset_of, size_of};
 use std::{
 	io::{IoSlice, IoSliceMut},
-	net::Ipv6Addr,
+	net::{Ipv6Addr, SocketAddrV6},
 	str::from_utf8,
 };
 use tun_rs::SyncDevice;
@@ -38,7 +38,13 @@ pub struct Ip6 {
 }
 impl Ip6 {
 	#[allow(clippy::unusual_byte_groupings)]
-	pub const FLAGS: u32 = u32::to_be(0b0110__0000_0000__0000_0000_0000_0000_0000);
+	pub const VERSION: u32 = u32::to_be(0b0110__0000_0000__0000_0000_0000_0000_0000);
+	#[allow(clippy::unusual_byte_groupings)]
+	pub const FLOWINFO_MASK: u32 = u32::to_be(0b0000__0000_0000__1111_1111_1111_1111_1111);
+
+	pub fn flow_info(&self) -> u32 {
+		u32::from_be(self.flags & Self::FLOWINFO_MASK)
+	}
 }
 
 pub trait Ipsum: KnownLayout + Immutable + IntoBytes {
@@ -194,21 +200,22 @@ pub enum Packet {
 
 pub fn write_network_udp(
 	network: &SyncDevice,
-	from: ([u8; 16], U16),
-	to: ([u8; 16], U16),
+	from: &SocketAddrV6,
+	to: &SocketAddrV6,
 	buffer: &[u8],
 ) -> Result<(), std::io::Error> {
 	let ip = Ip6 {
-		flags: Ip6::FLAGS,
+		// TODO: Which flow info should you pass??  Socket Addresses having a flow info is so weird.
+		flags: Ip6::VERSION | to.flowinfo().to_be(),
 		length: U16::new((size_of::<Udp>() + buffer.len()) as u16),
 		next_header: proto::UDP,
 		hop_limit: 64,
-		src: from.0,
-		dst: to.0,
+		src: from.ip().octets(),
+		dst: to.ip().octets(),
 	};
 	let mut udp = Udp {
-		src_port: from.1,
-		dst_port: to.1,
+		src_port: from.port().into(),
+		dst_port: to.port().into(),
 		length: ip.length,
 		checksum: 0,
 	};
@@ -229,7 +236,7 @@ pub fn write_network_udp(
 #[allow(clippy::too_many_arguments)]
 pub fn write_network_icmp(
 	network: &SyncDevice,
-	from: [u8; 16],
+	from: &Ipv6Addr,
 	typ: u8,
 	code: u8,
 	arg: u32,
@@ -254,10 +261,10 @@ pub fn write_network_icmp(
 	)];
 
 	let ip = Ip6 {
-		flags: Ip6::FLAGS,
+		flags: Ip6::VERSION,
 		next_header: proto::ICMP6,
 		hop_limit: 64,
-		src: from,
+		src: from.octets(),
 		dst: inner_ip.src,
 		length: U16::new(
 			(size_of::<Icmp6>() + size_of::<Ip6>() + size_of::<Udp>() + size_of_val(quoted)) as u16,
@@ -291,7 +298,7 @@ pub fn read_network(
 	network: &SyncDevice,
 	buffer: &mut [u8],
 	// ICMP Errors will be issued from this IP address
-	router: [u8; 16],
+	router: &Ipv6Addr,
 ) -> Result<Packet, std::io::Error> {
 	loop {
 		let mut vnet = VirtioNet::new_zeroed();

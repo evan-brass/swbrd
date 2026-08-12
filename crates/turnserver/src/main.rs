@@ -633,7 +633,7 @@ pub fn main() -> Result<Never> {
 					let packet = match read_network(
 						&network,
 						&mut buffer[TURN_DATA_OVERHEAD..],
-						args.router.octets(),
+						&args.router,
 					) {
 						Err(e) if e.kind() == ErrorKind::Interrupted => continue,
 						Err(e) if e.kind() == ErrorKind::WouldBlock => break,
@@ -736,7 +736,7 @@ pub fn main() -> Result<Never> {
 								let datagram_length = udp.length.get() as usize - size_of::<Udp>();
 								let _ = write_network_icmp(
 									&network,
-									receiver.ip().octets(),
+									receiver.ip(),
 									2,
 									0, // ICMPv6 Packet Too Big
 									reported_mtu,
@@ -755,7 +755,7 @@ pub fn main() -> Result<Never> {
 						let datalen = udp.length.get() as usize - size_of::<Udp>();
 						let _ = write_network_icmp(
 							&network,
-							receiver.ip().octets(),
+							receiver.ip(),
 							1,
 							4, // ICMP Port Unreachable
 							0,
@@ -801,16 +801,9 @@ pub fn main() -> Result<Never> {
 							continue;
 						};
 						let peer = peer.xor(&msg.txid);
+						let peer = SocketAddrV6::new(peer.ip(), peer.port(), 0, 0);
 						// Realy the data as UDP
-						let _ = write_network_udp(
-							&network,
-							(
-								client.relayed.ip().octets(),
-								U16::new(client.relayed.port()),
-							),
-							(peer.ip().octets(), U16::new(peer.port())),
-							data,
-						);
+						let _ = write_network_udp(&network, &client.relayed, &peer, data);
 						continue;
 					}
 
