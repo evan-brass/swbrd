@@ -19,7 +19,7 @@
 //! rejected, so a parsing disagreement can't leave a virgin Ssl behind as a
 //! cookie bypass.
 
-use std::{os::fd::RawFd, sync::LazyLock};
+use std::{net::SocketAddrV6, os::fd::RawFd, sync::LazyLock};
 
 use common::dtls::{
 	COOKIE_LEN, ContentType, Fragment, HandshakeHeader, HelloVerifyRequest, RecordHeader, U24,
@@ -36,8 +36,6 @@ use openssl::{
 use zerocopy::{IntoBytes, network_endian::U16};
 
 use crate::ffi::{self, BioPair, SslIo};
-
-type Addr = ([u8; 16], U16);
 
 /// The cookie an Ssl expects, stashed so the cookie callbacks can reach it
 static INDEX: LazyLock<openssl::ex_data::Index<Ssl, [u8; COOKIE_LEN]>> =
@@ -94,19 +92,24 @@ impl Keys {
 
 	/// HMAC over both src and dst: dst ip+port is our stand-in for DTLS
 	/// connection ids, so a cookie must not be portable between destinations.
-	fn cookie(&self, src: Addr, dst: Addr) -> Result<[u8; COOKIE_LEN]> {
+	fn cookie(&self, src: SocketAddrV6, dst: SocketAddrV6) -> Result<[u8; COOKIE_LEN]> {
 		let mut signer = Signer::new(MessageDigest::sha256(), &self.hmac)?;
-		signer.update(&src.0)?;
-		signer.update(src.1.as_bytes())?;
-		signer.update(&dst.0)?;
-		signer.update(dst.1.as_bytes())?;
+		signer.update(&src.ip().octets())?;
+		signer.update(&src.port().to_be_bytes())?;
+		signer.update(&dst.ip().octets())?;
+		signer.update(&dst.port().to_be_bytes())?;
 		let mut cookie = [0; COOKIE_LEN];
 		signer.sign(&mut cookie)?;
 		Ok(cookie)
 	}
 
 	/// Statelessly judge a datagram from an unknown src/dst pair
-	pub fn inspect<'a>(&self, src: Addr, dst: Addr, datagram: &'a [u8]) -> Verdict<'a> {
+	pub fn inspect<'a>(
+		&self,
+		src: SocketAddrV6,
+		dst: SocketAddrV6,
+		datagram: &'a [u8],
+	) -> Verdict<'a> {
 		let Some(fragment) = Fragment::parse(datagram) else {
 			return Verdict::Drop;
 		};
@@ -279,10 +282,15 @@ mod tests {
 	use std::{
 		collections::VecDeque,
 		io::{Read, Write},
+		str::FromStr,
 	};
 
-	const SRC: Addr = ([1; 16], U16::new(1111));
-	const DST: Addr = ([2; 16], U16::new(2222));
+	const SRC: LazyLock<SocketAddrV6> = LazyLock::new(|| {
+		SocketAddrV6::from_str("[0101:0101:0101:0101:0101:0101:0101]:1111").unwrap()
+	});
+	const DST: LazyLock<SocketAddrV6> = LazyLock::new(|| {
+		SocketAddrV6::from_str("[0202:0202:0202:0202:0202:0202:0202]:2222").unwrap()
+	});
 
 	/// An in-memory datagram BIO for the DTLS *client* side of the tests: one
 	/// incoming datagram per read, one outgoing datagram per write.
@@ -384,7 +392,7 @@ mod tests {
 		let flight = std::mem::take(&mut client.get_mut().outgoing);
 		let mut hvr = None;
 		for (i, datagram) in flight.iter().enumerate() {
-			match keys.inspect(SRC, DST, datagram) {
+			match keys.inspect(*SRC, *DST, datagram) {
 				Verdict::HelloVerify(h) if i == 0 => hvr = Some(h),
 				Verdict::Drop if i > 0 => {}
 				_ => panic!("wrong verdict for first-flight datagram {i}"),
@@ -427,7 +435,7 @@ mod tests {
 		// Entry::Occupied path (over the connected socket) would
 		let mut server = None;
 		for (i, datagram) in flight.iter().enumerate() {
-			match keys.inspect(SRC, DST, datagram) {
+			match keys.inspect(*SRC, *DST, datagram) {
 				Verdict::Accept(verified) if i == 0 => {
 					server = Some(promote(&ctx, &verified).unwrap());
 				}
@@ -466,7 +474,7 @@ mod tests {
 
 		let mut client = client(None);
 		let flight = verify_retry(&keys, &mut client);
-		let Verdict::Accept(verified) = keys.inspect(SRC, DST, &flight[0]) else {
+		let Verdict::Accept(verified) = keys.inspect(*SRC, *DST, &flight[0]) else {
 			panic!("expected accept");
 		};
 
@@ -495,21 +503,25 @@ mod tests {
 		let flight = verify_retry(&keys, &mut client);
 		let retry = &flight[0];
 
-		assert!(matches!(keys.inspect(SRC, DST, retry), Verdict::Accept(_)));
-		// Replay from elsewhere, or to another destination: back to verification
-		let other = ([3; 16], U16::new(3333));
 		assert!(matches!(
-			keys.inspect(other, DST, retry),
+			keys.inspect(*SRC, *DST, retry),
+			Verdict::Accept(_)
+		));
+		// Replay from elsewhere, or to another destination: back to verification
+		let other =
+			SocketAddrV6::from_str("[0303:0303:0303:0303:0303:0303:0303:0303]:3333").unwrap();
+		assert!(matches!(
+			keys.inspect(other, *DST, retry),
 			Verdict::HelloVerify(_)
 		));
 		assert!(matches!(
-			keys.inspect(SRC, other, retry),
+			keys.inspect(*SRC, other, retry),
 			Verdict::HelloVerify(_)
 		));
 		// A different key (e.g. a restarted server): not accepted either
 		let fresh = Keys::generate().unwrap();
 		assert!(matches!(
-			fresh.inspect(SRC, DST, retry),
+			fresh.inspect(*SRC, *DST, retry),
 			Verdict::HelloVerify(_)
 		));
 	}
@@ -525,7 +537,7 @@ mod tests {
 		let mut client = client(None);
 		let flight = verify_retry(&keys, &mut client);
 
-		let Verdict::Accept(mut verified) = keys.inspect(SRC, DST, &flight[0]) else {
+		let Verdict::Accept(mut verified) = keys.inspect(*SRC, *DST, &flight[0]) else {
 			panic!("expected accept");
 		};
 		verified.cookie[0] ^= 1;
@@ -548,16 +560,16 @@ mod tests {
 	#[test]
 	fn junk_dropped() {
 		let keys = Keys::generate().unwrap();
-		assert!(matches!(keys.inspect(SRC, DST, b""), Verdict::Drop));
+		assert!(matches!(keys.inspect(*SRC, *DST, b""), Verdict::Drop));
 		assert!(matches!(
-			keys.inspect(SRC, DST, b"GET / HTTP/1.1"),
+			keys.inspect(*SRC, *DST, b"GET / HTTP/1.1"),
 			Verdict::Drop
 		));
 		// STUN magic doesn't parse as DTLS
 		assert!(matches!(
 			keys.inspect(
-				SRC,
-				DST,
+				*SRC,
+				*DST,
 				&[
 					0, 1, 0, 0, 0x21, 0x12, 0xa4, 0x42, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
 				]

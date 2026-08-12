@@ -1,8 +1,9 @@
 use std::{
-	collections::HashMap,
-	io::ErrorKind,
+	cell::{Cell, RefCell},
+	io::{Error, ErrorKind},
 	net::{Ipv6Addr, SocketAddrV6},
 	os::fd::AsRawFd,
+	rc::Rc,
 	str::FromStr,
 	sync::{
 		Arc,
@@ -12,13 +13,15 @@ use std::{
 };
 
 use clap::Parser;
-use common::{Packet, Udp, read_network, write_network_icmp, write_network_udp};
+use common::{Packet, Udp, poller::Poller, read_network, write_network_icmp, write_network_udp};
 use eyre::Result;
+use intrusive_collections::{
+	KeyAdapter, LinkedList, LinkedListLink, RBTree, RBTreeLink, intrusive_adapter,
+};
 use mio::{Events, Interest, Poll, Registry, Token, unix::SourceFd};
 use openssl::ssl::{
 	Ssl, SslAcceptor, SslContext, SslContextRef, SslFiletype, SslMethod, SslVersion,
 };
-use slab::Slab;
 use socket2::{Domain, Protocol, SockAddr, SockRef, Socket, Type};
 use socket3::SocketMtuExt;
 use tracing_subscriber::EnvFilter;
@@ -54,21 +57,52 @@ struct Args {
 /// An established or in-flight DTLS connection.  The client-facing ciphertext
 /// rides its own connected `IP_TRANSPARENT` socket, managed by OpenSSL's dgram
 /// BIO; only endpoint plaintext and first-contact ClientHellos touch the TUN.
-struct Connection {
-	ssl: Ssl,
+struct Client {
+	ssl: RefCell<Ssl>,
 	/// Connected transparent socket (owns the fd the dgram BIO borrows).
 	sock: Socket,
-	/// The relayed address the client sent to = our local addr on this socket;
-	/// the `by_addr` key and the source of forwarded plaintext / ICMP.
-	send_from: ([u8; 16], U16),
-	established: bool,
-	last_update: Instant,
+	established: Cell<bool>,
 	/// Read-direction (client write) keys, derived lazily once established and
 	/// used to authenticate roamed records for client mobility.
-	read_keys: Option<ReadKeys>,
+	read_keys: Cell<Option<ReadKeys>>,
 	/// Highest record number authenticated for mobility so far; a roamed record
 	/// must strictly exceed it to re-point the socket (anti-replay).
-	highest_read_seq: u64,
+	highest_read_seq: Cell<u64>,
+
+	bound: SocketAddrV6, // Replaces send_from
+	bound_link: RBTreeLink,
+	connected: Cell<SocketAddrV6>,
+	connected_link: RBTreeLink,
+
+	keepalives: Cell<u8>,
+	timeout: Cell<Instant>,
+	timeout_link: LinkedListLink,
+}
+impl AsRawFd for Client {
+	fn as_raw_fd(&self) -> std::os::unix::prelude::RawFd {
+		self.sock.as_raw_fd()
+	}
+}
+intrusive_adapter!(Bound = Rc<Client>: Client { bound_link => RBTreeLink });
+intrusive_adapter!(Connected = Rc<Client>: Client { connected_link => RBTreeLink });
+intrusive_adapter!(Timeout = Rc<Client>: Client { timeout_link => LinkedListLink });
+impl<'a> KeyAdapter<'a> for Bound {
+	type Key = &'a SocketAddrV6;
+	fn get_key(
+		&self,
+		value: &'a <Self::PointerOps as intrusive_collections::PointerOps>::Value,
+	) -> Self::Key {
+		&value.bound
+	}
+}
+impl KeyAdapter<'_> for Connected {
+	type Key = SocketAddrV6;
+	fn get_key(
+		&self,
+		value: &<Self::PointerOps as intrusive_collections::PointerOps>::Value,
+	) -> Self::Key {
+		value.connected.get()
+	}
 }
 
 /// Pin the negotiation to AES-128-GCM over DTLS 1.2 — the single record layout
@@ -106,118 +140,106 @@ fn load_config() -> Result<(SslContext, SslContext)> {
 	Ok((january, july))
 }
 
-/// Drop a connection: deregister its socket and forget its address.
-fn remove_conn(
-	streams: &mut Slab<Connection>,
-	by_addr: &mut HashMap<([u8; 16], U16), usize>,
-	registry: &Registry,
-	key: usize,
-) {
-	let Some(conn) = streams.try_remove(key) else {
-		return;
-	};
-	let _ = registry.deregister(&mut SourceFd(&conn.sock.as_raw_fd()));
-	by_addr.remove(&conn.send_from);
+struct Server {
+	poll: Poller<Client>,
+	bound: RBTree<Bound>,
+	connected: RBTree<Connected>,
+	timeouts: LinkedList<Timeout>,
 }
-
-/// A cookie-verified ClientHello: fork a connected transparent socket, run the
-/// cookie catch-up on an in-memory BIO pair, then cut over to the fd-backed
-/// dgram BIO and register the socket.
-fn create_connection(
-	ctx: &SslContextRef,
-	verified: &Verified,
-	send_from: ([u8; 16], U16),
-	send_to: ([u8; 16], U16),
-	streams: &mut Slab<Connection>,
-	by_addr: &mut HashMap<([u8; 16], U16), usize>,
-	registry: &Registry,
-) -> Result<()> {
-	let local = SocketAddrV6::new(Ipv6Addr::from(send_from.0), send_from.1.get(), 0, 0);
-	let remote = SocketAddrV6::new(Ipv6Addr::from(send_to.0), send_to.1.get(), 0, 0);
-	let sock = Socket::new(Domain::IPV6, Type::DGRAM, Some(Protocol::UDP))?;
-	sock.set_only_v6(true)?;
-	#[cfg(target_os = "linux")]
-	sock.set_ip_transparent_v6(true)?;
-	SockRef::from(&sock).set_path_mtu_discovery(true)?;
-	sock.bind(&SockAddr::from(local))?;
-	sock.connect(&SockAddr::from(remote))?;
-	sock.set_nonblocking(true)?;
-
-	let hs = cookie::promote(ctx, verified)?;
-
-	// Unfragmented hello: the ServerHello flight is already produced; send it on
-	// the socket before cutover.  (Fragmented: nothing yet — the rest arrives on
-	// the socket.)
-	for datagram in hs.drain_output() {
-		let _ = sock.send(&datagram);
+impl Server {
+	fn remove_conn(&mut self, client: Rc<Client>) -> Result<(), Error> {
+		// let Some(conn) = streams.try_remove(key) else {
+		// 	return;
+		// };
+		// let _ = registry.deregister(&mut SourceFd(&conn.sock.as_raw_fd()));
+		// by_addr.remove(&conn.send_from);
+		todo!()
 	}
+	fn create_client(
+		&mut self,
+		ctx: &SslContext,
+		verified: &Verified,
+		send_from: SocketAddrV6,
+		send_to: SocketAddrV6,
+	) -> Result<(), Error> {
+		// let local = SocketAddrV6::new(Ipv6Addr::from(send_from.0), send_from.1.get(), 0, 0);
+		// let remote = SocketAddrV6::new(Ipv6Addr::from(send_to.0), send_to.1.get(), 0, 0);
+		// let sock = Socket::new(Domain::IPV6, Type::DGRAM, Some(Protocol::UDP))?;
+		// sock.set_only_v6(true)?;
+		// #[cfg(target_os = "linux")]
+		// sock.set_ip_transparent_v6(true)?;
+		// SockRef::from(&sock).set_path_mtu_discovery(true)?;
+		// sock.bind(&SockAddr::from(local))?;
+		// sock.connect(&SockAddr::from(remote))?;
+		// sock.set_nonblocking(true)?;
 
-	let fd = sock.as_raw_fd();
-	let established = hs.is_finished();
-	let ssl = hs.into_established(fd)?;
+		// let hs = cookie::promote(ctx, verified)?;
 
-	let entry = streams.vacant_entry();
-	let key = entry.key();
-	registry.register(&mut SourceFd(&fd), Token(key), Interest::READABLE)?;
-	entry.insert(Connection {
-		ssl,
-		sock,
-		send_from,
-		established,
-		last_update: Instant::now(),
-		read_keys: None,
-		highest_read_seq: 0,
-	});
-	by_addr.insert(send_from, key);
-	Ok(())
-}
+		// // Unfragmented hello: the ServerHello flight is already produced; send it on
+		// // the socket before cutover.  (Fragmented: nothing yet — the rest arrives on
+		// // the socket.)
+		// for datagram in hs.drain_output() {
+		// 	let _ = sock.send(&datagram);
+		// }
 
-/// Drain a connection's socket: drive the handshake, then read decrypted
-/// application data and forward it to the endpoint over the TUN.
-fn drive_connection(
-	key: usize,
-	streams: &mut Slab<Connection>,
-	by_addr: &mut HashMap<([u8; 16], U16), usize>,
-	registry: &Registry,
-	network: &SyncDevice,
-	endpoint: ([u8; 16], U16),
-	buffer: &mut [u8],
-) {
-	loop {
-		let Some(conn) = streams.get_mut(key) else {
-			return;
-		};
-		let outcome = if !conn.established {
-			let r = ffi::do_handshake(&mut conn.ssl);
-			if matches!(r, SslIo::Ok(_)) {
-				conn.established = conn.ssl.is_init_finished();
-				conn.last_update = Instant::now();
-			}
-			r
-		} else {
-			let r = ffi::read(&mut conn.ssl, buffer);
-			if let SslIo::Ok(len) = r
-				&& len > 0
-			{
-				conn.last_update = Instant::now();
-				let from = conn.send_from;
-				let _ = write_network_udp(network, from, endpoint, &buffer[..len]);
-			}
-			r
-		};
+		// let fd = sock.as_raw_fd();
+		// let established = hs.is_finished();
+		// let ssl = hs.into_established(fd)?;
 
-		match outcome {
-			// Handshake step or read made progress: keep draining.
-			SslIo::Ok(_) => continue,
-			// Nothing more to read right now.
-			SslIo::WantRead | SslIo::WantWrite => return,
-			// close_notify, a connected-socket error (e.g. ECONNREFUSED surfaced
-			// by the dgram BIO's recv), or a fatal alert: tear down.
-			SslIo::ZeroReturn | SslIo::Syscall(_) | SslIo::Fatal => {
-				remove_conn(streams, by_addr, registry, key);
-				return;
-			}
-		}
+		// let entry = streams.vacant_entry();
+		// let key = entry.key();
+		// registry.register(&mut SourceFd(&fd), Token(key), Interest::READABLE)?;
+		// entry.insert(Connection {
+		// 	ssl,
+		// 	sock,
+		// 	send_from,
+		// 	established,
+		// 	last_update: Instant::now(),
+		// 	read_keys: None,
+		// 	highest_read_seq: 0,
+		// });
+		// by_addr.insert(send_from, key);
+		// Ok(())
+		todo!()
+	}
+	fn drive_connection(&mut self) -> Result<(), Error> {
+		// loop {
+		// 	let Some(conn) = streams.get_mut(key) else {
+		// 		return;
+		// 	};
+		// 	let outcome = if !conn.established {
+		// 		let r = ffi::do_handshake(&mut conn.ssl);
+		// 		if matches!(r, SslIo::Ok(_)) {
+		// 			conn.established = conn.ssl.is_init_finished();
+		// 			conn.last_update = Instant::now();
+		// 		}
+		// 		r
+		// 	} else {
+		// 		let r = ffi::read(&mut conn.ssl, buffer);
+		// 		if let SslIo::Ok(len) = r
+		// 			&& len > 0
+		// 		{
+		// 			conn.last_update = Instant::now();
+		// 			let from = conn.send_from;
+		// 			let _ = write_network_udp(network, from, endpoint, &buffer[..len]);
+		// 		}
+		// 		r
+		// 	};
+
+		// 	match outcome {
+		// 		// Handshake step or read made progress: keep draining.
+		// 		SslIo::Ok(_) => continue,
+		// 		// Nothing more to read right now.
+		// 		SslIo::WantRead | SslIo::WantWrite => return,
+		// 		// close_notify, a connected-socket error (e.g. ECONNREFUSED surfaced
+		// 		// by the dgram BIO's recv), or a fatal alert: tear down.
+		// 		SslIo::ZeroReturn | SslIo::Syscall(_) | SslIo::Fatal => {
+		// 			remove_conn(streams, by_addr, registry, key);
+		// 			return;
+		// 		}
+		// 	}
+		// }
+		todo!()
 	}
 }
 
@@ -233,7 +255,6 @@ pub fn main() -> Result<Never> {
 
 	// This IP is the destination and source of all plaintext
 	let endpoint = SocketAddrV6::from_str(&args.endpoint)?;
-	let endpoint = (endpoint.ip().octets(), U16::new(endpoint.port()));
 
 	let mut poll = Poll::new()?;
 
@@ -255,18 +276,23 @@ pub fn main() -> Result<Never> {
 	poll.registry()
 		.register(&mut SourceFd(&network.as_raw_fd()), TUN, Interest::READABLE)?;
 
+	let mut server = Server {
+		poll: Poller::new(poll),
+		bound: RBTree::new(Bound::new()),
+		connected: RBTree::new(Connected::new()),
+		timeouts: LinkedList::new(Timeout::new()),
+	};
+	/// All of our timeouts are the same duration, so keeping the list sorted is just pushing to the back of the list
+	fn timeout() -> Instant {
+		Instant::now() + Duration::from_mins(1)
+	}
+
 	let (mut even, mut odd) = load_config()?;
 	// The HMAC key behind our stateless DTLS cookies.  Fresh per process: a
 	// restart just costs in-flight handshakes one extra HelloVerifyRequest round.
 	let keys = cookie::Keys::generate()?;
 	let need_reconfig = Arc::new(AtomicBool::new(false));
 	signal_hook::flag::register(signal_hook::consts::SIGHUP, need_reconfig.clone())?;
-
-	let mut streams: Slab<Connection> = Slab::new();
-	// Relayed address -> slab key: TUN-side lookup for endpoint plaintext, and
-	// dedup for ClientHello retransmits that raced the socket fork.
-	let mut by_addr: HashMap<([u8; 16], U16), usize> = HashMap::new();
-	let mut next_cleanup = 10;
 
 	let mut events = Events::with_capacity(128);
 	let mut buffer = vec![0; 4096];
@@ -276,17 +302,16 @@ pub fn main() -> Result<Never> {
 			(even, odd) = load_config()?;
 		}
 
-		match poll.poll(&mut events, None) {
-			Ok(()) => {}
+		match server.poll.poll(&mut events, None) {
 			// SIGHUP (or any signal) interrupts the wait; loop to reconfigure.
 			Err(e) if e.kind() == ErrorKind::Interrupted => continue,
-			Err(e) => return Err(e.into()),
+			v => v?,
 		}
 
 		for e in events.iter() {
 			match e.token() {
 				TUN => loop {
-					let packet = match read_network(&network, &mut buffer, args.router.octets()) {
+					let packet = match read_network(&network, &mut buffer, &args.router) {
 						Ok(p) => p,
 						Err(e) if e.kind() == ErrorKind::WouldBlock => break,
 						Err(e) if e.kind() == ErrorKind::Interrupted => continue,
@@ -299,141 +324,132 @@ pub fn main() -> Result<Never> {
 						continue;
 					};
 
-					let send_from = (ip.dst, udp.dst_port);
-					let send_to = (ip.src, udp.src_port);
+					let send_from =
+						SocketAddrV6::new(Ipv6Addr::from_octets(ip.dst), udp.dst_port.get(), 0, 0);
+					let send_to =
+						SocketAddrV6::new(Ipv6Addr::from_octets(ip.src), udp.src_port.get(), 0, 0);
 					let length = udp.length.get() as usize - size_of::<Udp>();
 
-					match by_addr.get(&send_from).copied() {
-						// Known connection: only endpoint plaintext reaches the TUN
-						// (established client ciphertext is diverted to the socket).
-						Some(key) => {
-							if send_to != endpoint {
-								// Not endpoint plaintext on a known CID: either a raced
-								// ClientHello retransmit (the socket already owns it) or a
-								// client that roamed to a new source address.  If the
-								// record authenticates against the DTLS read keys, treat it
-								// as mobility and re-point the socket at the new peer;
-								// otherwise drop it (an off-path spoofer can't forge a tag).
-								let creds = {
-									let conn = &mut streams[key];
-									if conn.established {
-										if conn.read_keys.is_none() {
-											conn.read_keys = export_read_keys(&conn.ssl);
-										}
-										let highest = conn.highest_read_seq;
-										conn.read_keys.map(|k| (k, highest))
-									} else {
-										None
+					let c = server.bound.find_mut(&send_from);
+					// Known connection: only endpoint plaintext reaches the TUN
+					// (established client ciphertext is diverted to the socket).
+					if let Some(client) = c.get() {
+						if send_to != endpoint {
+							// Not endpoint plaintext on a known CID: either a raced
+							// ClientHello retransmit (the socket already owns it) or a
+							// client that roamed to a new source address.  If the
+							// record authenticates against the DTLS read keys, treat it
+							// as mobility and re-point the socket at the new peer;
+							// otherwise drop it (an off-path spoofer can't forge a tag).
+							let creds = {
+								// TODO: This is fucked.  Likely these Options/Cells should be consolidated into a single cell around a single enum.
+								if client.established.get() {
+									if client.read_keys.get().is_none() {
+										client
+											.read_keys
+											.set(export_read_keys(&client.ssl.borrow()));
 									}
-								};
-								if let Some((rkeys, highest)) = creds
-									&& let Some(seq) =
-										check_record(&rkeys, highest, &mut buffer[..length])
-								{
-									let new_peer = SocketAddrV6::new(
-										Ipv6Addr::from(send_to.0),
-										send_to.1.get(),
-										0,
-										0,
-									);
-									let conn = &mut streams[key];
-									if conn.sock.connect(&SockAddr::from(new_peer)).is_ok() {
-										conn.highest_read_seq = seq;
-										conn.last_update = Instant::now();
-										tracing::debug!(
-											?new_peer,
-											"client mobility: re-pointed socket"
-										);
-									}
-								}
-								// Drop this record: the client's next packet lands on the
-								// now-matching socket, and DTLS/SCTP retransmit recovers it.
-								continue;
-							}
-							let data = &buffer[..length];
-							let teardown = {
-								let conn = &mut streams[key];
-								if !conn.established {
-									continue;
-								}
-								conn.last_update = Instant::now();
-								match ffi::write(&mut conn.ssl, data) {
-									SslIo::Ok(_) | SslIo::WantRead | SslIo::WantWrite => false,
-									// Client path shrank: apply the new MTU to the
-									// DTLS stream and tell the endpoint to send less.
-									SslIo::Syscall(err)
-										if err.raw_os_error() == Some(libc::EMSGSIZE) =>
-									{
-										if let Ok(pmtu) = SockRef::from(&conn.sock).path_mtu() {
-											let _ = conn.ssl.set_mtu(pmtu.saturating_sub(IP_UDP));
-											let data_mtu = ffi::data_mtu(&conn.ssl) as u32;
-											let _ = write_network_icmp(
-												&network,
-												send_from.0,
-												2, // ICMPv6 Packet Too Big
-												0,
-												data_mtu + IP_UDP,
-												ip,
-												udp.as_bytes(),
-												data,
-											);
-										}
-										false
-									}
-									// ECONNREFUSED or a fatal error: drop it.
-									_ => true,
+									let highest = client.highest_read_seq.get();
+									client.read_keys.get().map(|k| (k, highest))
+								} else {
+									None
 								}
 							};
-							if teardown {
-								remove_conn(&mut streams, &mut by_addr, poll.registry(), key);
+							if let Some((rkeys, highest)) = creds
+								&& let Some(seq) =
+									check_record(&rkeys, highest, &mut buffer[..length])
+							{
+								if client.sock.connect(&SockAddr::from(send_to)).is_ok() {
+									client.highest_read_seq.set(seq);
+									// TODO: timeouts push_back
+									client.timeout.set(timeout());
+									tracing::debug!(?send_to, "client mobility: re-pointed socket");
+								}
 							}
+							// Drop this record: the client's next packet lands on the
+							// now-matching socket, and DTLS/SCTP retransmit recovers it.
+							continue;
 						}
-
-						// Unknown relayed address.
-						None => {
-							let data = &buffer[..length];
-							// Endpoint spoke to a relayed address with no connection.
-							if send_to == endpoint {
-								let _ = write_network_icmp(
-									&network,
-									send_from.0,
-									1,
-									4, // Port Unreachable
-									0,
-									ip,
-									udp.as_bytes(),
-									data,
-								);
+						let data = &buffer[..length];
+						let teardown = {
+							if !client.established.get() {
 								continue;
 							}
-							// Statelessly verify a DTLS cookie.
-							match keys.inspect(send_to, send_from, data) {
-								Verdict::Drop => {}
-								Verdict::HelloVerify(hvr) => {
-									let _ = write_network_udp(
-										&network,
-										send_from,
-										send_to,
-										hvr.as_bytes(),
-									);
-								}
-								Verdict::Accept(verified) => {
-									let ctx = if send_from.1.get() & 0b1 == 0 {
-										&even
-									} else {
-										&odd
-									};
-									if let Err(err) = create_connection(
-										ctx,
-										&verified,
-										send_from,
-										send_to,
-										&mut streams,
-										&mut by_addr,
-										poll.registry(),
-									) {
-										tracing::debug!("connection setup failed: {err}");
+							// TODO: timeouts push_back
+							client.timeout.set(timeout());
+							match ffi::write(&mut client.ssl.borrow_mut(), data) {
+								SslIo::Ok(_) | SslIo::WantRead | SslIo::WantWrite => false,
+								// Client path shrank: apply the new MTU to the
+								// DTLS stream and tell the endpoint to send less.
+								SslIo::Syscall(err)
+									if err.raw_os_error() == Some(libc::EMSGSIZE) =>
+								{
+									if let Ok(pmtu) = SockRef::from(&client.sock).path_mtu() {
+										let _ = client
+											.ssl
+											.borrow_mut()
+											.set_mtu(pmtu.saturating_sub(IP_UDP));
+										let data_mtu = ffi::data_mtu(&client.ssl.borrow()) as u32;
+										let _ = write_network_icmp(
+											&network,
+											send_from.ip(),
+											2, // ICMPv6 Packet Too Big
+											0,
+											data_mtu + IP_UDP,
+											ip,
+											udp.as_bytes(),
+											data,
+										);
 									}
+									false
+								}
+								// ECONNREFUSED or a fatal error: drop it.
+								_ => true,
+							}
+						};
+						if teardown {
+							// TODO:
+							// server.remove_conn(&mut streams, &mut by_addr, poll.registry(), key);
+						}
+					}
+					// Unknown relayed address.
+					else {
+						let data = &buffer[..length];
+						// Endpoint spoke to a relayed address with no connection.
+						if send_to == endpoint {
+							let _ = write_network_icmp(
+								&network,
+								&send_from.ip(),
+								1,
+								4, // Port Unreachable
+								0,
+								ip,
+								udp.as_bytes(),
+								data,
+							);
+							continue;
+						}
+						// Statelessly verify a DTLS cookie.
+						match keys.inspect(send_to, send_from, data) {
+							Verdict::Drop => {}
+							Verdict::HelloVerify(hvr) => {
+								let _ = write_network_udp(
+									&network,
+									&send_from,
+									&send_to,
+									hvr.as_bytes(),
+								);
+							}
+							Verdict::Accept(verified) => {
+								let ctx = if send_from.port() & 0b1 == 0 {
+									&even
+								} else {
+									&odd
+								};
+								if let Err(err) =
+									server.create_client(ctx, &verified, send_from, send_to)
+								{
+									tracing::debug!("connection setup failed: {err}");
 								}
 							}
 						}
@@ -441,32 +457,38 @@ pub fn main() -> Result<Never> {
 				},
 
 				// A connection's socket: ciphertext arrived (or an error).
-				Token(key) => drive_connection(
-					key,
-					&mut streams,
-					&mut by_addr,
-					poll.registry(),
-					&network,
-					endpoint,
-					&mut buffer,
-				),
+				t if let Some(client) = server.poll.get(t) => {
+					// TODO: drive_connection
+					// drive_connection(
+					// 	key,
+					// 	&mut streams,
+					// 	&mut by_addr,
+					// 	poll.registry(),
+					// 	&network,
+					// 	endpoint,
+					// 	&mut buffer,
+					// )
+				}
+				// Remaining queued events for a removed client
+				_ => {}
 			}
 		}
 
 		// Reap idle connections when the map has grown enough to bother.
-		let max_age = Duration::from_secs(5 * 60);
-		if streams.len() > next_cleanup {
-			let registry = poll.registry();
-			streams.retain(|_key, conn| {
-				let keep = conn.last_update.elapsed() < max_age;
-				if !keep {
-					let _ = registry.deregister(&mut SourceFd(&conn.sock.as_raw_fd()));
-					by_addr.remove(&conn.send_from);
-				}
-				keep
-			});
-			next_cleanup = streams.len() + 10;
-		}
+		// TODO: timeout handling
+		// let max_age = Duration::from_secs(5 * 60);
+		// if streams.len() > next_cleanup {
+		// 	let registry = poll.registry();
+		// 	streams.retain(|_key, conn| {
+		// 		let keep = conn.last_update.elapsed() < max_age;
+		// 		if !keep {
+		// 			let _ = registry.deregister(&mut SourceFd(&conn.sock.as_raw_fd()));
+		// 			by_addr.remove(&conn.send_from);
+		// 		}
+		// 		keep
+		// 	});
+		// 	next_cleanup = streams.len() + 10;
+		// }
 	}
 }
 
