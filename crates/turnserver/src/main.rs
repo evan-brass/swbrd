@@ -5,7 +5,7 @@ use intrusive_collections::{
 };
 use ipnet::Ipv6Net;
 use libc::in6_pktinfo;
-use mio::{Events, Interest, Poll, Token, unix::SourceFd};
+use mio::{Events, Interest, Poll};
 use nix::sys::socket::{
 	ControlMessage, ControlMessageOwned, MsgFlags, SetSockOpt, SockaddrIn6,
 	sockopt::Ipv6RecvPacketInfo,
@@ -37,14 +37,9 @@ use zerocopy::{
 };
 
 use common::{
-	Ip6,
-	Packet,
-	Udp,
-	poller::Poller,
-	read_network,
-	//	socket::{UdpOpt, connected_udp, peek, recv_with_local, send_from, v4_path_mtu, v6_path_mtu},
-	write_network_icmp,
-	write_network_udp,
+	Ip6, Packet, Udp,
+	poller::{Flag, Poller, Sourced, Static},
+	read_network, write_network_icmp, write_network_udp,
 };
 
 mod nonce;
@@ -145,9 +140,13 @@ struct Client {
 	relayed: SocketAddrV6,
 	relayed_link: RBTreeLink,
 }
-impl AsRawFd for Client {
-	fn as_raw_fd(&self) -> std::os::fd::RawFd {
-		self.conn.as_raw_fd()
+impl Sourced for Client {
+	fn fd(&self, flag: Flag) -> Option<std::os::fd::RawFd> {
+		match flag {
+			// turnserver only needs 1 flag
+			CONN => Some(self.conn.as_raw_fd()),
+			_ => unreachable!(), //
+		}
 	}
 }
 intrusive_adapter!(Relayed = Rc<Client>: Client { relayed_link => RBTreeLink });
@@ -181,7 +180,7 @@ impl Server {
 			t = t.or(unsafe { self.timeouts.cursor_mut_from_ptr(&*client) }.remove());
 		}
 		let client = t.expect("Fuck, in order to *recover* the Rc<Client> from a list/tree we must *remove* it which returns Option<Rc<Client>>.  Since the object presumably is in at least one collection, we tried both and failed.");
-		self.poll.deregister(client)
+		self.poll.deregister(&client, CONN)
 	}
 	/// All of our timeouts are the same duration, so keeping the list sorted is just pushing to the back of the list
 	fn timeout() -> Instant {
@@ -217,7 +216,7 @@ impl Server {
 			timeout_link: Default::default(),
 		});
 		// 3. Try to register the new client
-		self.poll.register(&client, Interest::READABLE)?;
+		self.poll.register(&client, CONN, Interest::READABLE)?;
 		// 4. Insert the client into the timeout list
 		self.timeouts.push_back(client.clone());
 		// 5. Insert the client into the relayed tree
@@ -246,10 +245,12 @@ struct Args {
 	max_port: u16,
 }
 
-// Tokens used by everything that isn't an allocation socket.
-const UDP: Token = Token(usize::MAX);
-const TCP: Token = Token(usize::MAX - 1);
-const TUN: Token = Token(usize::MAX - 2);
+// Static Tokens used by everything that isn't an allocation socket.
+const UDP: Static = Static(0);
+const TCP: Static = Static(1);
+const TUN: Static = Static(2);
+// Names for the Flags
+const CONN: Flag = Flag::A;
 
 enum Action {
 	Drop,
@@ -448,7 +449,7 @@ pub fn main() -> Result<Never> {
 	let last_ip = args.net.hosts().nth_back(0).expect("Empty IP subnet");
 
 	// Setup async
-	let poll = Poll::new()?;
+	let poll = Poller::new(Poll::new()?);
 
 	let bind = SockAddr::from(SocketAddrV6::new(Ipv6Addr::UNSPECIFIED, 3478, 0, 0));
 	// Wildcard UDP socket: dual-stack, REUSEPORT (so connected allocation sockets
@@ -460,8 +461,7 @@ pub fn main() -> Result<Never> {
 	Ipv6RecvPacketInfo.set(&udp, &true)?;
 	udp.bind(&bind)?;
 	udp.set_nonblocking(true)?;
-	poll.registry()
-		.register(&mut SourceFd(&udp.as_raw_fd()), UDP, Interest::READABLE)?;
+	poll.register_static(udp.as_raw_fd(), UDP, Interest::READABLE)?;
 
 	// TCP listener.
 	let listener = Socket::new(Domain::IPV6, Type::STREAM, Some(Protocol::TCP))?;
@@ -471,11 +471,7 @@ pub fn main() -> Result<Never> {
 	listener.bind(&bind)?;
 	listener.listen(128)?;
 	listener.set_nonblocking(true)?;
-	poll.registry().register(
-		&mut SourceFd(&listener.as_raw_fd()),
-		TCP,
-		Interest::READABLE,
-	)?;
+	poll.register_static(listener.as_raw_fd(), TCP, Interest::READABLE)?;
 
 	// Setup the TUN interface
 	let network = {
@@ -490,15 +486,14 @@ pub fn main() -> Result<Never> {
 		builder.build_sync()?
 	};
 	network.set_nonblocking(true)?;
-	poll.registry()
-		.register(&mut SourceFd(&network.as_raw_fd()), TUN, Interest::READABLE)?;
+	poll.register_static(network.as_raw_fd(), TUN, Interest::READABLE)?;
 
 	let mut events = Events::with_capacity(128);
 	let mut buffer = vec![0; 65536];
 
 	// Collect all the mutable state and mediate access to it via methods
 	let mut server = Server {
-		poll: Poller::new(poll),
+		poll,
 		ip_range: u128::from(first_ip)..=u128::from(last_ip),
 		port_range: args.min_port..=args.max_port,
 		relayed: RBTree::new(Relayed::new()),
@@ -507,8 +502,8 @@ pub fn main() -> Result<Never> {
 
 	loop {
 		for e in events.into_iter() {
-			match e.token() {
-				TCP => loop {
+			match server.poll.get(e.token()) {
+				Err(TCP) => loop {
 					let (stream, _sender) = match listener.accept() {
 						Err(e) if e.kind() == ErrorKind::Interrupted => continue,
 						Err(e) if e.kind() == ErrorKind::WouldBlock => break,
@@ -518,7 +513,7 @@ pub fn main() -> Result<Never> {
 
 					server.new_client(Conn::Tcp(stream.into()))?;
 				},
-				UDP => loop {
+				Err(UDP) => loop {
 					let mut control_buffer = nix::cmsg_space!(in6_pktinfo);
 					let mut iovs = [IoSliceMut::new(&mut buffer)];
 					let msg = match nix::sys::socket::recvmsg::<SockaddrIn6>(
@@ -628,7 +623,7 @@ pub fn main() -> Result<Never> {
 						v => v?,
 					};
 				},
-				TUN => loop {
+				Err(TUN) => loop {
 					const TURN_DATA_OVERHEAD: usize = 20 + 24 + 4;
 					let packet = match read_network(
 						&network,
@@ -765,8 +760,10 @@ pub fn main() -> Result<Never> {
 						);
 					}
 				},
+				Err(_) => unreachable!(),
+
 				// Event on a non-released client
-				t if let Some(client) = server.poll.get(t) => loop {
+				Ok(Some((CONN, client))) => loop {
 					if e.is_read_closed() || e.is_error() {
 						trace!(?e, "closing allocation (is_error / is_read_closed)");
 						server.remove_client(client)?;
@@ -862,8 +859,12 @@ pub fn main() -> Result<Never> {
 						}
 					}
 				},
+
 				// Event for an already closed/released client
-				_ => {}
+				Ok(None) => {}
+
+				// Non Flag::A events (unreachable because turnserver only uses CONN = Flag::A)
+				Ok(Some((_, _))) => unreachable!(),
 			}
 		}
 

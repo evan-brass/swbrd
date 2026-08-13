@@ -13,12 +13,16 @@ use std::{
 };
 
 use clap::Parser;
-use common::{Packet, Udp, poller::Poller, read_network, write_network_icmp, write_network_udp};
+use common::{
+	Packet, Udp,
+	poller::{Flag, Poller, Sourced, Static},
+	read_network, write_network_icmp, write_network_udp,
+};
 use eyre::Result;
 use intrusive_collections::{
 	KeyAdapter, LinkedList, LinkedListLink, RBTree, RBTreeLink, intrusive_adapter,
 };
-use mio::{Events, Interest, Poll, Registry, Token, unix::SourceFd};
+use mio::{Events, Interest, Poll};
 use openssl::ssl::{
 	Ssl, SslAcceptor, SslContext, SslContextRef, SslFiletype, SslMethod, SslVersion,
 };
@@ -78,9 +82,13 @@ struct Client {
 	timeout: Cell<Instant>,
 	timeout_link: LinkedListLink,
 }
-impl AsRawFd for Client {
-	fn as_raw_fd(&self) -> std::os::unix::prelude::RawFd {
-		self.sock.as_raw_fd()
+impl Sourced for Client {
+	fn fd(&self, flag: common::poller::Flag) -> Option<std::os::fd::RawFd> {
+		match flag {
+			Flag::A => Some(self.sock.as_raw_fd()),
+			// TODO: Flag::B will be a :5000/sctp peeled_off/stream socket that was established via the dtls-proxy
+			_ => unreachable!(),
+		}
 	}
 }
 intrusive_adapter!(Bound = Rc<Client>: Client { bound_link => RBTreeLink });
@@ -243,6 +251,8 @@ impl Server {
 	}
 }
 
+const TUN: Static = Static(0);
+
 type Never = core::convert::Infallible;
 pub fn main() -> Result<Never> {
 	// Enable logging
@@ -256,7 +266,7 @@ pub fn main() -> Result<Never> {
 	// This IP is the destination and source of all plaintext
 	let endpoint = SocketAddrV6::from_str(&args.endpoint)?;
 
-	let mut poll = Poll::new()?;
+	let mut poll = Poller::new(Poll::new()?);
 
 	// The TUN interface carries first-contact ClientHellos (cookie exchange) and
 	// endpoint plaintext.  Established client ciphertext is diverted to each
@@ -273,11 +283,10 @@ pub fn main() -> Result<Never> {
 		builder.build_sync()?
 	};
 	network.set_nonblocking(true)?;
-	poll.registry()
-		.register(&mut SourceFd(&network.as_raw_fd()), TUN, Interest::READABLE)?;
+	poll.register_static(network.as_raw_fd(), TUN, Interest::READABLE)?;
 
 	let mut server = Server {
-		poll: Poller::new(poll),
+		poll,
 		bound: RBTree::new(Bound::new()),
 		connected: RBTree::new(Connected::new()),
 		timeouts: LinkedList::new(Timeout::new()),
@@ -309,8 +318,8 @@ pub fn main() -> Result<Never> {
 		}
 
 		for e in events.iter() {
-			match e.token() {
-				TUN => loop {
+			match server.poll.get(e.token()) {
+				Err(TUN) => loop {
 					let packet = match read_network(&network, &mut buffer, &args.router) {
 						Ok(p) => p,
 						Err(e) if e.kind() == ErrorKind::WouldBlock => break,
@@ -455,9 +464,10 @@ pub fn main() -> Result<Never> {
 						}
 					}
 				},
-
-				// A connection's socket: ciphertext arrived (or an error).
-				t if let Some(client) = server.poll.get(t) => {
+				// Unused Static Tokens
+				Err(_) => unreachable!(),
+				// Event on the UDP
+				Ok(Some((Flag::A, client))) => {
 					// TODO: drive_connection
 					// drive_connection(
 					// 	key,
@@ -469,8 +479,10 @@ pub fn main() -> Result<Never> {
 					// 	&mut buffer,
 					// )
 				}
-				// Remaining queued events for a removed client
-				_ => {}
+				// Trailing events for a closed client:
+				Ok(None) => {}
+				// Unused Flags
+				Ok(Some((_, _))) => unreachable!(),
 			}
 		}
 
@@ -491,5 +503,3 @@ pub fn main() -> Result<Never> {
 		// }
 	}
 }
-
-const TUN: Token = Token(usize::MAX);
