@@ -13,7 +13,8 @@
 set -eu
 
 VM=192.168.64.3            # Debian VM: the only place the daemons compile
-VM_DIR=share/src/swbrd     # the same tree as this repo, shared over virtiofs
+VM_DIR=share/src/swbrd     # the same tree as this repo, shared over virtiofs...
+MAC_DIR=$HOME/src/swbrd    # ...mounted here on this side
 VPS=turn                   # turn.evan-brass.net, reached as user `evan` with passwordless sudo
 TARGET=x86_64-unknown-linux-gnu
 UNITS='dtls-proxy turnserver ice-dissolve swbrd'
@@ -27,6 +28,15 @@ say() { printf '\033[1;34m==>\033[0m %s\n' "$*" >&2; }
 ok() { printf '\033[1;32m ok\033[0m %s\n' "$*" >&2; }
 bad() { printf '\033[1;31m!!!\033[0m %s\n' "$*" >&2; }
 die() { bad "$*"; exit 1; }
+
+# The whole mount is shared, so a git worktree under .claude/worktrees/<name> is visible on the VM
+# at the matching path under $VM_DIR.  Carry that suffix over: without it the VM builds and tests
+# the main checkout while you're editing a worktree, and the worktree's changes never run.
+case $ROOT in
+	"$MAC_DIR") ;;
+	"$MAC_DIR"/*) VM_DIR=$VM_DIR${ROOT#"$MAC_DIR"}; say "worktree: $VM_DIR" ;;
+	*) die "$ROOT is outside $MAC_DIR — the VM has no view of it" ;;
+esac
 
 # Run a command on the build VM, in the shared tree, with the rustup toolchain first on PATH.
 # The system /usr/bin/cargo is 1.85 and too old for this workspace.
