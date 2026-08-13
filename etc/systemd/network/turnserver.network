@@ -8,14 +8,6 @@ IgnoreCarrierLoss=yes
 [Link]
 RequiredForOnline=no
 
-# /96 for mapped allocations to IPv4 clients
+# /96 for Allocations
 [Route]
 Destination=2a01:4ff:1f0:7e46:0:1::/96
-
-# /96 for srcnat allocations to IPv6 clients
-[Route]
-Destination=2a01:4ff:1f0:7e46:0:2::/96
-
-# /96 for slab indexed allocations to TCP clients
-[Route]
-Destination=2a01:4ff:1f0:7e46:0:3::/96

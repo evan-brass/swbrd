@@ -31,20 +31,8 @@
 </style>
 
 <h1>swbrd</h1>
-<p>
-	Reduced-signalling peer-to-peer WebRTC. The library lives in <code
-	>src/</code>; the servers it talks to are the daemons in <code>crates/</code>,
-	deployed at <code>turn.evan-brass.net</code>.
-</p>
 
 <h2>Test pages</h2>
-<p>
-	Each page drives one scenario and reports a verdict, both into the page and as
-	a
-	<code>SWBRD-RESULT</code> console line. Open one here, or run it headless and
-	get the matching server logs back with <code>./scripts/dev.sh e2e
-		tests/&lt;page&gt; --units=&lt;unit&gt;</code>.
-</p>
 <ul>
 	<li>
 		<a href="tests/vpn.html">vpn.html</a> — <code>Conn.to_deter()</code> into
@@ -56,19 +44,8 @@
 		each other through the relay. Server side: <code>turnserver</code>.
 	</li>
 	<li>
-		<a href="tests/soak.html?hold=90">soak.html</a> — a relayed pair held open
-		across TURN refreshes (<code>?hold=</code> seconds), for breakage that only
-		shows up after the connection is already up. Server side: <code
-		>turnserver</code>.
-	</li>
-	<li>
 		<a href="tests/audio.html">audio.html</a> — the fixed opus / telephone-event
 		m-section with a microphone attached. Server side: <code>dtls-proxy</code>.
-	</li>
-	<li>
-		<a href="tests/icmp.html">icmp.html</a> — traffic at an unallocated relay
-		address; the assertion is in the <code>turnserver</code> journal, not the
-		browser.
 	</li>
 	<li>
 		<a href="tests/relay.html">relay.html</a> — stock <code
@@ -76,13 +53,4 @@
 		>ice-dissolve</code>. Legacy: Chrome is removing credential munging, so this
 		one is expected to stop working.
 	</li>
-</ul>
-
-<h2>Docs</h2>
-<ul>
-	<li>
-		<a href="docs/how-it-works.md">docs/how-it-works.md</a> — ids, polite peers,
-		DTLS roles.
-	</li>
-	<li><a href="docs/ciphersuites.md">docs/ciphersuites.md</a></li>
 </ul>
