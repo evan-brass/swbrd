@@ -1,0 +1,1060 @@
+<title>Relay Watch</title>
+<style>
+	:root {
+		color-scheme: light;
+		--ground: #f6f3ec;
+		--surface: #fdfbf6;
+		--surface-2: #efece2;
+		--ink: #171410;
+		--ink-soft: #5b5648;
+		--ink-muted: #8c8677;
+		--line: #e2ddd0;
+		--accent: #a8570c;
+		--accent-ink: #ffffff;
+		--accent-soft: #f0dcc4;
+		--rx: #2a78d6;
+		--tx: #1baf7a;
+		--good: #0ca30c;
+		--warning: #fab219;
+		--serious: #ec835a;
+		--critical: #d03b3b;
+		--focus: #2a78d6;
+		--shadow: rgba(23, 20, 16, 0.08);
+	}
+	@media (prefers-color-scheme: dark) {
+		:root:not([data-theme='light']) {
+			color-scheme: dark;
+			--ground: #0d0c09;
+			--surface: #17150f;
+			--surface-2: #1f1c14;
+			--ink: #f5f0e6;
+			--ink-soft: #beb6a2;
+			--ink-muted: #938d7a;
+			--line: #2c2820;
+			--accent: #e2963f;
+			--accent-ink: #17150f;
+			--accent-soft: rgba(226, 150, 63, 0.16);
+			--rx: #3987e5;
+			--tx: #199e70;
+			--good: #0ca30c;
+			--warning: #fab219;
+			--serious: #ec835a;
+			--critical: #e66767;
+			--focus: #3987e5;
+			--shadow: rgba(0, 0, 0, 0.4);
+		}
+	}
+	:root[data-theme='dark'] {
+		color-scheme: dark;
+		--ground: #0d0c09;
+		--surface: #17150f;
+		--surface-2: #1f1c14;
+		--ink: #f5f0e6;
+		--ink-soft: #beb6a2;
+		--ink-muted: #938d7a;
+		--line: #2c2820;
+		--accent: #e2963f;
+		--accent-ink: #17150f;
+		--accent-soft: rgba(226, 150, 63, 0.16);
+		--rx: #3987e5;
+		--tx: #199e70;
+		--good: #0ca30c;
+		--warning: #fab219;
+		--serious: #ec835a;
+		--critical: #e66767;
+		--focus: #3987e5;
+		--shadow: rgba(0, 0, 0, 0.4);
+	}
+
+	* {
+		box-sizing: border-box;
+	}
+	html {
+		-webkit-text-size-adjust: 100%;
+	}
+	body {
+		margin: 0;
+		background: var(--ground);
+		color: var(--ink);
+		font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, 'Helvetica Neue', Arial, sans-serif;
+		font-size: 15px;
+		line-height: 1.5;
+		padding: 28px 20px 64px;
+	}
+	.wrap {
+		max-width: 1180px;
+		margin: 0 auto;
+		display: flex;
+		flex-direction: column;
+		gap: 22px;
+	}
+
+	.mono {
+		font-family: ui-monospace, 'SF Mono', 'Cascadia Code', 'JetBrains Mono', Menlo, Consolas, 'Liberation Mono', monospace;
+	}
+	.tabular {
+		font-variant-numeric: tabular-nums;
+	}
+	a {
+		color: var(--accent);
+	}
+
+	/* ---------------------------------------------------------------- header */
+
+	header.top {
+		display: flex;
+		flex-wrap: wrap;
+		align-items: baseline;
+		justify-content: space-between;
+		gap: 10px 24px;
+		padding-bottom: 18px;
+		border-bottom: 1px solid var(--line);
+	}
+	.brand {
+		display: flex;
+		flex-direction: column;
+		gap: 4px;
+	}
+	.eyebrow {
+		font-family: ui-monospace, 'SF Mono', 'Cascadia Code', 'JetBrains Mono', Menlo, Consolas, monospace;
+		font-size: 11px;
+		letter-spacing: 0.14em;
+		text-transform: uppercase;
+		color: var(--accent);
+		font-weight: 600;
+	}
+	h1 {
+		margin: 0;
+		font-family: ui-monospace, 'SF Mono', 'Cascadia Code', 'JetBrains Mono', Menlo, Consolas, monospace;
+		font-size: 26px;
+		font-weight: 600;
+		letter-spacing: -0.01em;
+		text-wrap: balance;
+	}
+	.top-meta {
+		text-align: right;
+		font-size: 13px;
+		color: var(--ink-soft);
+		display: flex;
+		flex-direction: column;
+		gap: 3px;
+	}
+	.top-meta strong {
+		color: var(--ink);
+		font-weight: 600;
+	}
+
+	/* ---------------------------------------------------------------- snapshot rail */
+
+	.rail {
+		display: flex;
+		align-items: center;
+		gap: 10px;
+	}
+	.rail-label {
+		font-size: 11px;
+		letter-spacing: 0.1em;
+		text-transform: uppercase;
+		color: var(--ink-muted);
+		white-space: nowrap;
+	}
+	.ticks {
+		display: flex;
+		gap: 5px;
+		overflow-x: auto;
+		padding: 3px 2px;
+		flex: 1;
+	}
+	.tick {
+		flex: 0 0 auto;
+		width: 10px;
+		height: 22px;
+		border-radius: 2px;
+		background: var(--surface-2);
+		border: 1px solid var(--line);
+		cursor: pointer;
+		padding: 0;
+	}
+	.tick:hover {
+		border-color: var(--accent);
+	}
+	.tick:focus-visible {
+		outline: 2px solid var(--focus);
+		outline-offset: 2px;
+	}
+	.tick[aria-pressed='true'] {
+		background: var(--accent);
+		border-color: var(--accent);
+	}
+
+	/* ---------------------------------------------------------------- stat tiles */
+
+	.stats {
+		display: grid;
+		grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+		gap: 12px;
+	}
+	.stat {
+		background: var(--surface);
+		border: 1px solid var(--line);
+		border-radius: 8px;
+		padding: 16px 18px;
+		display: flex;
+		flex-direction: column;
+		gap: 6px;
+	}
+	.stat .label {
+		font-size: 11px;
+		letter-spacing: 0.08em;
+		text-transform: uppercase;
+		color: var(--ink-muted);
+	}
+	.stat .value {
+		font-family: ui-monospace, 'SF Mono', 'Cascadia Code', 'JetBrains Mono', Menlo, Consolas, monospace;
+		font-size: 26px;
+		font-weight: 600;
+		letter-spacing: -0.01em;
+	}
+	.stat .sub {
+		font-size: 12.5px;
+		color: var(--ink-soft);
+	}
+	.stat .sub.good {
+		color: var(--good);
+	}
+	.stat .sub.critical {
+		color: var(--critical);
+	}
+
+	/* ---------------------------------------------------------------- cards */
+
+	.card {
+		background: var(--surface);
+		border: 1px solid var(--line);
+		border-radius: 8px;
+		padding: 18px 20px;
+	}
+	.card h2 {
+		margin: 0 0 4px;
+		font-family: ui-monospace, 'SF Mono', 'Cascadia Code', 'JetBrains Mono', Menlo, Consolas, monospace;
+		font-size: 13px;
+		font-weight: 600;
+		letter-spacing: 0.08em;
+		text-transform: uppercase;
+	}
+	.card .caption {
+		margin: 0 0 14px;
+		font-size: 12.5px;
+		color: var(--ink-soft);
+	}
+
+	.grid-2 {
+		display: grid;
+		grid-template-columns: 1.4fr 1fr;
+		gap: 16px;
+		align-items: start;
+	}
+	@media (max-width: 860px) {
+		.grid-2 {
+			grid-template-columns: 1fr;
+		}
+	}
+
+	/* ---------------------------------------------------------------- chart */
+
+	.chart-legend {
+		display: flex;
+		gap: 16px;
+		margin-bottom: 6px;
+		font-size: 12.5px;
+		color: var(--ink-soft);
+	}
+	.chart-legend .key {
+		display: inline-flex;
+		align-items: center;
+		gap: 6px;
+	}
+	.chart-legend .swatch {
+		width: 14px;
+		height: 2px;
+		border-radius: 1px;
+		display: inline-block;
+	}
+	.chart-wrap {
+		position: relative;
+	}
+	svg.chart {
+		width: 100%;
+		height: auto;
+		display: block;
+		overflow: visible;
+	}
+	.gridline {
+		stroke: var(--line);
+		stroke-width: 1;
+	}
+	.axislabel {
+		fill: var(--ink-muted);
+		font-size: 10.5px;
+		font-family: ui-monospace, 'SF Mono', 'Cascadia Code', 'JetBrains Mono', Menlo, Consolas, monospace;
+	}
+	.series-line {
+		fill: none;
+		stroke-width: 2;
+		stroke-linejoin: round;
+		stroke-linecap: round;
+	}
+	.series-area {
+		stroke: none;
+	}
+	.crosshair {
+		stroke: var(--ink-muted);
+		stroke-width: 1;
+		stroke-dasharray: 2 3;
+		pointer-events: none;
+		opacity: 0;
+	}
+	.hoverdot {
+		pointer-events: none;
+		opacity: 0;
+	}
+	.hoverdot circle.ring {
+		fill: var(--surface);
+	}
+	.hit {
+		fill: transparent;
+	}
+	.tooltip {
+		position: absolute;
+		pointer-events: none;
+		background: var(--surface);
+		border: 1px solid var(--line);
+		border-radius: 6px;
+		padding: 8px 10px;
+		font-size: 12px;
+		box-shadow: 0 6px 18px var(--shadow);
+		opacity: 0;
+		transition: opacity 0.08s ease;
+		white-space: nowrap;
+		z-index: 5;
+	}
+	.tooltip .t-time {
+		color: var(--ink-muted);
+		margin-bottom: 4px;
+		font-family: ui-monospace, 'SF Mono', 'Cascadia Code', 'JetBrains Mono', Menlo, Consolas, monospace;
+	}
+	.tooltip .t-row {
+		display: flex;
+		align-items: center;
+		gap: 6px;
+	}
+	.tooltip .t-row + .t-row {
+		margin-top: 2px;
+	}
+	.tooltip .t-key {
+		width: 10px;
+		height: 2px;
+		display: inline-block;
+	}
+	.tooltip .t-val {
+		font-weight: 600;
+		font-variant-numeric: tabular-nums;
+		margin-left: auto;
+		padding-left: 10px;
+	}
+
+	.empty {
+		padding: 28px 12px;
+		text-align: center;
+		color: var(--ink-soft);
+		font-size: 13.5px;
+	}
+	.empty .glyph {
+		font-family: ui-monospace, 'SF Mono', 'Cascadia Code', 'JetBrains Mono', Menlo, Consolas, monospace;
+		color: var(--ink-muted);
+		font-size: 20px;
+		display: block;
+		margin-bottom: 8px;
+	}
+
+	/* ---------------------------------------------------------------- client table */
+
+	.table-wrap {
+		overflow-x: auto;
+	}
+	table.clients {
+		width: 100%;
+		border-collapse: collapse;
+		font-size: 13px;
+	}
+	table.clients th,
+	table.clients td {
+		text-align: left;
+		padding: 8px 10px;
+		border-bottom: 1px solid var(--line);
+		white-space: nowrap;
+	}
+	table.clients th {
+		font-size: 10.5px;
+		letter-spacing: 0.07em;
+		text-transform: uppercase;
+		color: var(--ink-muted);
+		font-weight: 600;
+	}
+	table.clients td.num {
+		text-align: right;
+		font-family: ui-monospace, 'SF Mono', 'Cascadia Code', 'JetBrains Mono', Menlo, Consolas, monospace;
+		font-variant-numeric: tabular-nums;
+	}
+	table.clients tbody tr:hover {
+		background: var(--surface-2);
+	}
+	.ip {
+		font-family: ui-monospace, 'SF Mono', 'Cascadia Code', 'JetBrains Mono', Menlo, Consolas, monospace;
+	}
+	.geo {
+		display: flex;
+		align-items: center;
+		gap: 6px;
+		color: var(--ink-soft);
+	}
+	.flag {
+		font-size: 14px;
+	}
+	.pill {
+		display: inline-flex;
+		align-items: center;
+		gap: 5px;
+		padding: 2px 8px;
+		border-radius: 999px;
+		font-size: 11px;
+		font-weight: 600;
+	}
+	.pill.warn {
+		background: color-mix(in srgb, var(--warning) 20%, transparent);
+		color: var(--warning);
+	}
+	.pill.crit {
+		background: color-mix(in srgb, var(--critical) 18%, transparent);
+		color: var(--critical);
+	}
+	.dot {
+		width: 6px;
+		height: 6px;
+		border-radius: 50%;
+		display: inline-block;
+	}
+
+	/* ---------------------------------------------------------------- health */
+
+	.health-list {
+		display: flex;
+		flex-direction: column;
+		gap: 8px;
+	}
+	.health-row {
+		display: flex;
+		align-items: center;
+		gap: 10px;
+		padding: 9px 12px;
+		background: var(--surface-2);
+		border-radius: 6px;
+		font-size: 13px;
+	}
+	.health-row .unit {
+		font-family: ui-monospace, 'SF Mono', 'Cascadia Code', 'JetBrains Mono', Menlo, Consolas, monospace;
+		flex: 1;
+	}
+	.health-row .status {
+		display: inline-flex;
+		align-items: center;
+		gap: 6px;
+		font-size: 11.5px;
+		font-weight: 600;
+	}
+	.health-row .status .dot.good {
+		background: var(--good);
+	}
+	.health-row .status .dot.critical {
+		background: var(--critical);
+	}
+	.health-row .stat-mini {
+		color: var(--ink-muted);
+		font-family: ui-monospace, 'SF Mono', 'Cascadia Code', 'JetBrains Mono', Menlo, Consolas, monospace;
+		font-size: 11.5px;
+	}
+
+	.abuse-line {
+		display: flex;
+		gap: 18px;
+		margin-top: 14px;
+		padding-top: 14px;
+		border-top: 1px solid var(--line);
+		font-size: 12.5px;
+		color: var(--ink-soft);
+	}
+	.abuse-line b {
+		color: var(--ink);
+		font-family: ui-monospace, 'SF Mono', 'Cascadia Code', 'JetBrains Mono', Menlo, Consolas, monospace;
+	}
+
+	footer {
+		font-size: 12px;
+		color: var(--ink-muted);
+		text-align: center;
+		padding-top: 8px;
+	}
+
+	@media (prefers-reduced-motion: reduce) {
+		* {
+			transition: none !important;
+		}
+	}
+</style>
+
+<div class="wrap">
+	<header class="top">
+		<div class="brand">
+			<span class="eyebrow">Relay Diagnostics</span>
+			<h1>turn.evan-brass.net</h1>
+		</div>
+		<div class="top-meta" id="top-meta"></div>
+	</header>
+
+	<div class="rail" id="rail" hidden>
+		<span class="rail-label">Snapshots</span>
+		<div class="ticks" id="ticks" role="listbox" aria-label="Select snapshot"></div>
+	</div>
+
+	<div class="stats" id="stats"></div>
+
+	<div class="card">
+		<h2>Relay bandwidth</h2>
+		<p class="caption" id="chart-caption"></p>
+		<div class="chart-legend" id="chart-legend"></div>
+		<div class="chart-wrap" id="chart-wrap"></div>
+	</div>
+
+	<div class="grid-2">
+		<div class="card">
+			<h2>Clients this snapshot</h2>
+			<p class="caption">One row per client IP seen on :3478 or still carrying an active byte counter.</p>
+			<div id="clients"></div>
+		</div>
+		<div class="card">
+			<h2>Daemon health</h2>
+			<p class="caption">systemd state for the four relay services.</p>
+			<div class="health-list" id="health"></div>
+			<div class="abuse-line" id="abuse"></div>
+		</div>
+	</div>
+
+	<footer id="footer"></footer>
+</div>
+
+<script id="turn-report-data" type="application/json">__REPORT_DATA__</script>
+<script>
+	(function () {
+		'use strict';
+
+		var REPORT = JSON.parse(document.getElementById('turn-report-data').textContent);
+		var GENERATED_AT = '__GENERATED_AT__';
+
+		// -------------------------------------------------------------- helpers
+
+		function fmtBytes(n) {
+			if (n == null) return '—';
+			var units = ['B', 'KB', 'MB', 'GB', 'TB', 'PB'];
+			var i = 0;
+			var v = Math.abs(n);
+			while (v >= 1024 && i < units.length - 1) {
+				v /= 1024;
+				i++;
+			}
+			var s = (n < 0 ? '-' : '') + (v >= 100 || i === 0 ? Math.round(v) : v.toFixed(1));
+			return s + ' ' + units[i];
+		}
+		function fmtNum(n) {
+			if (n == null) return '—';
+			return n.toLocaleString('en-US');
+		}
+		function fmtTime(iso) {
+			var d = new Date(iso);
+			return d.toLocaleString(undefined, {
+				month: 'short',
+				day: 'numeric',
+				hour: '2-digit',
+				minute: '2-digit',
+				second: '2-digit',
+			});
+		}
+		function fmtRelative(iso) {
+			var ms = Date.now() - new Date(iso).getTime();
+			var s = Math.round(ms / 1000);
+			if (s < 5) return 'just now';
+			if (s < 60) return s + 's ago';
+			var m = Math.round(s / 60);
+			if (m < 60) return m + 'm ago';
+			var h = Math.round(m / 60);
+			if (h < 48) return h + 'h ago';
+			return Math.round(h / 24) + 'd ago';
+		}
+		function flagEmoji(cc) {
+			if (!cc || cc.length !== 2) return '';
+			var A = 0x1f1e6;
+			return String.fromCodePoint(
+				A + (cc.charCodeAt(0) - 65),
+				A + (cc.charCodeAt(1) - 65),
+			);
+		}
+		function el(tag, attrs, children) {
+			var e = document.createElement(tag);
+			for (var k in attrs || {}) {
+				if (k === 'text') e.textContent = attrs[k];
+				else e.setAttribute(k, attrs[k]);
+			}
+			(children || []).forEach(function (c) {
+				e.appendChild(c);
+			});
+			return e;
+		}
+
+		// -------------------------------------------------------------- state
+
+		var selected = REPORT.length - 1;
+
+		function render() {
+			var snap = REPORT[selected];
+			var prev = selected > 0 ? REPORT[selected - 1] : null;
+			renderTopMeta();
+			renderRail();
+			renderStats(snap, prev);
+			renderChart();
+			renderClients(snap);
+			renderHealth(snap);
+			renderFooter();
+		}
+
+		function renderTopMeta() {
+			var m = document.getElementById('top-meta');
+			m.innerHTML = '';
+			var last = REPORT[REPORT.length - 1];
+			m.appendChild(
+				el('div', {}, [
+					document.createTextNode('Last snapshot '),
+					el('strong', { text: fmtRelative(last.ts) }),
+				]),
+			);
+			m.appendChild(
+				el('div', {
+					text: REPORT.length + (REPORT.length === 1 ? ' snapshot recorded' : ' snapshots recorded'),
+				}),
+			);
+		}
+
+		function renderRail() {
+			var rail = document.getElementById('rail');
+			var ticks = document.getElementById('ticks');
+			ticks.innerHTML = '';
+			if (REPORT.length < 2) {
+				rail.hidden = true;
+				return;
+			}
+			rail.hidden = false;
+			REPORT.forEach(function (snap, i) {
+				var b = el('button', {
+					class: 'tick',
+					type: 'button',
+					role: 'option',
+					'aria-pressed': i === selected ? 'true' : 'false',
+					title: fmtTime(snap.ts) + ' — ' + snap.clients.length + ' client(s)',
+				});
+				b.addEventListener('click', function () {
+					selected = i;
+					render();
+				});
+				ticks.appendChild(b);
+			});
+		}
+
+		function statTile(label, value, sub, subClass) {
+			var s = el('div', { class: 'stat' });
+			s.appendChild(el('div', { class: 'label', text: label }));
+			s.appendChild(el('div', { class: 'value mono', text: value }));
+			if (sub) s.appendChild(el('div', { class: 'sub' + (subClass ? ' ' + subClass : ''), text: sub }));
+			return s;
+		}
+
+		function renderStats(snap, prev) {
+			var wrap = document.getElementById('stats');
+			wrap.innerHTML = '';
+
+			var link = snap.aggregate.turnserver_link;
+			var total = link.rx_bytes + link.tx_bytes;
+			var rateSub = 'total since interface came up';
+			if (prev) {
+				var dt = (new Date(snap.ts) - new Date(prev.ts)) / 1000;
+				var dTotal = total - (prev.aggregate.turnserver_link.rx_bytes + prev.aggregate.turnserver_link.tx_bytes);
+				if (dt > 0 && dTotal >= 0) {
+					rateSub = fmtBytes(dTotal / dt) + '/s since previous snapshot';
+				}
+			}
+			wrap.appendChild(statTile('Relay traffic', fmtBytes(total), rateSub));
+
+			wrap.appendChild(
+				statTile(
+					'Active clients',
+					String(snap.clients.length),
+					snap.clients.length === 0 ? 'idle right now' : 'in this snapshot',
+				),
+			);
+
+			var units = Object.keys(snap.health);
+			var up = units.filter(function (u) {
+				return snap.health[u].active_state === 'active';
+			}).length;
+			wrap.appendChild(
+				statTile(
+					'Daemons online',
+					up + ' / ' + units.length,
+					up === units.length ? 'all services running' : 'check daemon health below',
+					up === units.length ? 'good' : 'critical',
+				),
+			);
+
+			var abuse = snap.aggregate.abuse;
+			var abuseTotal = abuse.naughty_list_size + abuse.rst_meter_size;
+			wrap.appendChild(
+				statTile(
+					'RST-flood watch',
+					String(abuseTotal),
+					abuse.naughty_list_size + ' blocked · ' + abuse.rst_meter_size + ' being metered',
+					abuse.naughty_list_size > 0 ? 'critical' : undefined,
+				),
+			);
+		}
+
+		// -------------------------------------------------------------- chart
+
+		function renderChart() {
+			var wrap = document.getElementById('chart-wrap');
+			var legend = document.getElementById('chart-legend');
+			var caption = document.getElementById('chart-caption');
+			wrap.innerHTML = '';
+			legend.innerHTML = '';
+
+			if (REPORT.length < 2) {
+				caption.textContent = 'Needs at least two snapshots to plot a trend — run the collector again later to build history.';
+				wrap.appendChild(
+					el('div', { class: 'empty' }, [
+						el('span', { class: 'glyph', text: '──●' }),
+						el('div', { text: 'Only one snapshot so far.' }),
+					]),
+				);
+				return;
+			}
+			caption.textContent = 'Cumulative bytes moved through the relay tunnel since it last came up — rx and tx, one point per snapshot.';
+
+			legend.appendChild(
+				el('span', { class: 'key' }, [
+					el('span', { class: 'swatch', style: 'background:var(--rx)' }),
+					document.createTextNode('Received (rx)'),
+				]),
+			);
+			legend.appendChild(
+				el('span', { class: 'key' }, [
+					el('span', { class: 'swatch', style: 'background:var(--tx)' }),
+					document.createTextNode('Sent (tx)'),
+				]),
+			);
+
+			var W = 1000, H = 260, PAD_L = 54, PAD_R = 16, PAD_T = 14, PAD_B = 28;
+			var plotW = W - PAD_L - PAD_R, plotH = H - PAD_T - PAD_B;
+
+			var rxVals = REPORT.map(function (s) {
+				return s.aggregate.turnserver_link.rx_bytes;
+			});
+			var txVals = REPORT.map(function (s) {
+				return s.aggregate.turnserver_link.tx_bytes;
+			});
+			var maxY = Math.max.apply(null, rxVals.concat(txVals), 1);
+			var minY = Math.min.apply(null, rxVals.concat(txVals), 0);
+			if (maxY === minY) maxY = minY + 1;
+
+			function x(i) {
+				return PAD_L + (REPORT.length === 1 ? 0 : (i / (REPORT.length - 1)) * plotW);
+			}
+			function y(v) {
+				return PAD_T + plotH - ((v - minY) / (maxY - minY)) * plotH;
+			}
+
+			var svgns = 'http://www.w3.org/2000/svg';
+			var svg = document.createElementNS(svgns, 'svg');
+			svg.setAttribute('viewBox', '0 0 ' + W + ' ' + H);
+			svg.setAttribute('class', 'chart');
+			svg.setAttribute('role', 'img');
+			svg.setAttribute('aria-label', 'Relay bandwidth over time');
+
+			// gridlines + y ticks
+			var ticks = 4;
+			for (var t = 0; t <= ticks; t++) {
+				var v = minY + ((maxY - minY) * t) / ticks;
+				var gy = y(v);
+				var gl = document.createElementNS(svgns, 'line');
+				gl.setAttribute('x1', PAD_L);
+				gl.setAttribute('x2', W - PAD_R);
+				gl.setAttribute('y1', gy);
+				gl.setAttribute('y2', gy);
+				gl.setAttribute('class', 'gridline');
+				svg.appendChild(gl);
+				var lbl = document.createElementNS(svgns, 'text');
+				lbl.setAttribute('x', PAD_L - 8);
+				lbl.setAttribute('y', gy + 3);
+				lbl.setAttribute('text-anchor', 'end');
+				lbl.setAttribute('class', 'axislabel');
+				lbl.textContent = fmtBytes(v);
+				svg.appendChild(lbl);
+			}
+
+			function path(vals) {
+				return vals
+					.map(function (v, i) {
+						return (i === 0 ? 'M' : 'L') + x(i).toFixed(1) + ' ' + y(v).toFixed(1);
+					})
+					.join(' ');
+			}
+			function areaPath(vals) {
+				return path(vals) + ' L ' + x(vals.length - 1).toFixed(1) + ' ' + y(minY).toFixed(1) +
+					' L ' + x(0).toFixed(1) + ' ' + y(minY).toFixed(1) + ' Z';
+			}
+
+			[
+				{ vals: rxVals, color: 'var(--rx)' },
+				{ vals: txVals, color: 'var(--tx)' },
+			].forEach(function (s) {
+				var area = document.createElementNS(svgns, 'path');
+				area.setAttribute('d', areaPath(s.vals));
+				area.setAttribute('class', 'series-area');
+				area.setAttribute('fill', s.color);
+				area.setAttribute('opacity', '0.1');
+				svg.appendChild(area);
+
+				var line = document.createElementNS(svgns, 'path');
+				line.setAttribute('d', path(s.vals));
+				line.setAttribute('class', 'series-line');
+				line.setAttribute('stroke', s.color);
+				svg.appendChild(line);
+			});
+
+			// crosshair + hover dots
+			var crosshair = document.createElementNS(svgns, 'line');
+			crosshair.setAttribute('class', 'crosshair');
+			crosshair.setAttribute('y1', PAD_T);
+			crosshair.setAttribute('y2', H - PAD_B);
+			svg.appendChild(crosshair);
+
+			var dots = ['rx', 'tx'].map(function (key, si) {
+				var g = document.createElementNS(svgns, 'g');
+				g.setAttribute('class', 'hoverdot');
+				var ring = document.createElementNS(svgns, 'circle');
+				ring.setAttribute('class', 'ring');
+				ring.setAttribute('r', '6');
+				var dot = document.createElementNS(svgns, 'circle');
+				dot.setAttribute('r', '4');
+				dot.setAttribute('fill', si === 0 ? 'var(--rx)' : 'var(--tx)');
+				g.appendChild(ring);
+				g.appendChild(dot);
+				svg.appendChild(g);
+				return g;
+			});
+
+			wrap.appendChild(svg);
+			var tooltip = el('div', { class: 'tooltip' });
+			wrap.appendChild(tooltip);
+
+			// hit layer: one big rect, nearest-index on move
+			var hit = document.createElementNS(svgns, 'rect');
+			hit.setAttribute('x', PAD_L);
+			hit.setAttribute('y', PAD_T);
+			hit.setAttribute('width', plotW);
+			hit.setAttribute('height', plotH);
+			hit.setAttribute('class', 'hit');
+			svg.appendChild(hit);
+
+			function nearestIndex(px) {
+				var frac = (px - PAD_L) / plotW;
+				var i = Math.round(frac * (REPORT.length - 1));
+				return Math.max(0, Math.min(REPORT.length - 1, i));
+			}
+
+			function showAt(i) {
+				var snap = REPORT[i];
+				var cx = x(i);
+				crosshair.setAttribute('x1', cx);
+				crosshair.setAttribute('x2', cx);
+				crosshair.style.opacity = '1';
+				var vals = [snap.aggregate.turnserver_link.rx_bytes, snap.aggregate.turnserver_link.tx_bytes];
+				dots.forEach(function (g, si) {
+					g.style.opacity = '1';
+					g.setAttribute('transform', 'translate(' + cx + ',' + y(vals[si]) + ')');
+				});
+
+				tooltip.innerHTML = '';
+				tooltip.appendChild(el('div', { class: 't-time', text: fmtTime(snap.ts) }));
+				[
+					{ label: 'rx', color: 'var(--rx)', v: vals[0] },
+					{ label: 'tx', color: 'var(--tx)', v: vals[1] },
+				].forEach(function (row) {
+					var r = el('div', { class: 't-row' });
+					r.appendChild(el('span', { class: 't-key', style: 'background:' + row.color }));
+					r.appendChild(document.createTextNode(row.label));
+					r.appendChild(el('span', { class: 't-val', text: fmtBytes(row.v) }));
+					tooltip.appendChild(r);
+				});
+				tooltip.style.opacity = '1';
+				var pct = REPORT.length > 1 ? i / (REPORT.length - 1) : 0;
+				tooltip.style.left = 'calc(' + (pct * 100).toFixed(2) + '% - ' + (pct > 0.7 ? '180px' : '-20px') + ')';
+				tooltip.style.top = '4px';
+			}
+			function hideTip() {
+				crosshair.style.opacity = '0';
+				dots.forEach(function (g) {
+					g.style.opacity = '0';
+				});
+				tooltip.style.opacity = '0';
+			}
+
+			svg.addEventListener('pointermove', function (ev) {
+				var rect = svg.getBoundingClientRect();
+				var px = ((ev.clientX - rect.left) / rect.width) * W;
+				showAt(nearestIndex(px));
+			});
+			svg.addEventListener('pointerleave', hideTip);
+			showAt(selected);
+		}
+
+		// -------------------------------------------------------------- clients
+
+		function renderClients(snap) {
+			var host = document.getElementById('clients');
+			host.innerHTML = '';
+			if (snap.clients.length === 0) {
+				host.appendChild(
+					el('div', { class: 'empty' }, [
+						el('span', { class: 'glyph', text: '···' }),
+						el('div', { text: 'No active clients in this snapshot.' }),
+						el('div', {
+							text: 'Run scripts/turn-report.js again while someone is connected to populate this table.',
+							style: 'margin-top:4px;font-size:12px;',
+						}),
+					]),
+				);
+				return;
+			}
+			var tableWrap = el('div', { class: 'table-wrap' });
+			var table = el('table', { class: 'clients' });
+			var thead = el('thead', {}, [
+				el('tr', {}, [
+					el('th', { text: 'Client' }),
+					el('th', { text: 'Location' }),
+					el('th', { text: 'Sessions' }),
+					el('th', { text: 'In', class: 'num' }),
+					el('th', { text: 'Out', class: 'num' }),
+					el('th', { text: 'Flags' }),
+				]),
+			]);
+			table.appendChild(thead);
+			var tbody = el('tbody');
+			snap.clients.forEach(function (c) {
+				var tr = el('tr');
+				tr.appendChild(el('td', { class: 'ip', text: c.ip }));
+
+				var geoTd = el('td');
+				if (c.geo && (c.geo.country || c.geo.asn_name)) {
+					var g = el('span', { class: 'geo' });
+					if (c.geo.country) g.appendChild(el('span', { class: 'flag', text: flagEmoji(c.geo.country) }));
+					g.appendChild(document.createTextNode(c.geo.asn_name || c.geo.country || 'Unknown'));
+					geoTd.appendChild(g);
+				} else {
+					geoTd.appendChild(el('span', { class: 'geo', text: '—' }));
+				}
+				tr.appendChild(geoTd);
+
+				var protos = {};
+				c.sessions.forEach(function (s) {
+					protos[s.proto] = (protos[s.proto] || 0) + 1;
+				});
+				var sessText = Object.keys(protos).length
+					? Object.keys(protos)
+						.map(function (p) {
+							return protos[p] + ' ' + p;
+						})
+						.join(', ')
+					: 'none live';
+				tr.appendChild(el('td', { text: sessText }));
+
+				tr.appendChild(el('td', { class: 'num', text: fmtBytes(c.bytes_in) }));
+				tr.appendChild(el('td', { class: 'num', text: fmtBytes(c.bytes_out) }));
+
+				var flagsTd = el('td');
+				if (c.abuse.naughty_listed) {
+					flagsTd.appendChild(el('span', { class: 'pill crit', text: 'blocked' }));
+				} else if (c.abuse.rst_meter_hits) {
+					flagsTd.appendChild(el('span', { class: 'pill warn', text: 'rst ×' + c.abuse.rst_meter_hits }));
+				} else {
+					flagsTd.appendChild(document.createTextNode('—'));
+				}
+				tr.appendChild(flagsTd);
+
+				tbody.appendChild(tr);
+			});
+			table.appendChild(tbody);
+			tableWrap.appendChild(table);
+			host.appendChild(tableWrap);
+		}
+
+		// -------------------------------------------------------------- health
+
+		function renderHealth(snap) {
+			var host = document.getElementById('health');
+			host.innerHTML = '';
+			Object.keys(snap.health).forEach(function (unit) {
+				var h = snap.health[unit];
+				var up = h.active_state === 'active';
+				var row = el('div', { class: 'health-row' });
+				row.appendChild(el('span', { class: 'unit', text: unit }));
+				row.appendChild(
+					el('span', { class: 'stat-mini', text: h.memory_bytes != null ? fmtBytes(h.memory_bytes) : '' }),
+				);
+				row.appendChild(
+					el('span', { class: 'stat-mini', text: h.n_restarts != null ? h.n_restarts + ' restarts' : '' }),
+				);
+				row.appendChild(
+					el('span', { class: 'status' }, [
+						el('span', { class: 'dot ' + (up ? 'good' : 'critical') }),
+						document.createTextNode(up ? 'running' : h.active_state || 'unknown'),
+					]),
+				);
+				host.appendChild(row);
+			});
+
+			var abuse = document.getElementById('abuse');
+			abuse.innerHTML = '';
+			var a1 = el('span');
+			a1.appendChild(document.createTextNode('Naughty list '));
+			a1.appendChild(el('b', { text: String(snap.aggregate.abuse.naughty_list_size) }));
+			var a2 = el('span');
+			a2.appendChild(document.createTextNode('RST meter '));
+			a2.appendChild(el('b', { text: String(snap.aggregate.abuse.rst_meter_size) }));
+			abuse.appendChild(a1);
+			abuse.appendChild(a2);
+		}
+
+		function renderFooter() {
+			var f = document.getElementById('footer');
+			f.textContent = 'Generated ' + fmtTime(GENERATED_AT) + ' from reports/turn-report.jsonl · GeoIP resolved locally against MaxMind GeoLite2, never sent off-box.';
+		}
+
+		render();
+	})();
+</script>

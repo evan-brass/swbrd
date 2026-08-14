@@ -1,0 +1,11 @@
+{
+  "version": "5",
+  "specifiers": {
+    "npm:mmdb-lib@2.2.1": "2.2.1"
+  },
+  "npm": {
+    "mmdb-lib@2.2.1": {
+      "integrity": "sha512-DXO4L9W+08T+A7h5+xdT32l7IMot8z7WOH+7C1Maol571PnktQ8un7Ni4CyPFp4H+vht/FDA5/tpjRvWMFQDMw=="
+    }
+  }
+}

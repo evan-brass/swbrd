@@ -207,6 +207,30 @@ cmd_perf() {
 		perf report -i /tmp/perf-$unit.data --stdio --no-children 2>/dev/null | head -60'"
 }
 
+# Push etc/nftables.conf and reload.  `nft -c` against the new file first is the whole safety net --
+# nft's atomic transaction model means a bad ruleset never gets applied, so unlike deploy_one there's
+# nothing to back up or roll back.
+cmd_nft() {
+	say "checking etc/nftables.conf"
+	ssh "$VPS" 'sudo -n /usr/sbin/nft -c -f -' < "$ROOT/etc/nftables.conf" || die "nft -c rejected the new ruleset -- nothing was touched"
+	ok "syntax check passed"
+
+	say "deploying etc/nftables.conf -> $VPS:/etc/nftables.conf"
+	scp -q "$ROOT/etc/nftables.conf" "$VPS:/tmp/nftables.conf.new"
+	vps_root "install -m 644 -o root -g root /tmp/nftables.conf.new /etc/nftables.conf"
+	vps "rm -f /tmp/nftables.conf.new"
+	vps_root "systemctl reload nftables"
+
+	sleep 1
+	if vps "systemctl is-active --quiet nftables"; then
+		ok "nftables reloaded"
+	else
+		bad "nftables is not active -- previous ruleset was almost certainly never replaced (reload aborts before flushing on error)"
+		vps_root "journalctl -u nftables -n 30 --no-pager -o short-precise" || true
+		die "check the box by hand"
+	fi
+}
+
 cmd_status() {
 	for u in $UNITS; do
 		state=$(vps "systemctl is-active $u" || true)
@@ -253,6 +277,7 @@ usage() {
 	  status                      is-active for $UNITS
 	  serve [port]                file-server for this tree on localhost:$PORT
 	  e2e <page> [opts]           run a tests/*.html page in headless Chrome
+	  nft                         check + push etc/nftables.conf, reload
 	  vm <cmd>... | vps <cmd>...  raw command on the build VM / the VPS
 	EOF
 	exit 2
@@ -261,7 +286,7 @@ usage() {
 sub=${1:-}
 [ $# -gt 0 ] && shift || true
 case $sub in
-	check|test|build|deploy|rollback|logs|watch|capture|perf|status|serve|e2e) "cmd_$sub" "$@" ;;
+	check|test|build|deploy|rollback|logs|watch|capture|perf|status|serve|e2e|nft) "cmd_$sub" "$@" ;;
 	vm) vm "$@" ;;
 	vps) vps "$@" ;;
 	*) usage ;;
