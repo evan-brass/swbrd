@@ -7,16 +7,15 @@ use ipnet::Ipv6Net;
 use libc::in6_pktinfo;
 use mio::{Events, Interest, Poll};
 use nix::sys::socket::{
-	ControlMessage, ControlMessageOwned, MsgFlags, SetSockOpt, SockaddrIn6,
-	sockopt::Ipv6RecvPacketInfo,
+	ControlMessageOwned, MsgFlags, SetSockOpt, SockaddrIn6, sockopt::Ipv6RecvPacketInfo,
 };
 use rand::random_range;
-use socket2::{Domain, Protocol, SockAddr, SockRef, Socket, Type};
+use socket2::{Domain, MsgHdr, Protocol, SockAddr, SockRef, Socket, Type};
 use socket3::{SocketMtuExt, SocketQueueExt};
 use std::{
 	cell::Cell,
 	io::{Error, ErrorKind, IoSlice, IoSliceMut, Read, Write},
-	net::{IpAddr, Ipv6Addr, SocketAddr, SocketAddrV4, SocketAddrV6, TcpStream, UdpSocket},
+	net::{IpAddr, Ipv6Addr, SocketAddrV6, TcpStream, UdpSocket},
 	ops::RangeInclusive,
 	os::fd::{AsFd, AsRawFd},
 	rc::Rc,
@@ -132,6 +131,7 @@ impl Conn {
 
 struct Client {
 	conn: Conn,
+	mapped: SocketAddrV6,
 
 	keepalives: Cell<u8>,
 	timeout: Cell<Instant>,
@@ -186,7 +186,7 @@ impl Server {
 	fn timeout() -> Instant {
 		Instant::now() + Duration::from_mins(1)
 	}
-	fn new_client(&mut self, conn: Conn) -> Result<SocketAddrV6, Error> {
+	fn new_client(&mut self, conn: Conn, mapped: SocketAddrV6) -> Result<SocketAddrV6, Error> {
 		// 1. Find a random ip+port that's not currently occupied
 		let mut tries = 5;
 		let (relayed, i) = loop {
@@ -208,6 +208,8 @@ impl Server {
 		// 2. Create the client
 		let client = Rc::new(Client {
 			conn,
+			mapped,
+
 			relayed,
 			relayed_link: Default::default(),
 
@@ -263,7 +265,7 @@ enum Action {
 	/// Refresh lifetime=0
 	Close,
 }
-fn handle_turn(msg: &mut Stun, mapped: SocketAddr) -> Action {
+fn handle_turn(msg: &mut Stun, mapped: SocketAddrV6) -> Action {
 	if msg.txid.id == [0; 12] {
 		return Action::Drop;
 	}
@@ -328,17 +330,17 @@ fn handle_turn(msg: &mut Stun, mapped: SocketAddr) -> Action {
 		_ => 240,
 	});
 
-	let add_mapped = |msg: &mut Stun| match mapped {
-		SocketAddr::V4(v4) => {
+	let add_mapped = |msg: &mut Stun| match mapped.ip().to_canonical() {
+		IpAddr::V4(v4) => {
 			msg.append_val(
 				known::XOR_MAPPED_ADDRESS,
-				&Addr4::new(*v4.ip(), v4.port()).xor(&msg.txid),
+				&Addr4::new(v4, mapped.port()).xor(&msg.txid),
 			);
 		}
-		SocketAddr::V6(v6) => {
+		IpAddr::V6(v6) => {
 			msg.append_val(
 				known::XOR_MAPPED_ADDRESS,
-				&Addr6::new(*v6.ip(), v6.port()).xor(&msg.txid),
+				&Addr6::new(v6, mapped.port()).xor(&msg.txid),
 			);
 		}
 	};
@@ -504,17 +506,18 @@ pub fn main() -> Result<Never> {
 		for e in events.into_iter() {
 			match server.poll.get(e.token()) {
 				Err(TCP) => loop {
-					let (stream, _sender) = match listener.accept() {
+					let (stream, mapped) = match listener.accept() {
 						Err(e) if e.kind() == ErrorKind::Interrupted => continue,
 						Err(e) if e.kind() == ErrorKind::WouldBlock => break,
 						v => v?,
 					};
 					stream.set_tcp_nodelay(true)?;
+					let mapped = mapped.as_socket_ipv6().expect("");
 
-					server.new_client(Conn::Tcp(stream.into()))?;
+					server.new_client(Conn::Tcp(stream.into()), mapped)?;
 				},
 				Err(UDP) => loop {
-					let mut control_buffer = nix::cmsg_space!(in6_pktinfo);
+					let mut control_buffer = [0; nix::sys::socket::cmsg_space::<in6_pktinfo>()];
 					let mut iovs = [IoSliceMut::new(&mut buffer)];
 					let msg = match nix::sys::socket::recvmsg::<SockaddrIn6>(
 						udp.as_raw_fd(),
@@ -539,6 +542,7 @@ pub fn main() -> Result<Never> {
 						})
 						.expect("No local ipv6 packet info?");
 					let sender = msg.address.expect("No sender address");
+					let mapped = SocketAddrV6::new(sender.ip(), sender.port(), 0, 0);
 					let len = msg.bytes;
 					let Ok(msg) = Stun::try_mut_from_bytes(&mut buffer) else {
 						continue;
@@ -547,14 +551,6 @@ pub fn main() -> Result<Never> {
 					if size_of_val(msg.trim()) != len {
 						continue;
 					}
-
-					let mapped = match sender.ip().to_canonical() {
-						IpAddr::V4(v4) => SocketAddr::V4(SocketAddrV4::new(v4, sender.port())),
-						IpAddr::V6(v4) => {
-							SocketAddr::V6(SocketAddrV6::new(v4, sender.port(), 0, 0))
-						}
-					};
-					// NOTE: For when sending, the local address is already sitting in the control_buffer.  I think we can just sendmsg using the same value we received.
 
 					let end = match handle_turn(msg, mapped) {
 						// Drop everything that isn't stateless or allocate
@@ -571,8 +567,8 @@ pub fn main() -> Result<Never> {
 								0,
 								0,
 							));
-							let peer =
-								SockAddr::from(SocketAddrV6::new(sender.ip(), sender.port(), 0, 0));
+							let mapped = SocketAddrV6::new(sender.ip(), sender.port(), 0, 0);
+							let peer = SockAddr::from(mapped);
 
 							socket.set_reuse_address(true)?;
 							socket.set_reuse_port(true)?;
@@ -593,7 +589,7 @@ pub fn main() -> Result<Never> {
 								}
 							};
 
-							let relayed = server.new_client(Conn::Udp(socket.into()))?;
+							let relayed = server.new_client(Conn::Udp(socket.into()), mapped)?;
 							// Since we successfully allocated a client, we respond from our unconnected socket (connected socket gets eaten by server)
 							let xor_relayed =
 								Addr6::new(*relayed.ip(), relayed.port()).xor(&msg.txid);
@@ -607,17 +603,14 @@ pub fn main() -> Result<Never> {
 					};
 
 					// Send the reply/allocated message
+					let sender = SockAddr::from(mapped);
 					let iov = [IoSlice::new(&buffer[..end])];
-					let _ = match nix::sys::socket::sendmsg(
-						udp.as_raw_fd(),
-						&iov,
-						// The local socket address is already in the control buffer from when we read it:
-						&[ControlMessage::Ipv6PacketInfo(&local)],
-						MsgFlags::empty(),
-						Some(&sender),
-					)
-					.map_err(Error::from)
-					{
+					let msg = MsgHdr::new()
+						.with_buffers(&iov)
+						// Reuse the control buffer since it already has the local address in it
+						.with_control(&control_buffer)
+						.with_addr(&sender);
+					let _ = match udp.sendmsg(&msg, 0) {
 						Err(e) if e.kind() == ErrorKind::Interrupted => continue,
 						Err(e) if e.kind() == ErrorKind::WouldBlock => continue,
 						v => v?,
@@ -804,18 +797,8 @@ pub fn main() -> Result<Never> {
 						continue;
 					}
 
-					// Get the canonical peer address off the established socket
-					let sock = SockRef::from(&client.conn);
-					let mapped = sock.peer_addr()?.as_socket().expect("fuck");
-					let mapped = match mapped.ip().to_canonical() {
-						IpAddr::V4(v4) => SocketAddr::V4(SocketAddrV4::new(v4, mapped.port())),
-						IpAddr::V6(v4) => {
-							SocketAddr::V6(SocketAddrV6::new(v4, mapped.port(), 0, 0))
-						}
-					};
-
 					// Handle the TURN message
-					let end = match handle_turn(msg, mapped) {
+					let end = match handle_turn(msg, client.mapped) {
 						Action::Drop => continue,
 						Action::Reply(end) => end,
 						Action::Close => {
