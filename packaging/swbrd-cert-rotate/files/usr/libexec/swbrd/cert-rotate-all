@@ -1,0 +1,27 @@
+#!/bin/sh
+# Regenerate both deterministic certificates and report whether anything moved.
+#
+# cert-rotate is a pure function of (year, month): `January` yields the current
+# year's certificate until Nov 1 and next year's after, `July` yields last
+# year's until May 1 and this year's after.  So running it daily rewrites
+# byte-identical files except on those two days, which is exactly the rotation
+# the two old per-month timers encoded -- with none of the "did the timer fire?"
+# fragility.  We compare before replacing so that dtls-proxy is only signalled
+# on the days something really changed.
+set -eu
+
+state=/var/lib/swbrd
+flag=$state/.rotate-changed
+
+tmp=$(mktemp -d "$state/.rotate.XXXXXX")
+trap 'rm -rf "$tmp"' EXIT
+cd "$tmp"
+
+for m in January July; do
+	/usr/libexec/swbrd/cert-rotate "$m"
+	if ! cmp -s "$m.der" "$state/$m.der"; then
+		install -m 0644 "$m.der" "$state/$m.der"
+		echo "cert-rotate: $m.der rotated"
+		: > "$flag"
+	fi
+done

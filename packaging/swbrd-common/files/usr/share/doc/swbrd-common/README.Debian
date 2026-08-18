@@ -1,0 +1,34 @@
+swbrd on Debian
+===============
+
+Firewall
+--------
+Every swbrd package installs its own tables as a fragment in /etc/nftables.d/.
+Each fragment uses the declare-delete-define idiom, so applying one replaces
+exactly its own tables and passes every other table through untouched.
+
+/etc/nftables.conf belongs to the nftables package and so cannot be shipped by
+any swbrd package.  It has to include the fragment directory or the rules will
+only survive until the next boot:
+
+    #!/usr/sbin/nft -f
+    flush ruleset
+    include "/etc/nftables.d/*.nft"
+
+`./scripts/dev.sh nft` in the source tree pushes exactly that file.  The
+postinst warns when the include is missing.
+
+Host prerequisites not owned by any package
+-------------------------------------------
+The address plan assumes the host's own /64 is routed here and split up by more
+specific routes.  On the reference host that is /etc/systemd/network/eth0.network,
+whose `[Route] Destination=<your /64>, Type=unreachable` is what keeps the /96s
+in the daemon packages from being shadowed by the default route.  Without it the
+packaged routes will not do what you expect.
+
+The site's actual prefixes live in conffiles, not in the packaged units:
+
+    /etc/default/swbrd-*                              daemon arguments
+    /etc/systemd/network/70-*.network.d/10-site.conf  the matching routes
+
+Those two always have to agree.

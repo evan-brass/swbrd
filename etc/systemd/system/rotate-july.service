@@ -1,9 +1,0 @@
-[Unit]
-Description=Rotate the July.der certificate file
-
-[Service]
-Type=oneshot
-StateDirectory=swbrd
-WorkingDirectory=/var/lib/swbrd
-ExecStart=/opt/cert-rotate July
-ExecStart=systemctl kill -s SIGHUP dtls-proxy

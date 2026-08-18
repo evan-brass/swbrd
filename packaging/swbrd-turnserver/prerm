@@ -1,0 +1,11 @@
+#!/bin/sh
+set -e
+. /usr/libexec/swbrd/maint-lib.sh
+
+case "$1" in
+remove)
+	swbrd_sd_stop turnserver.service
+	swbrd_nft_drop 30-swbrd-turnserver.nft 'inet turn_acct'
+	;;
+esac
+exit 0

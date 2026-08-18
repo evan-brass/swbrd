@@ -1,0 +1,6 @@
+# Arguments for /usr/libexec/swbrd/turnserver (see --help).
+# --net must match the [Route] in /etc/systemd/network/70-turnserver.network.d/10-site.conf.
+TURNSERVER_ARGS=-i turnserver --net 2a01:4ff:1f0:7e46:0:1::/96 --min-port 10000 --max-port 65535 --router 2a01:4ff:1f0:7e46::1
+
+RUST_LOG=trace
+RUST_BACKTRACE=full

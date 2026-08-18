@@ -1,0 +1,10 @@
+#!/bin/sh
+set -e
+. /usr/libexec/swbrd/maint-lib.sh
+
+case "$1" in
+remove)
+	swbrd_sd_stop swbrd-cert-rotate.timer
+	;;
+esac
+exit 0

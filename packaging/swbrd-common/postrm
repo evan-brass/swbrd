@@ -1,0 +1,14 @@
+#!/bin/sh
+set -e
+
+case "$1" in
+remove)
+	[ -d /run/systemd/system ] && networkctl reload >/dev/null 2>&1 || true
+	;;
+purge)
+	rm -rf /var/lib/swbrd-nft
+	# /var/lib/swbrd and the swbrd user are deliberately left behind: the
+	# deterministic DTLS certs and their key live there.
+	;;
+esac
+exit 0

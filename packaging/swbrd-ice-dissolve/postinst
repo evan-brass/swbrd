@@ -1,0 +1,13 @@
+#!/bin/sh
+set -e
+. /usr/libexec/swbrd/maint-lib.sh
+
+case "$1" in
+configure)
+	[ -d /run/systemd/system ] && /usr/lib/systemd/systemd-sysctl 60-swbrd-ice-dissolve.conf || true
+	swbrd_networkd_reload
+	swbrd_nft_apply 20-swbrd-ice-dissolve.nft 'ip6 ice_dissolve'
+	swbrd_sd_enable_start ice-dissolve.service "$2"
+	;;
+esac
+exit 0

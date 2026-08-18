@@ -1,0 +1,18 @@
+Package: swbrd-dtls-proxy
+Version: @VERSION@
+Architecture: @ARCH@
+Maintainer: Evan Brass <brassevan@gmail.com>
+Section: net
+Priority: optional
+Installed-Size: @INSTALLED_SIZE@
+Depends: swbrd-common (>= @COMPAT@), systemd, init-system-helpers (>= 1.54), libssl3t64 (>= 3.5), libc6 (>= 2.38), libgcc-s1
+Recommends: swbrd-cert-rotate
+Homepage: https://github.com/evan-brass/swbrd
+Description: DTLS proxy that uses destination IP+port as the connection id
+ Terminates DTLS for clients that aim at a random address inside a routed /96,
+ standing in for DTLS connection ids, and forwards the plaintext to the host's
+ SCTP-over-UDP endpoint.  Uses the shared IP_TRANSPARENT divert rules from
+ swbrd-common; it installs no nftables tables of its own.
+ .
+ Built for one private host and not fit for redistribution; see
+ /usr/share/doc/swbrd-dtls-proxy/copyright.

@@ -1,0 +1,7 @@
+/etc/default/swbrd-turnserver
+/etc/systemd/network/70-turnserver.network.d/10-site.conf
+/etc/nftables.d/30-swbrd-turnserver.nft
+/etc/nginx/modules-enabled/90-swbrd-stream.conf
+/etc/nginx/stream-enabled/50-swbrd-turnserver.conf
+/etc/nginx/conf.d/50-swbrd-turnserver.conf
+/etc/letsencrypt/renewal-hooks/deploy/50-swbrd-nginx-reload

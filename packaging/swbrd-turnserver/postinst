@@ -1,0 +1,23 @@
+#!/bin/sh
+set -e
+. /usr/libexec/swbrd/maint-lib.sh
+
+case "$1" in
+configure)
+	# Create/refresh the TUN before starting the daemon: it opens an interface
+	# networkd is responsible for creating with User=swbrd.
+	swbrd_networkd_reload
+
+	swbrd_nft_apply 30-swbrd-turnserver.nft 'inet turn_acct'
+
+	if nginx -t >/dev/null 2>&1; then
+		[ -d /run/systemd/system ] && deb-systemd-invoke reload nginx.service >/dev/null || true
+	else
+		echo "swbrd: nginx -t failed; nginx was NOT reloaded.  Run 'nginx -t' to see why." >&2
+		nginx -t >&2 || true
+	fi
+
+	swbrd_sd_enable_start turnserver.service "$2"
+	;;
+esac
+exit 0

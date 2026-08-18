@@ -1,0 +1,14 @@
+#!/bin/sh
+set -e
+
+case "$1" in
+remove)
+	[ -d /run/systemd/system ] && systemctl --system daemon-reload >/dev/null || true
+	deb-systemd-helper mask swbrd-cert-rotate.timer >/dev/null || true
+	;;
+purge)
+	deb-systemd-helper purge swbrd-cert-rotate.timer >/dev/null || true
+	deb-systemd-helper unmask swbrd-cert-rotate.timer >/dev/null || true
+	;;
+esac
+exit 0

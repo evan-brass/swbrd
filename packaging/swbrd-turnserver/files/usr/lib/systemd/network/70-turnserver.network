@@ -1,0 +1,9 @@
+[Match]
+Name=turnserver
+
+[Network]
+ConfigureWithoutCarrier=yes
+IgnoreCarrierLoss=yes
+
+[Link]
+RequiredForOnline=no

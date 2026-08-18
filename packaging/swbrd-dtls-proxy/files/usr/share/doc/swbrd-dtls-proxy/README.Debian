@@ -1,0 +1,14 @@
+swbrd-dtls-proxy
+================
+
+/usr/share/swbrd/key.pem is the deterministic-certificate signing key, seeded
+into /var/lib/swbrd/key.pem on first install and never overwritten afterwards.
+
+It is *deliberately public*.  The whole point of the deter scheme is that every
+client derives the same certificate for a given half-year without any prior
+exchange, which it can only do if the key is known.  Treat it as a protocol
+constant, not as a secret; it authenticates nothing.
+
+The plaintext side forwards to the host's SCTP-over-UDP endpoint (see -e in
+/etc/default/swbrd-dtls-proxy).  That port is configured by net.sctp.udp_port,
+which belongs to the swbrd VPN daemon and is not shipped by this package.

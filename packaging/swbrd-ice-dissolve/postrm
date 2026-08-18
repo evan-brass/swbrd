@@ -1,0 +1,17 @@
+#!/bin/sh
+set -e
+
+case "$1" in
+remove)
+	[ -d /run/systemd/system ] || exit 0
+	systemctl --system daemon-reload >/dev/null || true
+	deb-systemd-helper mask ice-dissolve.service >/dev/null || true
+	networkctl reload >/dev/null 2>&1 || true
+	networkctl delete ice-dissolve >/dev/null 2>&1 || true
+	;;
+purge)
+	deb-systemd-helper purge ice-dissolve.service >/dev/null || true
+	deb-systemd-helper unmask ice-dissolve.service >/dev/null || true
+	;;
+esac
+exit 0

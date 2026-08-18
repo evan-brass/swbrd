@@ -1,0 +1,11 @@
+#!/bin/sh
+set -e
+. /usr/libexec/swbrd/maint-lib.sh
+
+case "$1" in
+remove)
+	swbrd_sd_stop ice-dissolve.service
+	swbrd_nft_drop 20-swbrd-ice-dissolve.nft 'ip6 ice_dissolve'
+	;;
+esac
+exit 0

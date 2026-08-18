@@ -1,0 +1,17 @@
+Package: swbrd-common
+Version: @VERSION@
+Architecture: all
+Maintainer: Evan Brass <brassevan@gmail.com>
+Section: net
+Priority: optional
+Installed-Size: @INSTALLED_SIZE@
+Depends: systemd (>= 253), nftables (>= 1.0.9), init-system-helpers (>= 1.54)
+Homepage: https://github.com/evan-brass/swbrd
+Description: Shared runtime pieces for the swbrd server daemons
+ Creates the swbrd system user and state directory, names the ice-dissolve and
+ transparent route tables, installs the lo policy rule that makes IP_TRANSPARENT
+ sockets work, and owns the two host-wide nftables tables (santa, transparent)
+ that more than one swbrd daemon depends on.
+ .
+ Built for one private host and not fit for redistribution; see
+ /usr/share/doc/swbrd-common/copyright.

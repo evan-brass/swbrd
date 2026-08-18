@@ -1,0 +1,18 @@
+Package: swbrd-turnserver
+Version: @VERSION@
+Architecture: @ARCH@
+Maintainer: Evan Brass <brassevan@gmail.com>
+Section: net
+Priority: optional
+Installed-Size: @INSTALLED_SIZE@
+Depends: swbrd-common (>= @COMPAT@), nginx (>= 1.26), libnginx-mod-stream, nftables, systemd, init-system-helpers (>= 1.54), libc6 (>= 2.38), libgcc-s1
+Suggests: certbot
+Homepage: https://github.com/evan-brass/swbrd
+Description: Stateless TURN relay using the TURN wire format over UDP
+ Relays for WebRTC clients without keeping allocation state, encoding the
+ allocation into an IPv6 address instead.  Ships the nginx stream configuration
+ that terminates turns: on 5349 and multiplexes TLS, HTTP and ssh on 443, plus
+ the per-client nftables accounting for the :3478 sockets.
+ .
+ Built for one private host and not fit for redistribution; see
+ /usr/share/doc/swbrd-turnserver/copyright.

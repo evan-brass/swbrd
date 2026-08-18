@@ -1,0 +1,19 @@
+#!/bin/sh
+set -e
+
+case "$1" in
+remove)
+	[ -d /run/systemd/system ] || exit 0
+	systemctl --system daemon-reload >/dev/null || true
+	deb-systemd-helper mask turnserver.service >/dev/null || true
+	# networkctl reload does not drop an interface whose .netdev file is gone.
+	networkctl reload >/dev/null 2>&1 || true
+	networkctl delete turnserver >/dev/null 2>&1 || true
+	nginx -t >/dev/null 2>&1 && systemctl reload nginx.service >/dev/null 2>&1 || true
+	;;
+purge)
+	deb-systemd-helper purge turnserver.service >/dev/null || true
+	deb-systemd-helper unmask turnserver.service >/dev/null || true
+	;;
+esac
+exit 0

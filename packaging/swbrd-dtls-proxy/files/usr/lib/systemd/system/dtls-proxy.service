@@ -1,0 +1,19 @@
+[Unit]
+Description=DTLS proxy that uses destination IP+port as the connection id
+Documentation=https://github.com/evan-brass/swbrd
+Wants=network-online.target
+After=network-online.target systemd-networkd.service
+
+[Service]
+Type=exec
+User=swbrd
+AmbientCapabilities=CAP_NET_ADMIN
+CapabilityBoundingSet=CAP_NET_ADMIN
+NoNewPrivileges=yes
+StateDirectory=swbrd
+WorkingDirectory=/var/lib/swbrd
+EnvironmentFile=/etc/default/swbrd-dtls-proxy
+ExecStart=/usr/libexec/swbrd/dtls-proxy $DTLS_PROXY_ARGS
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,22 @@
+#!/usr/sbin/nft -f
+# swbrd-ice-dissolve.  Declare-delete-define: applying this file replaces exactly
+# table ip6 ice_dissolve and leaves every other table alone.
+#
+# Matches a STUN Binding Request (type 0x0001, magic cookie 0x2112A442) whose
+# first attribute is USERNAME (0x0006) beginning "dissolve:" and marks it 1, which
+# 70-ice-dissolve.network routes out the ice-dissolve TUN.
+
+table ip6 ice_dissolve {}
+delete table ip6 ice_dissolve
+table ip6 ice_dissolve {
+	chain dissolve {
+		type filter hook prerouting priority -140;
+		meta l4proto udp \
+		@th,64,16 == 0x0001 \
+		@th,96,32 == 0x2112A442 \
+		@th,224,16 == 0x0006 \
+		@th,256,64 == 0x646973736f6c7665 \
+		@th,320,8 == 0x3a \
+		meta mark set 1
+	}
+}

@@ -1,0 +1,10 @@
+#!/bin/sh
+set -e
+. /usr/libexec/swbrd/maint-lib.sh
+
+case "$1" in
+remove)
+	swbrd_nft_drop 10-swbrd-common.nft 'inet transparent' 'inet santa'
+	;;
+esac
+exit 0

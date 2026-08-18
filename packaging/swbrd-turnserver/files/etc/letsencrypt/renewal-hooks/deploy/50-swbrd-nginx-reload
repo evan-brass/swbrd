@@ -1,0 +1,7 @@
+#!/bin/sh
+# certbot leaves this directory empty by default, so a renewal never reaches
+# nginx and the turns: listener on 5349 keeps serving the expired certificate
+# until something restarts nginx by hand.
+set -e
+nginx -t >/dev/null 2>&1 || exit 0
+systemctl reload nginx.service || true

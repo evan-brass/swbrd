@@ -1,0 +1,9 @@
+[Match]
+Name=dtls-proxy
+
+[Network]
+ConfigureWithoutCarrier=yes
+IgnoreCarrierLoss=yes
+
+[Link]
+RequiredForOnline=no

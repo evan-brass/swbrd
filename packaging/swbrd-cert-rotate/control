@@ -1,0 +1,17 @@
+Package: swbrd-cert-rotate
+Version: @VERSION@
+Architecture: @ARCH@
+Maintainer: Evan Brass <brassevan@gmail.com>
+Section: net
+Priority: optional
+Installed-Size: @INSTALLED_SIZE@
+Depends: swbrd-common (>= @COMPAT@), systemd, init-system-helpers (>= 1.54), libc6 (>= 2.38)
+Homepage: https://github.com/evan-brass/swbrd
+Description: Deterministic DTLS certificate rotation for swbrd
+ Regenerates the January and July certificates that swbrd-dtls-proxy serves and
+ that every client derives independently.  The generator is a pure function of
+ (year, month), so the daily timer rewrites identical bytes on all but the two
+ days a year a certificate actually turns over.
+ .
+ Built for one private host and not fit for redistribution; see
+ /usr/share/doc/swbrd-cert-rotate/copyright.

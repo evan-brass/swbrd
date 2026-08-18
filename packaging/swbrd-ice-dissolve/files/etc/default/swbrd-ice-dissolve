@@ -1,0 +1,4 @@
+# ice-dissolve takes no arguments: the TUN name and the ICE password are
+# compile-time constants.
+RUST_LOG=trace
+RUST_BACKTRACE=full

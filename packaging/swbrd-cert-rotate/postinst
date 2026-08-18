@@ -1,0 +1,13 @@
+#!/bin/sh
+set -e
+. /usr/libexec/swbrd/maint-lib.sh
+
+case "$1" in
+configure)
+	swbrd_sd_enable_start swbrd-cert-rotate.timer "$2"
+	# Generate the certificates now rather than waiting up to a day for the
+	# first timer firing (a no-op when they are already present and current).
+	[ -d /run/systemd/system ] && systemctl start swbrd-cert-rotate.service >/dev/null || true
+	;;
+esac
+exit 0

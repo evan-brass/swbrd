@@ -1,0 +1,11 @@
+[Unit]
+Description=Daily check for a deterministic DTLS certificate rotation
+
+[Timer]
+OnCalendar=daily
+Persistent=true
+RandomizedDelaySec=1h
+Unit=swbrd-cert-rotate.service
+
+[Install]
+WantedBy=timers.target

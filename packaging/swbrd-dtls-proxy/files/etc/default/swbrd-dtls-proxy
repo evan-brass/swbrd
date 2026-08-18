@@ -1,0 +1,7 @@
+# Arguments for /usr/libexec/swbrd/dtls-proxy (see --help).
+# -e is the host's SCTP-over-UDP endpoint; it must match net.sctp.udp_port,
+# which is set by the (unpackaged) swbrd VPN daemon's configuration.
+DTLS_PROXY_ARGS=-i dtls-proxy -e [2a01:4ff:1f0:7e46::1]:9899 -r 2a01:4ff:1f0:7e46::1
+
+RUST_LOG=trace
+RUST_BACKTRACE=full

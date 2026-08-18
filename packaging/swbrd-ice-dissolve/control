@@ -1,0 +1,16 @@
+Package: swbrd-ice-dissolve
+Version: @VERSION@
+Architecture: @ARCH@
+Maintainer: Evan Brass <brassevan@gmail.com>
+Section: net
+Priority: optional
+Installed-Size: @INSTALLED_SIZE@
+Depends: swbrd-common (>= @COMPAT@), nftables, systemd, init-system-helpers (>= 1.54), libc6 (>= 2.38), libgcc-s1
+Homepage: https://github.com/evan-brass/swbrd
+Description: Stateless ICE interception for swbrd
+ Answers STUN Binding Requests whose USERNAME starts "dissolve:" straight off a
+ TUN interface, without ever binding a socket.  Ships the nftables rule that
+ marks those packets and the policy route that sends them to the interface.
+ .
+ Built for one private host and not fit for redistribution; see
+ /usr/share/doc/swbrd-ice-dissolve/copyright.

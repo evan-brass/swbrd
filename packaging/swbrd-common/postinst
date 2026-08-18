@@ -1,0 +1,24 @@
+#!/bin/sh
+set -e
+. /usr/libexec/swbrd/maint-lib.sh
+
+case "$1" in
+configure)
+	systemd-sysusers /usr/lib/sysusers.d/swbrd.conf
+	systemd-tmpfiles --create /usr/lib/tmpfiles.d/swbrd.conf
+
+	if [ -d /run/systemd/system ]; then
+		/usr/lib/systemd/systemd-sysctl 60-swbrd-common.conf || true
+		swbrd_networkd_reload
+		# networkd.conf.d is not covered by `networkctl reload`; it needs a
+		# restart, so only pay for that when the drop-in is newly installed.
+		if [ -z "$2" ]; then
+			systemctl try-restart systemd-networkd.service || true
+		fi
+	fi
+
+	swbrd_check_nft_include
+	swbrd_nft_apply 10-swbrd-common.nft 'inet santa' 'inet transparent'
+	;;
+esac
+exit 0

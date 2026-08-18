@@ -1,0 +1,46 @@
+swbrd -- @PACKAGE@
+
+NO REDISTRIBUTION LICENCE IS GRANTED FOR THIS BINARY PACKAGE.
+
+The swbrd source in this repository is Copyright Evan Brass <brassevan@gmail.com>
+and licensed MIT-0; see LICENSE in the source tree.  That covers the source.  It
+does not cover the binaries in this package.
+
+The swbrd executables are statically linked Rust builds -- and, for
+swbrd-cert-rotate, a `deno compile` bundle -- which embed a large amount of
+third-party code under its own terms.  At the last audit the Rust dependency
+graph was 91 third-party crates under:
+
+    MIT OR Apache-2.0                      54
+    MIT                                    20
+    Apache-2.0 OR MIT                       5
+    MIT/Apache-2.0                          4
+    Unlicense OR MIT                        3
+    Apache-2.0                              2
+    BSD-2-Clause OR Apache-2.0 OR MIT       2
+    (MIT OR Apache-2.0) AND Unicode-3.0     1
+
+No copyleft in that set -- but every licence in it is an attribution licence, and
+attribution licences attach to *binary* distribution: shipping the executable
+means shipping the licence texts and copyright notices with it.  This package
+ships none of them.
+
+swbrd-cert-rotate is worse: it embeds the whole Deno runtime and V8, a far larger
+licence set again (MIT, BSD-3-Clause and others) which has not been enumerated at
+all.  OpenSSL is the one large dependency that is *not* embedded -- dtls-proxy
+links it dynamically against Debian's own libssl3t64.
+
+So: these packages are built for one private host.  They are not fit for
+publication or redistribution in any form.  If you cloned this repository and are
+thinking about publishing the packages it builds -- don't, until this file has
+been replaced with real and complete licence information.  `cargo about generate`
+or `cargo license` will produce the Rust half; the Deno half has to come out of
+the Deno source tree.
+
+Debian Policy 12.5 asks for a verbatim copy of every applicable licence right
+here.  This deliberately is not that.  It is a placeholder that says so out loud,
+which is safer than the wrong claim it replaces -- that the whole package is
+MIT-0.
+
+Regenerate the crate counts above with:
+    cargo metadata --format-version 1 --filter-platform x86_64-unknown-linux-gnu

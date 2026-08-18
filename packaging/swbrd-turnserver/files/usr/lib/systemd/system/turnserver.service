@@ -1,0 +1,20 @@
+[Unit]
+Description=Stateless relay using the TURN wire format over UDP
+Documentation=https://github.com/evan-brass/swbrd
+Wants=network-online.target
+After=network-online.target systemd-networkd.service
+
+[Service]
+# Type=exec, not the implicit simple: `systemctl start` then fails on a bad
+# binary instead of succeeding and leaving the deploy check to notice later.
+Type=exec
+User=swbrd
+AmbientCapabilities=CAP_NET_ADMIN
+CapabilityBoundingSet=CAP_NET_ADMIN
+NoNewPrivileges=yes
+Restart=no
+EnvironmentFile=/etc/default/swbrd-turnserver
+ExecStart=/usr/libexec/swbrd/turnserver $TURNSERVER_ARGS
+
+[Install]
+WantedBy=multi-user.target

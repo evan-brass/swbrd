@@ -1,0 +1,12 @@
+#!/bin/sh
+set -e
+. /usr/libexec/swbrd/maint-lib.sh
+
+case "$1" in
+configure)
+	systemd-tmpfiles --create /usr/lib/tmpfiles.d/swbrd-dtls-proxy.conf || true
+	swbrd_networkd_reload
+	swbrd_sd_enable_start dtls-proxy.service "$2"
+	;;
+esac
+exit 0

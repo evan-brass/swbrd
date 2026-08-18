@@ -1,0 +1,8 @@
+#!/bin/sh
+# Runs as root (ExecStartPost=+) after cert-rotate-all.  Only reloads dtls-proxy
+# when a certificate actually changed, so 363 days a year this is a no-op.
+set -eu
+flag=/var/lib/swbrd/.rotate-changed
+[ -e "$flag" ] || exit 0
+rm -f "$flag"
+systemctl kill -s SIGHUP dtls-proxy.service || true

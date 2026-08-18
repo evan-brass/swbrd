@@ -1,0 +1,13 @@
+[Unit]
+Description=Rotate the deterministic DTLS certificates for swbrd
+Documentation=https://github.com/evan-brass/swbrd
+
+[Service]
+Type=oneshot
+# User= matters here: without it StateDirectory= would chown /var/lib/swbrd to
+# root on every run, and dtls-proxy would chown it back on its next start.
+User=swbrd
+StateDirectory=swbrd
+WorkingDirectory=/var/lib/swbrd
+ExecStart=/usr/libexec/swbrd/cert-rotate-all
+ExecStartPost=+/usr/libexec/swbrd/cert-rotate-signal
