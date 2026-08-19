@@ -5,6 +5,7 @@ members = [
 	"crates/common",
 	"crates/dtls",
 	"crates/dtls-proxy",
+	"crates/ext-echo",
 	"crates/ice-dissolve", "crates/sctp", "crates/socket3",
 	"crates/stun",
 	"crates/swbrd",

@@ -359,6 +359,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "ext-echo"
+version = "0.1.0"
+dependencies = [
+ "chan",
+ "clap",
+ "eyre",
+ "serde_json",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "eyre"
 version = "0.6.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
