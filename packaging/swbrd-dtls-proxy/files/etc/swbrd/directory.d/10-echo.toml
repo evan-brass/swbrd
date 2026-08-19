@@ -1,0 +1,23 @@
+# Which extension serves which datachannel protocol.
+#
+# The daemon reads every *.toml under this directory in lexical order and takes
+# the first entry whose `protocol` matches the one the browser asked for.  A
+# datachannel matching nothing has its stream reset, so adding a service here is
+# what makes it reachable at all.
+#
+# `allow` lists the base36 peer ids permitted to use the extension, or ["*"] for
+# anyone.  Note that a WebRTC certificate is self-signed and anyone can mint
+# one, so a peer id identifies a peer consistently over time but says nothing
+# about who they are: treat this as trust-on-first-use, and let the extension
+# own any stronger notion of identity.
+
+[[extension]]
+name = "echo"
+protocol = "echo.v1"
+socket = "/run/swbrd/ext/echo.sock"
+mode = "message"
+allow = ["*"]
+# Relative weight for the SCTP stream scheduler when the circuit is congested.
+priority = 256
+# How long this extension may block its circuit before the circuit is torn down.
+stall_ms = 5000

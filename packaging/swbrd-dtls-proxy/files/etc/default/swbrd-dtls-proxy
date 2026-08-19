@@ -1,7 +1,11 @@
 # Arguments for /usr/libexec/swbrd/dtls-proxy (see --help).
 # -e is the host's SCTP-over-UDP endpoint; it must match net.sctp.udp_port,
 # which is set by the (unpackaged) swbrd VPN daemon's configuration.
-DTLS_PROXY_ARGS=-i dtls-proxy -e [2a01:4ff:1f0:7e46::1]:9899 -r 2a01:4ff:1f0:7e46::1
+# -p is the /96 plaintext is injected from: its low 32 bits carry the subscriber
+# index, so it must be routed to this daemon's TUN (see the [Route] in
+# /etc/systemd/network/70-dtls-proxy.network.d/10-site.conf) and must not
+# overlap the deter prefix clients aim at.
+DTLS_PROXY_ARGS=-i dtls-proxy -e [2a01:4ff:1f0:7e46::1]:9899 -r 2a01:4ff:1f0:7e46::1 -p 2a01:4ff:1f0:7e46:0:6::/96
 
 RUST_LOG=trace
 RUST_BACKTRACE=full

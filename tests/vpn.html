@@ -34,6 +34,10 @@
 		});
 		log_everything({ h });
 
+		// The daemon logs the peer id it derived from our certificate; printing
+		// ours here is what makes the two comparable in the e2e output.
+		console.log(`local peer id ${h.cert.id}`);
+
 		try {
 			await expect_open(h.dc, 20_000);
 			pass(`datachannel open ${selected(h)}`.trim());

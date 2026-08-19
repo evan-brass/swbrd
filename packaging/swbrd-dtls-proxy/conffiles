@@ -1,2 +1,3 @@
 /etc/default/swbrd-dtls-proxy
 /etc/systemd/network/70-dtls-proxy.network.d/10-site.conf
+/etc/swbrd/directory.d/10-echo.toml

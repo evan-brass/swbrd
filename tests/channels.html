@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<title>swbrd channels — datachannel to an extension</title>
+<script type="importmap">
+	{
+		"imports": {
+			"swbrd/": "../src/"
+		}
+	}
+</script>
+<h1>swbrd channels</h1>
+<p>
+	Opens a datachannel whose DCEP protocol the daemon's directory maps to the
+	<code>echo</code> extension, and expects the extension's greeting and an echo
+	of what we send. Proves DTLS terminated, the SCTP association was rejoined to
+	our certificate fingerprint, and the channel was patched through to a
+	separate process.
+</p>
+<script type="module">
+	import { Conn } from 'swbrd/conn.js';
+	import {
+		deadline,
+		expect_open,
+		fail,
+		log_everything,
+		params,
+		pass,
+		selected,
+	} from './harness.js';
+	import { DETER_BASE, SCTP_PORT } from './config.js';
+
+	deadline(25_000, 'the echo never came back');
+
+	const protocol = params.get('protocol') ?? 'echo.v1';
+
+	const h = await Conn.to_deter({
+		base: DETER_BASE,
+		sctp_port: SCTP_PORT,
+		timeout: 20_000,
+	});
+	log_everything({ h });
+	console.log(`local peer id ${h.cert.id}`);
+
+	try {
+		// The negotiated id-0 channel opens as soon as SCTP is up; this one goes
+		// through DCEP, which is what the daemon dispatches on.
+		await expect_open(h.dc, 20_000);
+
+		const dc = h.createDataChannel('echo', { protocol });
+		dc.binaryType = 'arraybuffer';
+		await expect_open(dc, 20_000);
+		console.log(`echo channel open id=${dc.id} protocol=${dc.protocol}`);
+
+		const messages = [];
+		const got = new Promise((resolve) => {
+			dc.addEventListener('message', ({ data }) => {
+				const text = typeof data === 'string' ? data : `${data.byteLength} bytes`;
+				console.log(`recv ${text}`);
+				messages.push(data);
+				// The greeting, then the echo of what we sent.
+				if (messages.length === 2) resolve(messages);
+			});
+		});
+
+		const sent = `hello from ${h.cert.id}`;
+		dc.send(sent);
+
+		const [greeting, echoed] = await got;
+		if (typeof greeting !== 'string' || !greeting.startsWith('echo ready for ')) {
+			throw new Error(`unexpected greeting: ${JSON.stringify(greeting)}`);
+		}
+		// The extension is told who we are, so its greeting must name us.
+		if (!greeting.includes(String(h.cert.id))) {
+			throw new Error(`greeting did not identify us: ${JSON.stringify(greeting)}`);
+		}
+		if (echoed !== sent) {
+			throw new Error(`echo mismatch: ${JSON.stringify(echoed)}`);
+		}
+		pass(`echoed via extension ${selected(h)}`.trim());
+	} catch (e) {
+		fail(e.message ?? e);
+	}
+</script>
