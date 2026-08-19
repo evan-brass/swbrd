@@ -183,7 +183,7 @@ async function watch(key, conn) {
 		})
 	);
 
-	while (!conn.sctp) {
+	while (!conn.sctp?.transport /* Firefox can have sctp with no transport?  Fuck you, fuck you, fuck you. */) {
 		if (conn.connectionState == 'closed') return;
 		await new Promise((res) =>
 			conn.addEventListener('signalingstatechange', res, { once: true })

@@ -25,7 +25,7 @@ export const DETER_BASE = parse_v6(
 
 // 5000 is Conn's default (plain DTLS proxy); 5001 is what the swbrd VPN daemon listens on
 // (etc/systemd/system/swbrd.service).
-export const SCTP_PORT = Number(params.get('sctp_port') ?? 5001);
+export const SCTP_PORT = Number(params.get('sctp_port') ?? 5000);
 
 // The turnserver's relay prefix, used by the ICMP probe.
 export const RELAY_ADDR = params.get('relay') ?? '2a01:4ff:1f0:7e46:1::';
