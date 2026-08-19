@@ -17,7 +17,7 @@ use openssl::ssl::Ssl;
 use openssl_sys::{
 	BIO, BIO_free_all, BIO_new_bio_dgram_pair, BIO_read, BIO_write, SSL, SSL_ERROR_NONE,
 	SSL_ERROR_SYSCALL, SSL_ERROR_WANT_READ, SSL_ERROR_WANT_WRITE, SSL_ERROR_ZERO_RETURN,
-	SSL_do_handshake, SSL_get_error, SSL_read, SSL_set_bio, SSL_write,
+	SSL_do_handshake, SSL_get_error, SSL_read, SSL_set_bio, SSL_shutdown, SSL_write,
 };
 
 // Not declared by openssl-sys, but present in the linked libcrypto/libssl
@@ -80,6 +80,15 @@ pub fn write(ssl: &mut Ssl, buf: &[u8]) -> SslIo {
 	classify(p, unsafe {
 		SSL_write(p, buf.as_ptr().cast::<c_void>(), len)
 	})
+}
+
+/// Send `close_notify`, so the peer learns the connection ended rather than
+/// merely going quiet.  One call is enough: it puts the alert on the wire
+/// without waiting for the peer's answering alert, which is all we want when we
+/// are about to drop the socket anyway.
+pub fn shutdown(ssl: &mut Ssl) -> SslIo {
+	let p = ssl.as_ptr();
+	classify(p, unsafe { SSL_shutdown(p) })
 }
 
 /// Application-data bytes that fit in one DTLS record at the current link MTU.

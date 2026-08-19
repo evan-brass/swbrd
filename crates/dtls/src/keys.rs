@@ -8,7 +8,7 @@
 //! (client/server random + master secret) via the TLS 1.2 PRF and run the
 //! AES-128-GCM tag check ourselves — in place, without touching OpenSSL's own
 //! connection state (replay window, sequence numbers).  The suite is pinned to
-//! AES-128-GCM in [`crate::linux::load_config`], so this single record layout is
+//! AES-128-GCM by the daemon's acceptor, so this single record layout is
 //! the only one we ever see.
 
 use common::dtls::RecordHeader;

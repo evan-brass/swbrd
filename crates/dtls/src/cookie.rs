@@ -214,6 +214,12 @@ impl Handshake {
 	pub fn read(&mut self, buf: &mut [u8]) -> SslIo {
 		ffi::read(&mut self.ssl, buf)
 	}
+	/// The underlying `Ssl`, for tests that want to inspect what was negotiated
+	/// (production takes ownership via [`Self::into_established`] instead).
+	#[cfg(test)]
+	pub fn ssl(&self) -> &Ssl {
+		&self.ssl
+	}
 	/// Cut over from the in-memory pair to a dgram BIO on the connected socket
 	/// `fd`, returning the owned Ssl.  The caller must have already drained and
 	/// sent any pending output; this consumes (and frees) the pair.
@@ -285,11 +291,11 @@ mod tests {
 		str::FromStr,
 	};
 
-	const SRC: LazyLock<SocketAddrV6> = LazyLock::new(|| {
-		SocketAddrV6::from_str("[0101:0101:0101:0101:0101:0101:0101]:1111").unwrap()
+	static SRC: LazyLock<SocketAddrV6> = LazyLock::new(|| {
+		SocketAddrV6::from_str("[0101:0101:0101:0101:0101:0101:0101:0101]:1111").unwrap()
 	});
-	const DST: LazyLock<SocketAddrV6> = LazyLock::new(|| {
-		SocketAddrV6::from_str("[0202:0202:0202:0202:0202:0202:0202]:2222").unwrap()
+	static DST: LazyLock<SocketAddrV6> = LazyLock::new(|| {
+		SocketAddrV6::from_str("[0202:0202:0202:0202:0202:0202:0202:0202]:2222").unwrap()
 	});
 
 	/// An in-memory datagram BIO for the DTLS *client* side of the tests: one
@@ -337,7 +343,9 @@ mod tests {
 		matches!(res, SslIo::Fatal | SslIo::Syscall(_) | SslIo::ZeroReturn)
 	}
 
-	fn server_ctx() -> SslContext {
+	/// A throwaway self-signed P-256 identity, shaped like the ones WebRTC
+	/// endpoints mint for themselves.
+	fn self_signed() -> (PKey<Private>, X509) {
 		let group = EcGroup::from_curve_name(Nid::X9_62_PRIME256V1).unwrap();
 		let key = PKey::from_ec_key(EcKey::generate(&group).unwrap()).unwrap();
 		let mut cert = X509::builder().unwrap();
@@ -348,19 +356,43 @@ mod tests {
 		cert.set_not_after(&Asn1Time::days_from_now(1).unwrap())
 			.unwrap();
 		cert.sign(&key, MessageDigest::sha256()).unwrap();
-		let cert = cert.build();
+		(key, cert.build())
+	}
 
+	fn server_ctx() -> SslContext {
+		server_ctx_verify(SslVerifyMode::NONE)
+	}
+
+	/// `verify` is what production uses to demand a client certificate; see
+	/// `load_context` in the daemon.
+	fn server_ctx_verify(verify: SslVerifyMode) -> SslContext {
+		let (key, cert) = self_signed();
 		let mut ctx = SslContext::builder(SslMethod::dtls()).unwrap();
 		ctx.set_certificate(&cert).unwrap();
 		ctx.set_private_key(&key).unwrap();
+		// Self-signed peers have no chain to check: the fingerprint is the identity.
+		ctx.set_verify_callback(verify, |_preverify_ok, _ctx| true);
 		configure(&mut ctx);
 		ctx.build()
 	}
 
 	/// `mtu` forces the client to fragment its ClientHello like Chrome does
 	fn client(mtu: Option<u32>) -> SslStream<TestBio> {
+		client_with_cert(mtu, None)
+	}
+
+	/// A client that presents `identity`, the way a browser presents its WebRTC
+	/// certificate when the server asks for one.
+	fn client_with_cert(
+		mtu: Option<u32>,
+		identity: Option<&(PKey<Private>, X509)>,
+	) -> SslStream<TestBio> {
 		let mut ctx = SslContext::builder(SslMethod::dtls()).unwrap();
 		ctx.set_verify(SslVerifyMode::NONE);
+		if let Some((key, cert)) = identity {
+			ctx.set_certificate(cert).unwrap();
+			ctx.set_private_key(key).unwrap();
+		}
 		if mtu.is_some() {
 			ctx.set_options(SslOptions::NO_QUERY_MTU);
 		}
@@ -461,6 +493,106 @@ mod tests {
 			panic!("server did not read application data");
 		};
 		assert_eq!(&buf[..len], b"ping");
+	}
+
+	/// The same Chrome-shaped flow, but with the server demanding a client
+	/// certificate the way production does.  Both flights grow -- the server's
+	/// gains a CertificateRequest, the client's gains Certificate and
+	/// CertificateVerify -- so this is where fragmentation and the stateless
+	/// cookie exchange are most likely to disagree.
+	#[test]
+	fn fragmented_handshake_with_client_cert() {
+		let keys = Keys::generate().unwrap();
+		let ctx = server_ctx_verify(SslVerifyMode::PEER | SslVerifyMode::FAIL_IF_NO_PEER_CERT);
+
+		let identity = self_signed();
+		let mut client = client_with_cert(Some(256), Some(&identity));
+		let flight = verify_retry(&keys, &mut client);
+		assert!(flight.len() > 1, "retry did not fragment");
+
+		let mut server = None;
+		for (i, datagram) in flight.iter().enumerate() {
+			match keys.inspect(*SRC, *DST, datagram) {
+				Verdict::Accept(verified) if i == 0 => {
+					server = Some(promote(&ctx, &verified).unwrap());
+				}
+				Verdict::Drop if i > 0 => {
+					let server = server.as_mut().unwrap();
+					server.feed(datagram);
+					want_read_io(server.do_handshake());
+				}
+				_ => panic!("wrong verdict for retry datagram {i}"),
+			}
+		}
+		let mut server = server.unwrap();
+
+		pump(&mut client, &mut server);
+
+		// The identity the server ends up with is the client's certificate, and
+		// nothing else.
+		let expected: crate::fingerprint::Fingerprint = identity
+			.1
+			.digest(MessageDigest::sha256())
+			.unwrap()
+			.as_ref()
+			.try_into()
+			.unwrap();
+		let got = crate::fingerprint::peer_fingerprint(server.ssl())
+			.expect("server saw no peer certificate");
+		assert_eq!(got, expected);
+
+		// And it round trips through the id the browser would print.
+		let id = crate::fingerprint::base36(&got);
+		assert_eq!(crate::fingerprint::from_base36(&id), Some(got));
+	}
+
+	/// A client with no certificate is refused when the server demands one --
+	/// the fingerprint is the identity, so an anonymous peer is useless to us.
+	#[test]
+	fn anonymous_client_rejected() {
+		let keys = Keys::generate().unwrap();
+		let ctx = server_ctx_verify(SslVerifyMode::PEER | SslVerifyMode::FAIL_IF_NO_PEER_CERT);
+
+		// No identity, otherwise identical to the accepted case above.
+		let mut client = client_with_cert(Some(256), None);
+		let flight = verify_retry(&keys, &mut client);
+
+		let mut server = None;
+		for (i, datagram) in flight.iter().enumerate() {
+			match keys.inspect(*SRC, *DST, datagram) {
+				Verdict::Accept(verified) if i == 0 => {
+					server = Some(promote(&ctx, &verified).unwrap());
+				}
+				Verdict::Drop if i > 0 => {
+					let server = server.as_mut().unwrap();
+					server.feed(datagram);
+					want_read_io(server.do_handshake());
+				}
+				_ => panic!("wrong verdict for retry datagram {i}"),
+			}
+		}
+		let mut server = server.unwrap();
+
+		// Drive it the way `pump` would, but require an actual rejection: a test
+		// that only checked "never finished" would also pass if the handshake
+		// had failed to progress for some unrelated reason.
+		let mut rejected = false;
+		for _round in 0..10 {
+			for datagram in server.drain_output() {
+				client.get_mut().feed(&datagram);
+			}
+			let _ = client.do_handshake();
+			for datagram in std::mem::take(&mut client.get_mut().outgoing) {
+				server.feed(&datagram);
+			}
+			if is_fatal_io(server.do_handshake()) {
+				rejected = true;
+				break;
+			}
+		}
+		assert!(rejected, "a certificate-less client was not rejected");
+		assert!(!server.is_finished());
+		assert!(crate::fingerprint::peer_fingerprint(server.ssl()).is_none());
 	}
 
 	/// The promote -> cutover BIO-ownership dance: swap the in-memory pair for a

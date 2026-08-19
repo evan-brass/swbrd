@@ -1,0 +1,17 @@
+[package]
+name = "dtls"
+version = "0.1.0"
+edition = "2024"
+license = "MIT-0"
+
+[dependencies]
+common = { path = "../common" }
+eyre = "0.6.12"
+foreign-types = "0.3"
+libc = "0.2"
+openssl = "0.10.80"
+openssl-sys = "0.9"
+zerocopy = { version = "0.8.50", features = ["derive"] }
+
+[dev-dependencies]
+socket2 = { version = "0.6.4", features = ["all"] }
