@@ -3,7 +3,6 @@ use std::{
 	collections::HashMap,
 	io::ErrorKind,
 	net::{Ipv6Addr, SocketAddrV6},
-	num::NonZero,
 	os::fd::AsRawFd,
 	rc::Rc,
 	str::FromStr,
@@ -557,14 +556,20 @@ const SCTP: Static = Static(1);
 /// `SCTP_ASSOC_CHANGE` round trip), each association gets its own send and
 /// receive buffers, and the options set here are inherited by every accepted
 /// socket.
-fn listen_sctp(port: u16, interface: NonZero<u32>) -> Result<Sctp> {
+fn listen_sctp(port: u16) -> Result<Sctp> {
 	let listener = Sctp::one_to_one()?;
 	listener.set_reuse_address(true)?;
-	// Only ever accept associations that arrived over our own TUN, which is to
-	// say only plaintext we decrypted.  Without this the listener is reachable
-	// by anything that can find the host's SCTP-over-UDP port, and an
-	// association would be established before we got to reject it.
-	listener.bind_device_by_index_v6(Some(interface))?;
+	// Do NOT bind this socket to the TUN.  It looks like it should work -- the
+	// plaintext we inject is the only thing that arrives there -- but our
+	// plaintext is UDP encapsulated (net.sctp.udp_port), so it reaches the SCTP
+	// stack from the kernel's UDP tunnel socket rather than from the TUN, and
+	// the ingress device no longer matches.  Binding the device makes every INIT
+	// miss the endpoint lookup and land in SctpOutOfBlues instead, with no error
+	// anywhere to explain it.
+	//
+	// Associations from anywhere else are refused in attach_circuit, whose peer
+	// address will not decode to a subscriber index; keeping unwanted traffic off
+	// the port in the first place belongs in the firewall, not here.
 	listener.bind(&SockAddr::from(SocketAddrV6::new(
 		Ipv6Addr::UNSPECIFIED,
 		port,
@@ -635,10 +640,7 @@ pub fn main() -> Result<Never> {
 	network.set_nonblocking(true)?;
 	poll.register_static(network.as_raw_fd(), TUN, Interest::READABLE)?;
 
-	let listener = listen_sctp(
-		args.sctp_port,
-		NonZero::new(network.if_index()?).ok_or_else(|| eyre!("the TUN has no interface index"))?,
-	)?;
+	let listener = listen_sctp(args.sctp_port)?;
 	poll.register_static(listener.as_raw_fd(), SCTP, Interest::READABLE)?;
 	tracing::info!(port = args.sctp_port, "accepting associations");
 
