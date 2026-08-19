@@ -126,6 +126,13 @@ impl Sctp {
 		Ok((Self(socket), addr))
 	}
 }
+/// Adopt an already-open SCTP socket -- in particular the one `accept` hands
+/// back on a one-to-one listener, which is a single association.
+impl From<Socket> for Sctp {
+	fn from(inner: Socket) -> Self {
+		Self(inner)
+	}
+}
 impl Deref for Sctp {
 	type Target = Socket;
 	fn deref(&self) -> &Self::Target {
