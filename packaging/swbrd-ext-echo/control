@@ -1,0 +1,18 @@
+Package: swbrd-ext-echo
+Version: @VERSION@
+Architecture: @ARCH@
+Maintainer: Evan Brass <brassevan@gmail.com>
+Section: net
+Priority: optional
+Installed-Size: @INSTALLED_SIZE@
+Depends: swbrd-common (>= @COMPAT@), swbrd-dtls-proxy (>= @COMPAT@), systemd, init-system-helpers (>= 1.54), libc6 (>= 2.38), libgcc-s1
+Homepage: https://github.com/evan-brass/swbrd
+Description: Example switchboard extension that echoes
+ Serves the echo.v1 datachannel protocol: greets the peer by the id derived
+ from their certificate, then sends back whatever they send.  Useful as a
+ reachability check for the whole path -- DTLS termination, association rejoin,
+ and channel dispatch -- and as the smallest worked example of the extension
+ protocol.
+ .
+ Built for one private host and not fit for redistribution; see
+ /usr/share/doc/swbrd-ext-echo/copyright.

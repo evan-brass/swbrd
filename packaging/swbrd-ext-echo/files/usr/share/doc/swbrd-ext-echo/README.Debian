@@ -1,0 +1,14 @@
+swbrd-ext-echo
+==============
+
+An extension is any process listening on a Unix socket that the daemon's
+directory names.  The daemon dials it once per datachannel, sends a control
+frame naming the peer, and then relays; the connection's lifetime is the
+channel's.
+
+This one answers the `echo.v1` protocol, which /etc/swbrd/directory.d/10-echo.toml
+maps here.  Point a browser at tests/channels.html to exercise it.
+
+Backpressure needs no cooperation from an extension: read slowly and the daemon
+stops reading the peer.  Stop reading altogether and the daemon holds nothing,
+then tears the circuit down once `stall_ms` from the directory entry has passed.

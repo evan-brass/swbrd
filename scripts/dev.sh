@@ -18,7 +18,7 @@ VM_DIR=share/src/swbrd     # the same tree as this repo, shared over virtiofs...
 MAC_DIR=$HOME/src/swbrd    # ...mounted here on this side
 VPS=turn                   # turn.evan-brass.net, reached as user `evan` with passwordless sudo
 TARGET=x86_64-unknown-linux-gnu
-UNITS='dtls-proxy turnserver ice-dissolve swbrd'
+UNITS='dtls-proxy turnserver ice-dissolve swbrd ext-echo'
 PORT=8000
 
 VPS_ROOT=root@turn         # apt wants a real root shell; everything else goes through evan + sudo -n
@@ -31,9 +31,10 @@ PKG_TABLE='swbrd-common:-:-
 swbrd-turnserver:turnserver:turnserver.service
 swbrd-ice-dissolve:ice-dissolve:ice-dissolve.service
 swbrd-dtls-proxy:dtls-proxy:dtls-proxy.service
+swbrd-ext-echo:ext-echo:swbrd-ext-echo.service
 swbrd-cert-rotate:cert-rotate:swbrd-cert-rotate.timer'
 # swbrd-cert-rotate is out of the default set: it is a 91MB deno binary that changes once a year.
-DEFAULT_PKGS='swbrd-common swbrd-turnserver swbrd-ice-dissolve swbrd-dtls-proxy'
+DEFAULT_PKGS='swbrd-common swbrd-turnserver swbrd-ice-dissolve swbrd-dtls-proxy swbrd-ext-echo'
 
 ROOT=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
 OUT=$ROOT/target/$TARGET/release

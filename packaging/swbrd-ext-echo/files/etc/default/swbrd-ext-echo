@@ -1,0 +1,9 @@
+# Arguments for /usr/libexec/swbrd/ext-echo (see --help).
+# The socket path must match the `socket` of the matching entry in
+# /etc/swbrd/directory.d/, or the daemon will have nothing to dial.
+#
+# --stall-after N makes the extension stop reading after N messages, which is
+# how tests/flood.html exercises backpressure.  Leave it off in normal use.
+EXT_ECHO_ARGS=/run/swbrd/ext/echo.sock
+
+RUST_LOG=info

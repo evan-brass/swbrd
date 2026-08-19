@@ -1,0 +1,31 @@
+[Unit]
+Description=Example switchboard extension that echoes
+Documentation=https://github.com/evan-brass/swbrd
+# The socket lives in a runtime directory the proxy's package creates, and the
+# proxy is what dials it; without the proxy there is nobody to serve.
+After=dtls-proxy.service
+PartOf=dtls-proxy.service
+StartLimitBurst=5
+StartLimitIntervalSec=60
+
+[Service]
+Type=exec
+User=swbrd
+Group=swbrd
+NoNewPrivileges=yes
+# Nothing here needs the network, a writable filesystem, or any privilege: it
+# speaks one Unix socket and nothing else.
+PrivateNetwork=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+# ProtectSystem=strict makes /run read-only too, and the listening socket has to
+# be created there.  swbrd-dtls-proxy's tmpfiles entry owns the directory.
+ReadWritePaths=/run/swbrd/ext
+EnvironmentFile=/etc/default/swbrd-ext-echo
+ExecStart=/usr/libexec/swbrd/ext-echo $EXT_ECHO_ARGS
+Restart=on-failure
+RestartSec=1
+
+[Install]
+WantedBy=multi-user.target

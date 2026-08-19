@@ -1,0 +1,10 @@
+#!/bin/sh
+set -e
+. /usr/libexec/swbrd/maint-lib.sh
+
+case "$1" in
+configure)
+	swbrd_sd_enable_start swbrd-ext-echo.service "$2"
+	;;
+esac
+exit 0
