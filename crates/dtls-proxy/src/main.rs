@@ -2,6 +2,7 @@ use std::{
 	cell::{Cell, RefCell},
 	io::{Error, ErrorKind},
 	net::{Ipv6Addr, SocketAddrV6},
+	num::NonZero,
 	os::fd::AsRawFd,
 	rc::Rc,
 	str::FromStr,
@@ -26,6 +27,7 @@ use mio::{Events, Interest, Poll};
 use openssl::ssl::{
 	Ssl, SslAcceptor, SslContext, SslContextRef, SslFiletype, SslMethod, SslVersion,
 };
+use sctp::{SCTP_CURRENT_ASSOC, Sctp, sctp_udpencaps};
 use socket2::{Domain, Protocol, SockAddr, SockRef, Socket, Type};
 use socket3::SocketMtuExt;
 use tracing_subscriber::EnvFilter;
@@ -73,6 +75,8 @@ struct Client {
 	/// must strictly exceed it to re-point the socket (anti-replay).
 	highest_read_seq: Cell<u64>,
 
+	sctp: Cell<Option<Sctp>>,
+
 	bound: SocketAddrV6, // Replaces send_from
 	bound_link: RBTreeLink,
 	connected: Cell<SocketAddrV6>,
@@ -87,6 +91,8 @@ impl Sourced for Client {
 		match flag {
 			Flag::A => Some(self.sock.as_raw_fd()),
 			// TODO: Flag::B will be a :5000/sctp peeled_off/stream socket that was established via the dtls-proxy
+			// TODO: Sctp doesn't implement Clone, so the following doesn't work.
+			// Flag::B => self.sctp.get().map(AsRawFd::as_raw_fd),
 			_ => unreachable!(),
 		}
 	}
@@ -252,6 +258,7 @@ impl Server {
 }
 
 const TUN: Static = Static(0);
+const SCTP: Static = Static(1);
 
 type Never = core::convert::Infallible;
 pub fn main() -> Result<Never> {
@@ -266,7 +273,7 @@ pub fn main() -> Result<Never> {
 	// This IP is the destination and source of all plaintext
 	let endpoint = SocketAddrV6::from_str(&args.endpoint)?;
 
-	let mut poll = Poller::new(Poll::new()?);
+	let poll = Poller::new(Poll::new()?);
 
 	// The TUN interface carries first-contact ClientHellos (cookie exchange) and
 	// endpoint plaintext.  Established client ciphertext is diverted to each
@@ -284,6 +291,20 @@ pub fn main() -> Result<Never> {
 	};
 	network.set_nonblocking(true)?;
 	poll.register_static(network.as_raw_fd(), TUN, Interest::READABLE)?;
+
+	// Bind to :5000/sctp on the dtls proxy's interface
+	let interface = network.if_index()?;
+	let interface = NonZero::new(interface).expect("");
+	let sctp = Sctp::one_to_one()?;
+	sctp.bind_device_by_index_v6(Some(interface))?;
+	sctp.bind(&SockAddr::from(SocketAddrV6::new(
+		Ipv6Addr::UNSPECIFIED,
+		5000,
+		0,
+		0,
+	)))?;
+	sctp.listen(128)?;
+	poll.register_static(sctp.as_raw_fd(), SCTP, Interest::READABLE)?;
 
 	let mut server = Server {
 		poll,
@@ -324,7 +345,7 @@ pub fn main() -> Result<Never> {
 						Ok(p) => p,
 						Err(e) if e.kind() == ErrorKind::WouldBlock => break,
 						Err(e) if e.kind() == ErrorKind::Interrupted => continue,
-						Err(e) => return Err(e.into()),
+						v => v?,
 					};
 					// DTLS has no ICMP back-channel (unlike TURN's ICMP attribute),
 					// so inbound ICMP is dropped; client-path errors surface on the
@@ -464,10 +485,60 @@ pub fn main() -> Result<Never> {
 						}
 					}
 				},
+				// Accept incoming SCTP associations and pair them to their dtls
+				Err(SCTP) => loop {
+					let (new, peer) = match sctp.accept() {
+						Err(e) if e.kind() == ErrorKind::WouldBlock => break,
+						Err(e) if e.kind() == ErrorKind::Interrupted => continue,
+						v => v?,
+					};
+					let peer6 = peer.as_socket_ipv6()
+						.expect("We only expect the dtls-proxy interface to carry IPv6 traffic.  It should not have any ipv4 routes/ips assigned to it.");
+
+					// Retrieve the *UDP* port of the association
+					// peer6.port() is the *SCTP* port which we don't care about.
+					let mut encap_out = sctp_udpencaps {
+						sue_assoc_id: SCTP_CURRENT_ASSOC, // Unused for connected sockets
+						sue_address: peer.as_storage(),
+						sue_port: 0,
+					};
+					new.get_remote_udp_encaps_port(&mut encap_out)?;
+					assert_ne!(encap_out.sue_port, 0);
+
+					let bound = SocketAddrV6::new(*peer6.ip(), encap_out.sue_port, 0, 0);
+
+					let cursor = server.bound.find(&bound);
+					let Some(client) = cursor.clone_pointer() else {
+						// Drop the association... race between assoc creation and dtls abort?
+						continue;
+					};
+					server.poll.register(&client, Flag::B, Interest::READABLE)?;
+					//
+					if let Some(_old) = client.sctp.replace(Some(new)) {
+						// Clients may make multiple SCTP associations over a single DTLS session using different SCTP ports.
+						// I'm fine people using a single DTLS for :5000/sctp, :5001/sctp, etc.
+						// I'm *NOT* fine with clients making multiple :x->:5000/sctp, :y->:5000/sctp, etc. I only have 1 sctp slot.
+						// The whole point of dtls-proxy (rename pending) managing the sctp socket and binding to the interface
+						// is to associate SCTP messages with the peer's certificate.
+					}
+				},
 				// Unused Static Tokens
 				Err(_) => unreachable!(),
 				// Event on the UDP
 				Ok(Some((Flag::A, client))) => {
+					// TODO: drive_connection
+					// drive_connection(
+					// 	key,
+					// 	&mut streams,
+					// 	&mut by_addr,
+					// 	poll.registry(),
+					// 	&network,
+					// 	endpoint,
+					// 	&mut buffer,
+					// )
+				}
+				// Event on the SCTP
+				Ok(Some((Flag::B, client))) => {
 					// TODO: drive_connection
 					// drive_connection(
 					// 	key,

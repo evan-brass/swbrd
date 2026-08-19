@@ -121,6 +121,10 @@ impl Sctp {
 		)?;
 		Ok(Self(inner))
 	}
+	pub fn accept(&self) -> std::io::Result<(Self, socket2::SockAddr)> {
+		let (socket, addr) = self.0.accept()?;
+		Ok((Self(socket), addr))
+	}
 }
 impl Deref for Sctp {
 	type Target = Socket;

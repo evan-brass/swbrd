@@ -14,6 +14,7 @@ libc = "0.2"
 mio = { version = "1.2.1", features = ["os-poll", "os-ext", "net"] }
 openssl = "0.10.80"
 openssl-sys = "0.9"
+sctp = { path = "../sctp" }
 signal-hook = "0.4.4"
 socket2 = { version = "0.6.4", features = ["all"] }
 socket3 = { path = "../socket3" }

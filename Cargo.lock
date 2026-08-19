@@ -296,6 +296,7 @@ dependencies = [
  "mio",
  "openssl",
  "openssl-sys",
+ "sctp",
  "signal-hook",
  "socket2",
  "socket3",
