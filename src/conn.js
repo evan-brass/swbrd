@@ -195,7 +195,7 @@ export class Conn extends RTCPeerConnection {
 			// TODO: Wait on applying remote candidates until remote_desc == false? Or maybe just catch errors?
 			if (json?.candidate) await this.addIceCandidate(json.candidate);
 		});
-		this.addEventListener('icecandidate', ({ candidate }) => {
+		this.addEventListener('candidate', ({ candidate }) => {
 			if (candidate && this.#dc.readyState == 'open') {
 				this.#dc.send(JSON.stringify({ candidate }));
 			}
