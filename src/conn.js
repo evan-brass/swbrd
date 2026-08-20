@@ -45,6 +45,11 @@ export class Conn extends RTCPeerConnection {
 		return this.#pid;
 	}
 
+	// How many remote candidates we've actually applied.  A peer that ends its
+	// candidates without ever having sent one isn't failing to gather, it's
+	// declining -- see addIceCandidate.
+	#applied = 0;
+
 	// Make an authenticated connection to a given domain
 	// - Makes a WebPKI checked TLS TURN connection to `domain`
 	// - Conducts the same unauthenticated DTLS handshake as to_deter
@@ -341,7 +346,24 @@ export class Conn extends RTCPeerConnection {
 	}
 
 	async addIceCandidate(candidate) {
-		if (candidate == null) return;
+		// End of candidates.  With no offer/answer to carry a rejection, ending
+		// your candidates without ever having sent one *is* how you say no: the
+		// peer asked to connect and we're telling them there's nothing to
+		// connect to.  Closing immediately saves them the whole `timeout`.
+		//
+		// close() fires no events of its own, so a refused connection would
+		// otherwise be indistinguishable from a hung one.  Say so first.
+		if (
+			candidate == null || candidate === '' ||
+			(typeof candidate == 'object' && candidate.candidate === '')
+		) {
+			if (!this.#applied) {
+				this.dispatchEvent(new CustomEvent('refused'));
+				this.close();
+			}
+			return;
+		}
+		this.#applied += 1;
 
 		if (typeof candidate != 'object') {
 			candidate = { candidate: candidate };
