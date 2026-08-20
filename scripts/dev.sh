@@ -542,6 +542,57 @@ cmd_serve() {
 	die "file-server did not come up; see $SCRATCH/file-server.log"
 }
 
+# --- the static site ----------------------------------------------------------
+#
+# nginx serves /var/www (packaging/swbrd-turnserver's conf.d fragment) and the
+# tree there mirrors this repo: the client library at /src, the test pages at
+# /tests, and Rainboots at /rainboots.
+#
+# Note that rainboots/www/ lands at /rainboots/, one level shallower than it
+# sits in the repo.  Its import map says ../../src/, which resolves to /src/
+# from either depth because a URL cannot climb past its root -- true, but subtle
+# enough to be worth writing down.
+#
+# /var/www/index.html, 404.html and status.js are hand-managed and deliberately
+# not touched here.
+SITE=/var/www
+SITE_TREE='src:src
+tests:tests
+rainboots/www:rainboots'
+# `tests` is out of the default set: /var/www/tests holds pages that were
+# deleted from this repo long ago and --delete would take them with it.  Push it
+# by name once you have decided you want that.
+SITE_DEFAULT='src rainboots'
+
+site_names() { echo "$SITE_TREE" | cut -d: -f2; }
+
+cmd_site() {
+	[ $# -gt 0 ] || set -- $SITE_DEFAULT
+	for want; do
+		from=$(echo "$SITE_TREE" | awk -F: -v w="$want" '$2 == w { print $1 }')
+		[ -n "$from" ] || die "unknown site directory: $want (have: $(site_names | tr '\n' ' '))"
+		[ -d "$ROOT/$from" ] || die "$ROOT/$from does not exist"
+
+		say "$from -> $VPS:$SITE/$want"
+		vps_root "install -d -m 755 $SITE/$want"
+		# Not -a: -o/-g would try to reproduce this machine's uids on the VPS.
+		# Without them the remote rsync, which sudo is running as root, owns
+		# what it creates -- and --chown is too new for the rsync macOS ships.
+		#
+		# --delete because the service worker precaches by name, and a file left
+		# behind after a rename is one some browser is still pinning.
+		rsync -rlptz --delete \
+			--rsync-path='sudo -n rsync' \
+			-e ssh "$ROOT/$from/" "$VPS:$SITE/$want/" || die "rsync failed"
+		# Whatever the local umask happened to be, nginx needs to be able to
+		# read all of it.  (--chmod is too new for the rsync macOS ships.)
+		# One command, not two joined by &&: vps_root only sudo's the first.
+		vps_root "chmod -R u=rwX,go=rX $SITE/$want"
+		ok "$SITE/$want ($(vps "find $SITE/$want -type f | wc -l" | tr -d ' ') files)"
+	done
+	ok "https://turn.evan-brass.net/rainboots/"
+}
+
 cmd_e2e() {
 	exec deno run --allow-run --allow-net --allow-read --allow-write --allow-env \
 		"$ROOT/scripts/e2e.js" "$@"
@@ -567,6 +618,7 @@ usage() {
 	  perf <unit> [secs]          perf record + report on the VPS
 	  status                      is-active for $UNITS
 	  serve [port]                file-server for this tree on localhost:$PORT
+	  site [dir...]               rsync the static site to $VPS:$SITE (default: $SITE_DEFAULT)
 	  e2e <page> [opts]           run a tests/*.html page in headless Chrome
 	  nft                         check + push etc/nftables.conf, reload
 	  vm <cmd>... | vps <cmd>...  raw command on the build VM / the VPS
@@ -578,7 +630,7 @@ usage() {
 sub=${1:-}
 [ $# -gt 0 ] && shift || true
 case $sub in
-	check|test|build|pkg|deploy|rollback|migrate|logs|watch|capture|perf|status|serve|e2e|nft) "cmd_$sub" "$@" ;;
+	check|test|build|pkg|deploy|rollback|migrate|logs|watch|capture|perf|status|serve|site|e2e|nft) "cmd_$sub" "$@" ;;
 	legacy-deploy) cmd_legacy_deploy "$@" ;;
 	legacy-rollback) cmd_legacy_rollback "$@" ;;
 	vm) vm "$@" ;;
