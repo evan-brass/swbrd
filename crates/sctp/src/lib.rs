@@ -424,8 +424,15 @@ enum_to_const! {
 	SCTP_DSTADDRV6,
 }
 
+// The kernel's struct ends in `__u8 sac_info[]`, a C flexible array member.
+// Modelling that as a Rust `[u8]` tail makes this a DST, and a DST's
+// `size_of_val` is rounded up to the struct's alignment where C's flexible
+// array member is not -- so a notification carrying an ABORT's error chunk
+// would be, say, 22 bytes on the wire and 24 as a Rust value, and would never
+// parse.  Nothing here reads the trailing bytes, so the fixed part is the whole
+// binding and the parse is a prefix parse.
 #[repr(C)]
-#[derive(Debug, KnownLayout, Immutable, FromBytes)]
+#[derive(Debug, Clone, Copy, KnownLayout, Immutable, FromBytes, IntoBytes)]
 pub struct sctp_assoc_change {
 	pub sac_type: u16,
 	pub sac_flags: u16,
@@ -435,7 +442,6 @@ pub struct sctp_assoc_change {
 	pub sac_outbound_streams: u16,
 	pub sac_inbound_streams: u16,
 	pub sac_assoc_id: sctp_assoc_t,
-	pub sac_info: [u8],
 }
 
 enum_to_const! {
@@ -562,14 +568,18 @@ pub const SCTP_STREAM_RESET_INCOMING_SSN: u16 = 0x0001;
 pub const SCTP_STREAM_RESET_OUTGOING_SSN: u16 = 0x0002;
 pub const SCTP_STREAM_RESET_DENIED: u16 = 0x0004;
 pub const SCTP_STREAM_RESET_FAILED: u16 = 0x0008;
+// Also a flexible array member -- `__u16 strreset_stream_list[]` -- and the one
+// that bites in practice: a reset naming a single stream is 14 bytes on the
+// wire, which as a DST would round up to 16 and fail to parse.  The daemon
+// resets exactly one stream whenever a peer sends on a stream nothing is
+// patched to, so any peer could reach it.  See the note on sctp_assoc_change.
 #[repr(C)]
-#[derive(Debug, KnownLayout, Immutable, FromBytes)]
+#[derive(Debug, Clone, Copy, KnownLayout, Immutable, FromBytes, IntoBytes)]
 pub struct sctp_stream_reset_event {
 	pub strreset_type: u16,
 	pub strreset_flags: u16,
 	pub strreset_length: u32,
 	pub strreset_assoc_id: sctp_assoc_t,
-	pub strreset_stream_list: [u16],
 }
 
 pub const SCTP_ASSOC_RESET_DENIED: u16 = 0x0004;
@@ -641,6 +651,50 @@ pub enum Notif<'i> {
 	StreamChange(&'i sctp_stream_change_event),
 	SendFailedEvent(&'i sctp_send_failed_event),
 }
+// Decode one notification.
+//
+// Two rules, both learned the hard way.  Every arm parses a *prefix*: these are
+// kernel structs, the kernel is free to grow them, and a longer notification
+// than we were compiled against is not an error.  And an arm that does not fit
+// degrades to `Notif::Other` rather than failing: a notification we cannot
+// decode is never a reason to take the process down, and this one is reachable
+// by any peer -- sending on a stream nothing is patched to makes the daemon
+// reset that stream, and the reset event comes straight back here.
+fn parse_notification(data: &[u8]) -> Result<Notif<'_>, std::io::Error> {
+	fn head<T: FromBytes + KnownLayout + Immutable>(data: &[u8]) -> Option<&T> {
+		T::ref_from_prefix(data).ok().map(|(value, _rest)| value)
+	}
+
+	let Ok((h, _)) = sn_header::read_from_prefix(data) else {
+		return Err(std::io::Error::new(
+			std::io::ErrorKind::InvalidData,
+			"notification shorter than its header",
+		));
+	};
+
+	Ok(match h.sn_type {
+		SCTP_ASSOC_CHANGE => head(data).map(Notif::AssocChange),
+		SCTP_PEER_ADDR_CHANGE => {
+			// TODO: Find a solution to use FromBytes with SockAddrStorage.
+			// Until then the length check is what keeps the cast in bounds.
+			(data.len() >= size_of::<sctp_paddr_change>())
+				.then(|| Notif::AddrChange(unsafe { &*data.as_ptr().cast() }))
+		}
+		SCTP_REMOTE_ERROR => head(data).map(Notif::RemoteError),
+		SCTP_SHUTDOWN_EVENT => head(data).map(Notif::ShutdownEvent),
+		SCTP_ADAPTATION_INDICATION => head(data).map(Notif::AdaptationEvent),
+		SCTP_AUTHENTICATION_EVENT => head(data).map(Notif::AuthkeyEvent),
+		SCTP_PARTIAL_DELIVERY_EVENT => head(data).map(Notif::PdapiEvent),
+		SCTP_SENDER_DRY_EVENT => head(data).map(Notif::SenderDryEvent),
+		SCTP_STREAM_RESET_EVENT => head(data).map(Notif::StreamReset),
+		SCTP_ASSOC_RESET_EVENT => head(data).map(Notif::AssocReset),
+		SCTP_STREAM_CHANGE_EVENT => head(data).map(Notif::StreamChange),
+		SCTP_SEND_FAILED_EVENT => head(data).map(Notif::SendFailedEvent),
+		_ => None,
+	}
+	.unwrap_or(Notif::Other(h)))
+}
+
 pub enum DataNotif<'i> {
 	Data(RecvFlags, &'i [u8]),
 	Notif(Notif<'i>),
@@ -682,45 +736,7 @@ impl Sctp {
 		}
 
 		if raw_flags & MSG_NOTIFICATION != 0 {
-			// Figure out what type of message this is
-			assert!(res >= size_of::<sn_header>());
-			let (h, _) = sn_header::read_from_prefix(data).unwrap();
-			Ok(DataNotif::Notif(match h.sn_type {
-				SCTP_ASSOC_CHANGE => Notif::AssocChange(FromBytes::ref_from_bytes(data).unwrap()),
-				SCTP_PEER_ADDR_CHANGE => {
-					// TODO: Find a solution to use FromBytes with SockAddrStorage
-					Notif::AddrChange(unsafe { &*data.as_ptr().cast() })
-				}
-				SCTP_REMOTE_ERROR => Notif::RemoteError(FromBytes::ref_from_bytes(data).unwrap()),
-				SCTP_SHUTDOWN_EVENT => {
-					Notif::ShutdownEvent(FromBytes::ref_from_bytes(data).unwrap())
-				}
-				SCTP_ADAPTATION_INDICATION => {
-					Notif::AdaptationEvent(FromBytes::ref_from_bytes(data).unwrap())
-				}
-				SCTP_AUTHENTICATION_EVENT => {
-					Notif::AuthkeyEvent(FromBytes::ref_from_bytes(data).unwrap())
-				}
-				SCTP_PARTIAL_DELIVERY_EVENT => {
-					Notif::PdapiEvent(FromBytes::ref_from_bytes(data).unwrap())
-				}
-				SCTP_SENDER_DRY_EVENT => {
-					Notif::SenderDryEvent(FromBytes::ref_from_bytes(data).unwrap())
-				}
-				SCTP_STREAM_RESET_EVENT => {
-					Notif::StreamReset(FromBytes::ref_from_bytes(data).unwrap())
-				}
-				SCTP_ASSOC_RESET_EVENT => {
-					Notif::AssocReset(FromBytes::ref_from_bytes(data).unwrap())
-				}
-				SCTP_STREAM_CHANGE_EVENT => {
-					Notif::StreamChange(FromBytes::ref_from_bytes(data).unwrap())
-				}
-				SCTP_SEND_FAILED_EVENT => {
-					Notif::SendFailedEvent(FromBytes::ref_from_bytes(data).unwrap())
-				}
-				_ => Notif::Other(h),
-			}))
+			Ok(DataNotif::Notif(parse_notification(data)?))
 		} else {
 			read_control(&mut control_buffer, control);
 
@@ -1100,4 +1116,106 @@ pub struct sctp_probeinterval {
 	pub spi_assoc_id: sctp_assoc_t,
 	pub spi_address: socket2::SockAddrStorage,
 	pub spi_interval: u32,
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+
+	// zerocopy checks alignment, and a Vec<u8> is only guaranteed to be
+	// byte-aligned, so tests build their buffers inside this.
+	#[repr(align(8))]
+	struct Aligned([u8; 64]);
+
+	fn notification(sn_type: u16, body: &[u8]) -> Aligned {
+		let mut buf = Aligned([0; 64]);
+		buf.0[0..2].copy_from_slice(&sn_type.to_ne_bytes());
+		// sn_flags stays zero.
+		let length = (8 + body.len()) as u32;
+		buf.0[4..8].copy_from_slice(&length.to_ne_bytes());
+		buf.0[8..8 + body.len()].copy_from_slice(body);
+		buf
+	}
+
+	fn stream_reset(streams: &[u16]) -> (Aligned, usize) {
+		// assoc_id, then the flexible array of stream ids.
+		let mut body = Vec::new();
+		body.extend_from_slice(&7i32.to_ne_bytes());
+		for s in streams {
+			body.extend_from_slice(&s.to_ne_bytes());
+		}
+		let len = 8 + body.len();
+		(notification(SCTP_STREAM_RESET_EVENT, &body), len)
+	}
+
+	/// The regression.  The daemon resets exactly one stream whenever a peer
+	/// sends on a stream nothing is patched to, so the kernel hands back a
+	/// 14-byte reset event -- which is what used to panic the whole process.
+	#[test]
+	fn a_reset_naming_one_stream_parses() {
+		let (buf, len) = stream_reset(&[3]);
+		assert_eq!(len, 14, "one stream id should make a 14 byte notification");
+		let notif = parse_notification(&buf.0[..len]).expect("should parse");
+		let Notif::StreamReset(event) = notif else {
+			panic!("not a stream reset");
+		};
+		assert_eq!(event.strreset_assoc_id, 7);
+	}
+
+	#[test]
+	fn a_reset_naming_two_streams_parses() {
+		let (buf, len) = stream_reset(&[3, 4]);
+		assert_eq!(len, 16);
+		assert!(matches!(
+			parse_notification(&buf.0[..len]).expect("should parse"),
+			Notif::StreamReset(_)
+		));
+	}
+
+	/// An assoc change carrying an ABORT's error chunk is the same shape of
+	/// problem: trailing bytes that do not round to the struct's alignment.
+	#[test]
+	fn an_assoc_change_with_trailing_info_parses() {
+		let mut body = Vec::new();
+		body.extend_from_slice(&1u16.to_ne_bytes()); // state
+		body.extend_from_slice(&0u16.to_ne_bytes()); // error
+		body.extend_from_slice(&16u16.to_ne_bytes()); // outbound
+		body.extend_from_slice(&16u16.to_ne_bytes()); // inbound
+		body.extend_from_slice(&9i32.to_ne_bytes()); // assoc id
+		body.extend_from_slice(&[0xde, 0xad, 0xbe]); // three bytes of sac_info
+		let len = 8 + body.len();
+		let buf = notification(SCTP_ASSOC_CHANGE, &body);
+		let Notif::AssocChange(event) = parse_notification(&buf.0[..len]).expect("should parse")
+		else {
+			panic!("not an assoc change");
+		};
+		assert_eq!(event.sac_assoc_id, 9);
+		assert_eq!(event.sac_outbound_streams, 16);
+	}
+
+	/// A notification we do not recognise is data, not a crash.
+	#[test]
+	fn an_unknown_type_falls_back_to_other() {
+		let buf = notification(0x7fff, &[1, 2, 3, 4]);
+		let Notif::Other(header) = parse_notification(&buf.0[..12]).expect("should parse") else {
+			panic!("should not have been decoded");
+		};
+		assert_eq!(header.sn_type, 0x7fff);
+	}
+
+	/// So is one that claims a type whose struct is longer than what arrived.
+	#[test]
+	fn a_truncated_body_falls_back_to_other() {
+		let (buf, _) = stream_reset(&[3]);
+		assert!(matches!(
+			parse_notification(&buf.0[..10]).expect("should parse"),
+			Notif::Other(_)
+		));
+	}
+
+	#[test]
+	fn shorter_than_a_header_is_an_error() {
+		let buf = Aligned([0; 64]);
+		assert!(parse_notification(&buf.0[..4]).is_err());
+	}
 }
