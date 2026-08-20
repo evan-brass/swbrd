@@ -1,0 +1,2 @@
+/etc/default/swbrd-ext-puddle
+/etc/swbrd/directory.d/20-puddle.toml

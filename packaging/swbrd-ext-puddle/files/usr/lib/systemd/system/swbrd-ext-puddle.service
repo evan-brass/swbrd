@@ -1,0 +1,35 @@
+[Unit]
+Description=Puddle, the back end of the Rainboots chat client
+Documentation=https://github.com/evan-brass/swbrd
+# The socket lives in a runtime directory the proxy's package creates, and the
+# proxy is what dials it; without the proxy there is nobody to serve.
+After=dtls-proxy.service
+PartOf=dtls-proxy.service
+StartLimitBurst=5
+StartLimitIntervalSec=60
+
+[Service]
+Type=exec
+User=swbrd
+Group=swbrd
+NoNewPrivileges=yes
+# It speaks one Unix socket and writes one file.  Nothing here needs the
+# network -- a Unix listener still works with the namespace unshared -- and
+# proving that is worth more than the line costs.
+PrivateNetwork=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+# ProtectSystem=strict makes /run read-only too, and the listening socket has to
+# be created there.  swbrd-dtls-proxy's tmpfiles entry owns the directory.
+ReadWritePaths=/run/swbrd/ext
+# /var/lib/swbrd/puddle, created and chowned by systemd, for the nick registry.
+StateDirectory=swbrd/puddle
+StateDirectoryMode=0700
+EnvironmentFile=/etc/default/swbrd-ext-puddle
+ExecStart=/usr/libexec/swbrd/puddle $PUDDLE_ARGS
+Restart=on-failure
+RestartSec=1
+
+[Install]
+WantedBy=multi-user.target

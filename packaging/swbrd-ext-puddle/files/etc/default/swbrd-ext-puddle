@@ -1,0 +1,8 @@
+# Arguments for /usr/libexec/swbrd/puddle (see --help).
+#
+# The socket path must match the `socket` of the matching entry in
+# /etc/swbrd/directory.d/, or the daemon will have nothing to dial.
+#
+# --state is where registered nicks and their password hashes live.  It has to
+# sit under the unit's StateDirectory, which is the only writable path it has.
+PUDDLE_ARGS=--socket /run/swbrd/ext/puddle.sock --state /var/lib/swbrd/puddle/nicks.json

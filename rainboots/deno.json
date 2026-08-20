@@ -1,0 +1,18 @@
+{
+	"name": "@evan-brass/rainboots",
+	"version": "0.1.0",
+	"exports": "./puddle.js",
+	"imports": {
+		"swbrd/": "../src/"
+	},
+	"fmt": {
+		"useTabs": true,
+		"singleQuote": true,
+		"exclude": ["www/index.html", "README.md"]
+	},
+	"tasks": {
+		"puddle": "deno run --allow-read --allow-write --allow-net puddle.js",
+		"test": "deno test -A puddle_test.js",
+		"check": "deno check puddle.js puddle_test.js www/*.js"
+	}
+}

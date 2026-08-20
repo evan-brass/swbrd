@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html lang="en">
+	<head>
+		<meta charset="utf-8">
+		<meta name="viewport" content="width=device-width, initial-scale=1">
+		<title>rainboots</title>
+		<meta name="description" content="A retro, privacy-focused chat client. Pick your boots, splash in whichever puddles you like.">
+		<meta name="color-scheme" content="dark light">
+
+		<!-- The built-in look.  A skin is added after this at runtime, so a skin
+		     needs no !important to win: it simply comes later. -->
+		<link rel="stylesheet" href="./rainboots.css">
+
+		<!-- The client library is imported from the swbrd tree rather than copied
+		     in.  The service worker precaches it all the same: it controls this
+		     document, and a controlled document's subresources come through the
+		     worker wherever they live. -->
+		<script type="importmap">
+			{
+				"imports": {
+					"swbrd/": "../../src/"
+				}
+			}
+		</script>
+		<script type="module" src="./app.js"></script>
+	</head>
+
+	<body>
+		<rainboots-app>
+			<noscript>Rainboots is a WebRTC client; it needs JavaScript to be of any use.</noscript>
+		</rainboots-app>
+	</body>
+</html>

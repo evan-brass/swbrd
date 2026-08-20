@@ -1,0 +1,17 @@
+#!/bin/sh
+set -e
+
+case "$1" in
+remove)
+	[ -d /run/systemd/system ] || exit 0
+	systemctl --system daemon-reload >/dev/null || true
+	deb-systemd-helper mask swbrd-ext-puddle.service >/dev/null || true
+	;;
+purge)
+	deb-systemd-helper purge swbrd-ext-puddle.service >/dev/null || true
+	deb-systemd-helper unmask swbrd-ext-puddle.service >/dev/null || true
+	# The nick registry is state, not configuration: it goes only on purge.
+	rm -rf /var/lib/swbrd/puddle
+	;;
+esac
+exit 0

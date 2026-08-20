@@ -1,0 +1,24 @@
+#!/bin/sh
+set -e
+. /usr/libexec/swbrd/maint-lib.sh
+
+case "$1" in
+configure)
+	swbrd_sd_enable_start swbrd-ext-puddle.service "$2"
+
+	# This package ships a /etc/swbrd/directory.d entry for a daemon it does not
+	# own, and dtls-proxy reads that directory once at startup -- SIGHUP only
+	# reloads its certificates.  So without this the extension installs, starts,
+	# listens, and is never dialled.
+	#
+	# The cost is that every live DTLS connection on the box is dropped when this
+	# package is installed or upgraded, which is a lot to ask for a chat server.
+	# The better fix is for dtls-proxy to reload its directory on SIGHUP, at
+	# which point this becomes a reload.
+	if [ -d /run/systemd/system ] && systemctl is-active --quiet dtls-proxy.service; then
+		echo "swbrd-ext-puddle: restarting dtls-proxy so it picks up the new directory entry" >&2
+		deb-systemd-invoke restart dtls-proxy.service >/dev/null || true
+	fi
+	;;
+esac
+exit 0

@@ -1,0 +1,34 @@
+swbrd-ext-puddle
+================
+
+An extension is any process listening on a Unix socket that the daemon's
+directory names.  The daemon dials it once per datachannel, sends a control
+frame naming the peer, and then relays; the connection's lifetime is the
+channel's.
+
+This one answers the `rainboots.v1` protocol, which
+/etc/swbrd/directory.d/20-puddle.toml maps here.  It is the back end of
+Rainboots: a roster, a room, nicks, and an ICE candidate relay.
+
+Identity
+--------
+
+Every channel arrives with the peer's certificate fingerprint, taken from the
+finished DTLS handshake.  That is the only identity the puddle has, and the only
+one it trusts.  Nicks are handed out by this process and are worth exactly what
+that implies -- the client shows the peer id behind every nick for that reason.
+
+A relayed ICE candidate carries the sender's peer id, and is dropped unless it
+matches the fingerprint on the channel it arrived on.  Without that check this
+would be a tool for introducing people to somebody other than who they asked
+for.
+
+State
+-----
+
+/var/lib/swbrd/puddle/nicks.json holds registered nicks and PBKDF2 hashes of
+their passwords, and is the only thing this extension keeps.  Nothing said in
+the room is written down or even remembered: a peer who joins late has missed
+what they missed, as on IRC.
+
+Purging the package deletes the registry; removing it does not.

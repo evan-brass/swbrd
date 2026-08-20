@@ -1,0 +1,17 @@
+# Rainboots' back end.  Copy this into /etc/swbrd/directory.d/ (the .deb does it
+# for you) so the daemon knows where to patch a `rainboots.v1` datachannel.
+
+[[extension]]
+name = "puddle"
+protocol = "rainboots.v1"
+socket = "/run/swbrd/ext/puddle.sock"
+mode = "message"
+# A puddle anyone can splash in.  Narrow this to a list of base36 peer ids for a
+# private one -- but remember a certificate is self-signed, so an id is
+# trust-on-first-use and not a credential.
+allow = ["*"]
+# Chat messages are small and latency matters more than throughput, so this sits
+# above the echo extension's weight in the SCTP stream scheduler.
+priority = 512
+# How long the puddle may block its circuit before the circuit is torn down.
+stall_ms = 5000

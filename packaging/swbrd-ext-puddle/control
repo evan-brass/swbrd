@@ -1,0 +1,21 @@
+Package: swbrd-ext-puddle
+Version: @VERSION@
+Architecture: @ARCH@
+Maintainer: Evan Brass <brassevan@gmail.com>
+Section: net
+Priority: optional
+Installed-Size: @INSTALLED_SIZE@
+Depends: swbrd-common (>= @COMPAT@), swbrd-dtls-proxy (>= @COMPAT@), systemd, init-system-helpers (>= 1.54), libc6 (>= 2.38), libgcc-s1
+Homepage: https://github.com/evan-brass/swbrd
+Description: Puddle, the back end of the Rainboots chat client
+ Serves the rainboots.v1 datachannel protocol: a roster of who is connected, a
+ single room per host, IRC-style nicks secured by a password, and a relay for
+ the ICE candidates two peers need to build a direct connection to each other.
+ .
+ A candidate is only relayed when the sender's claimed peer id matches the
+ certificate fingerprint the daemon authenticated, so the relay cannot be used
+ to impersonate anybody.  Nothing said in the room is stored, and there is no
+ scrollback to hand over.
+ .
+ Built for one private host and not fit for redistribution; see
+ /usr/share/doc/swbrd-ext-puddle/copyright.

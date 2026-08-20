@@ -32,8 +32,14 @@ swbrd-turnserver:turnserver:turnserver.service
 swbrd-ice-dissolve:ice-dissolve:ice-dissolve.service
 swbrd-dtls-proxy:dtls-proxy:dtls-proxy.service
 swbrd-ext-echo:ext-echo:swbrd-ext-echo.service
+swbrd-ext-puddle:puddle:swbrd-ext-puddle.service
 swbrd-cert-rotate:cert-rotate:swbrd-cert-rotate.timer'
-# swbrd-cert-rotate is out of the default set: it is a 91MB deno binary that changes once a year.
+# Binaries produced by `deno compile` rather than cargo -- name:source:permissions.
+# The whole runtime is stapled into each one, so they are ~90MB apiece.
+DENO_TABLE='cert-rotate:./scripts/cert-rotate.js:--allow-read --allow-write
+puddle:./rainboots/puddle.js:--allow-read --allow-write --allow-net'
+# swbrd-cert-rotate and swbrd-ext-puddle are out of the default set: both are 90MB deno binaries,
+# and uploading one on every `deploy` would dominate the inner loop.  Deploy them by name.
 DEFAULT_PKGS='swbrd-common swbrd-turnserver swbrd-ice-dissolve swbrd-dtls-proxy swbrd-ext-echo'
 
 ROOT=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
@@ -208,6 +214,17 @@ pkg_field() {
 	done
 }
 
+# deno_field <binary> source|perms -- empty when the binary is a cargo crate.
+deno_field() {
+	echo "$DENO_TABLE" | while IFS=: read -r b src perms; do
+		[ "$b" = "$1" ] || continue
+		case $2 in
+			source) printf '%s' "$src" ;;
+			perms) printf '%s' "$perms" ;;
+		esac
+	done
+}
+
 # The control file decides: swbrd-common is Architecture: all.
 pkg_arch() {
 	a=$(sed -n 's/^Architecture: *//p' "$ROOT/packaging/$1/control")
@@ -242,14 +259,15 @@ cmd_pkg() {
 	ver=$(pkg_version)
 
 	crates=
-	deno_needed=
+	deno_bins=
 	for p; do
 		c=$(pkg_field "$p" crate)
-		case $c in
-			'') ;;
-			cert-rotate) deno_needed=yes ;;
-			*) crates="$crates $c" ;;
-		esac
+		[ -n "$c" ] || continue
+		if [ -n "$(deno_field "$c" source)" ]; then
+			deno_bins="$deno_bins $c"
+		else
+			crates="$crates $c"
+		fi
 	done
 
 	# shellcheck disable=SC2086
@@ -257,10 +275,10 @@ cmd_pkg() {
 
 	say "staging binaries"
 	vm "mkdir -p target/deb/bin && for b in$crates; do cp -f target/$TARGET/release/\$b target/deb/bin/\$b; done"
-	if [ -n "$deno_needed" ]; then
-		say "deno compile cert-rotate"
-		vm "deno compile --target $TARGET --allow-read --allow-write -o target/deb/bin/cert-rotate ./scripts/cert-rotate.js"
-	fi
+	for b in $deno_bins; do
+		say "deno compile $b"
+		vm "deno compile --target $TARGET $(deno_field "$b" perms) -o target/deb/bin/$b $(deno_field "$b" source)"
+	done
 
 	for p; do
 		say "building $p $ver"

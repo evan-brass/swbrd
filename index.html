@@ -32,6 +32,14 @@
 
 <h1>swbrd</h1>
 
+<h2>Apps</h2>
+<ul>
+	<li>
+		<a href="rainboots/www/">rainboots</a> — a retro chat client. Server side:
+		<code>dtls-proxy</code>, <code>swbrd-ext-puddle</code>.
+	</li>
+</ul>
+
 <h2>Test pages</h2>
 <ul>
 	<li>
@@ -46,6 +54,16 @@
 	<li>
 		<a href="tests/audio.html">audio.html</a> — the fixed opus / telephone-event
 		m-section with a microphone attached. Server side: <code>dtls-proxy</code>.
+	</li>
+	<li>
+		<a href="tests/rainboots.html">rainboots.html</a> — two identities join a
+		Puddle, claim a nick, and build a relay-only DM out of candidates it
+		relayed. Server side: <code>dtls-proxy</code>, <code
+		>swbrd-ext-puddle</code>.
+	</li>
+	<li>
+		<a href="tests/refuse.html">refuse.html</a> — declining a connection by
+		ending your candidates without sending any. No server needed.
 	</li>
 	<li>
 		<a href="tests/relay.html">relay.html</a> — stock <code
