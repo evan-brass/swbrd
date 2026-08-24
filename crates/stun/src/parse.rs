@@ -88,8 +88,12 @@ impl<'i> Iterator for &'i Stun {
 			return None;
 		}
 
+		// attr_len is only bounded against the protocol maximum above, not against how
+		// many bytes are actually left in `rest`: a malformed/truncated packet can claim
+		// a length longer than the buffer really has. Bail out of iteration rather than
+		// unwrap()ing, or a single bad packet panics the whole process.
 		let (attr, _) =
-			Attr::ref_from_prefix_with_elems(rest.as_flattened(), attr_len as usize).unwrap();
+			Attr::ref_from_prefix_with_elems(rest.as_flattened(), attr_len as usize).ok()?;
 
 		// Increment past this attribute
 		let new_len = (offset + 4 + attr_len + 3) & !3;

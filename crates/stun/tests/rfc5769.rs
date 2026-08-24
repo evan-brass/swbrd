@@ -225,6 +225,35 @@ pub const VECTOR_2_3: &[u8] = &[
 	0xc8, 0xfb, 0x0b, 0x4c, //    CRC32 fingerprint
 ];
 
+/// Regression test: an attribute whose declared length claims more bytes than
+/// are actually present in the datagram used to panic the whole process
+/// (crates/stun/src/parse.rs, `Result::unwrap()` on a `Size` error) instead of
+/// just failing to parse. A malformed/truncated packet like this must not
+/// crash the server.
+#[test]
+fn truncated_attribute_does_not_panic() {
+	let mut buffer = vec![
+		0x00, 0x01, 0x00, 0x00, //    Request type and message length (unused by the parser)
+		0x21, 0x12, 0xa4, 0x42, //    Magic cookie
+		0xb7, 0xe7, 0xa7, 0x01, // }
+		0xbc, 0x34, 0xd6, 0x86, // }  Transaction ID
+		0xfa, 0x87, 0xdf, 0xae, // }
+		0x00, 0x06, 0x00, 0x64, //    USERNAME attribute header claiming a 100 byte value
+		//                            (well within the protocol max, but...)
+		0x65, 0x76, 0x74, 0x6a, //    ...only 4 bytes actually follow
+	];
+
+	let msg = Stun::try_mut_from_bytes(&mut buffer).unwrap();
+	msg.length.set(U16::new(0));
+
+	let mut username = Parsed::NotPresent;
+	let mut attrs = msg.parse::<{ known::USERNAME }, str>(&mut username);
+
+	// Must terminate the iteration cleanly rather than panicking.
+	assert!(attrs.next().is_none());
+	assert_eq!(username, Parsed::NotPresent);
+}
+
 /// 2.4.  Sample Request with Long-Term Authentication
 ///    This request uses the following parameters:
 ///    Username:  "<U+30DE><U+30C8><U+30EA><U+30C3><U+30AF><U+30B9>"
