@@ -25,7 +25,9 @@ for await (const conn of listener) {
 async function serve(conn) {
 	const chan = await Channel.accept(conn);
 	const { id, label, protocol } = chan.open;
-	console.log(`open peer=${id} label=${JSON.stringify(label)} protocol=${protocol}`);
+	console.log(
+		`open peer=${id} label=${JSON.stringify(label)} protocol=${protocol}`,
+	);
 
 	await chan.send(`echo ready for ${id}`);
 	for await (const msg of chan) {

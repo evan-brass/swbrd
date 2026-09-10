@@ -1,6 +1,8 @@
 <!DOCTYPE html>
 <title>swbrd backpressure — a stalled extension</title>
-<script type="importmap">{ "imports": { "swbrd/": "../src/" } }</script>
+<script type="importmap">
+{ "imports": { "swbrd/": "../src/" } }
+</script>
 <h1>swbrd backpressure</h1>
 <p>
 	Opens a channel to an extension started with <code>--stall-after</code>, then
@@ -9,61 +11,76 @@
 	Passing means the connection died on the server's terms.
 </p>
 <script type="module">
-	import { Conn } from 'swbrd/conn.js';
-	import { deadline, expect_open, fail, log_everything, params, pass } from './harness.js';
-	import { DETER_BASE, SCTP_PORT } from './config.js';
+import { Conn } from 'swbrd/conn.js';
+import {
+	deadline,
+	expect_open,
+	fail,
+	log_everything,
+	params,
+	pass,
+} from './harness.js';
+import { DETER_BASE, SCTP_PORT } from './config.js';
 
-	deadline(40_000, 'the stalled circuit was never torn down');
+deadline(40_000, 'the stalled circuit was never torn down');
 
-	const size = Number(params.get('size') ?? 16 * 1024);
-	const h = await Conn.to_deter({ base: DETER_BASE, sctp_port: SCTP_PORT, timeout: 20_000 });
-	log_everything({ h });
-	console.log(`local peer id ${h.cert.id}`);
+const size = Number(params.get('size') ?? 16 * 1024);
+const h = await Conn.to_deter({
+	base: DETER_BASE,
+	sctp_port: SCTP_PORT,
+	timeout: 20_000,
+});
+log_everything({ h });
+console.log(`local peer id ${h.cert.id}`);
 
-	try {
-		await expect_open(h.dc, 20_000);
-		const dc = h.createDataChannel('flood', { protocol: 'echo.v1' });
-		await expect_open(dc, 20_000);
+try {
+	await expect_open(h.dc, 20_000);
+	const dc = h.createDataChannel('flood', { protocol: 'echo.v1' });
+	await expect_open(dc, 20_000);
 
-		const died = new Promise((resolve) => {
-			const done = (why) => resolve(why);
-			dc.addEventListener('close', () => done('channel closed'));
-			dc.addEventListener('error', () => done('channel error'));
-			h.addEventListener('connectionstatechange', () => {
-				if (['failed', 'closed', 'disconnected'].includes(h.connectionState)) {
-					done(`connection ${h.connectionState}`);
-				}
-			});
-		});
-
-		// Push until the browser's own send buffer backs up, which is the
-		// browser end of the same backpressure chain.
-		const payload = new Uint8Array(size).fill(65);
-		let sent = 0;
-		const pump = async () => {
-			for (;;) {
-				if (dc.readyState !== 'open') return;
-				if (dc.bufferedAmount > 8 * 1024 * 1024) {
-					await new Promise((r) => setTimeout(r, 50));
-					continue;
-				}
-				try {
-					dc.send(payload);
-				} catch {
-					return;
-				}
-				sent++;
-				if (sent % 100 === 0) {
-					console.log(`sent ${sent} messages, buffered ${dc.bufferedAmount}`);
-					await new Promise((r) => setTimeout(r, 0));
-				}
+	const died = new Promise((resolve) => {
+		const done = (why) => resolve(why);
+		dc.addEventListener('close', () => done('channel closed'));
+		dc.addEventListener('error', () => done('channel error'));
+		h.addEventListener('connectionstatechange', () => {
+			if (['failed', 'closed', 'disconnected'].includes(h.connectionState)) {
+				done(`connection ${h.connectionState}`);
 			}
-		};
-		pump();
+		});
+	});
 
-		const why = await died;
-		pass(`${why} after ${sent} messages (${(sent * size / 1e6).toFixed(1)} MB offered)`);
-	} catch (e) {
-		fail(e.message ?? e);
-	}
+	// Push until the browser's own send buffer backs up, which is the
+	// browser end of the same backpressure chain.
+	const payload = new Uint8Array(size).fill(65);
+	let sent = 0;
+	const pump = async () => {
+		for (;;) {
+			if (dc.readyState !== 'open') return;
+			if (dc.bufferedAmount > 8 * 1024 * 1024) {
+				await new Promise((r) => setTimeout(r, 50));
+				continue;
+			}
+			try {
+				dc.send(payload);
+			} catch {
+				return;
+			}
+			sent++;
+			if (sent % 100 === 0) {
+				console.log(`sent ${sent} messages, buffered ${dc.bufferedAmount}`);
+				await new Promise((r) => setTimeout(r, 0));
+			}
+		}
+	};
+	pump();
+
+	const why = await died;
+	pass(
+		`${why} after ${sent} messages (${
+			(sent * size / 1e6).toFixed(1)
+		} MB offered)`,
+	);
+} catch (e) {
+	fail(e.message ?? e);
+}
 </script>

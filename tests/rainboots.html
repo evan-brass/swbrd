@@ -1,11 +1,11 @@
 <!DOCTYPE html>
 <title>rainboots — the puddle extension, end to end</title>
 <script type="importmap">
-	{
-		"imports": {
-			"swbrd/": "../src/"
-		}
+{
+	"imports": {
+		"swbrd/": "../src/"
 	}
+}
 </script>
 <h1>rainboots</h1>
 <p>
@@ -18,217 +18,236 @@
 	Add <code>?dm=0</code> to stop before the DM.
 </p>
 <script type="module">
-	import { Cert, cert } from 'swbrd/cert.js';
-	import { Conn } from 'swbrd/conn.js';
-	import {
-		deadline,
-		expect_open,
-		fail,
-		log_everything,
-		params,
-		pass,
-		selected,
-	} from './harness.js';
+import { Cert, cert } from 'swbrd/cert.js';
+import { Conn } from 'swbrd/conn.js';
+import {
+	deadline,
+	expect_open,
+	fail,
+	log_everything,
+	params,
+	pass,
+	selected,
+} from './harness.js';
 
-	deadline(70_000, 'the puddle never finished the exchange');
+deadline(70_000, 'the puddle never finished the exchange');
 
-	const domain = params.get('domain') ?? 'turn.evan-brass.net';
-	const nick = params.get('nick') ?? 'e2etest';
-	const password = 'rainboots-e2e';
+const domain = params.get('domain') ?? 'turn.evan-brass.net';
+const nick = params.get('nick') ?? 'e2etest';
+const password = 'rainboots-e2e';
 
-	// One rainboots.v1 channel, with an inbox you can wait on.
-	class Member {
-		constructor(name, conn, chan) {
-			this.name = name;
-			this.conn = conn;
-			this.chan = chan;
-			this.seen = [];
-			this.waiters = [];
-			this.me = null;
-			chan.addEventListener('message', ({ data }) => {
-				if (typeof data != 'string') return;
-				const json = JSON.parse(data);
-				console.log(name, 'recv', data);
-				if (json.op == 'welcome') this.me = json.you;
-				this.seen.push(json);
-				this.waiters = this.waiters.filter((w) => !w(json));
-			});
-		}
+// One rainboots.v1 channel, with an inbox you can wait on.
+class Member {
+	constructor(name, conn, chan) {
+		this.name = name;
+		this.conn = conn;
+		this.chan = chan;
+		this.seen = [];
+		this.waiters = [];
+		this.me = null;
+		chan.addEventListener('message', ({ data }) => {
+			if (typeof data != 'string') return;
+			const json = JSON.parse(data);
+			console.log(name, 'recv', data);
+			if (json.op == 'welcome') this.me = json.you;
+			this.seen.push(json);
+			this.waiters = this.waiters.filter((w) => !w(json));
+		});
+	}
 
-		static async join(name, options = {}) {
-			const conn = await Conn.to_domain({ domain, timeout: 25_000, ...options });
-			log_everything({ [name]: conn });
-			// The negotiated channel opening is the association coming up; a
-			// DCEP channel before that has nowhere to land.
-			await expect_open(conn.dc, 25_000);
-			const chan = conn.createDataChannel('rainboots', { protocol: 'rainboots.v1' });
-			await expect_open(chan, 25_000);
-			return new Member(name, conn, chan);
-		}
+	static async join(name, options = {}) {
+		const conn = await Conn.to_domain({ domain, timeout: 25_000, ...options });
+		log_everything({ [name]: conn });
+		// The negotiated channel opening is the association coming up; a
+		// DCEP channel before that has nowhere to land.
+		await expect_open(conn.dc, 25_000);
+		const chan = conn.createDataChannel('rainboots', {
+			protocol: 'rainboots.v1',
+		});
+		await expect_open(chan, 25_000);
+		return new Member(name, conn, chan);
+	}
 
-		send(message) {
-			this.chan.send(JSON.stringify(message));
-		}
+	send(message) {
+		this.chan.send(JSON.stringify(message));
+	}
 
-		// Resolve with the first message -- already seen or still to come --
-		// that `match` likes.
-		until(match, ms = 20_000, why = 'a message') {
-			const found = this.seen.find(match);
-			if (found) return Promise.resolve(found);
-			return new Promise((resolve, reject) => {
-				const timer = setTimeout(
-					() => reject(new Error(`${this.name} never saw ${why}`)),
-					ms,
-				);
-				this.waiters.push((json) => {
-					if (!match(json)) return false;
-					clearTimeout(timer);
-					resolve(json);
-					return true;
-				});
-			});
-		}
-
-		// Resolve `false` if nothing matching turns up in `ms`, which is what a
-		// dropped message looks like from out here.
-		async never(match, ms, why) {
-			try {
-				await this.until(match, ms, why);
+	// Resolve with the first message -- already seen or still to come --
+	// that `match` likes.
+	until(match, ms = 20_000, why = 'a message') {
+		const found = this.seen.find(match);
+		if (found) return Promise.resolve(found);
+		return new Promise((resolve, reject) => {
+			const timer = setTimeout(
+				() => reject(new Error(`${this.name} never saw ${why}`)),
+				ms,
+			);
+			this.waiters.push((json) => {
+				if (!match(json)) return false;
+				clearTimeout(timer);
+				resolve(json);
 				return true;
-			} catch {
-				return false;
-			}
-		}
+			});
+		});
 	}
 
-	try {
-		// Two certificates, so this is a real exchange between two peers rather
-		// than a loopback.  `cert` is the browser's persistent identity; the
-		// other is minted for this run.
-		const alice = await Member.join('alice');
-		const bob = await Member.join('bob', { cert: await Cert.generate() });
-
-		const a = await alice.until((m) => m.op == 'welcome', 20_000, 'a welcome');
-		const b = await bob.until((m) => m.op == 'welcome', 20_000, 'a welcome');
-
-		// The puddle names us from the fingerprint of the certificate we
-		// handshook with, not from anything we told it.
-		if (a.you !== String(cert.id)) {
-			throw new Error(`puddle called us ${a.you}, we are ${cert.id}`);
+	// Resolve `false` if nothing matching turns up in `ms`, which is what a
+	// dropped message looks like from out here.
+	async never(match, ms, why) {
+		try {
+			await this.until(match, ms, why);
+			return true;
+		} catch {
+			return false;
 		}
-		if (a.you === b.you) throw new Error('both connections got the same peer id');
+	}
+}
 
-		await alice.until(
-			(m) => m.op == 'join' && m.id == bob.me,
-			20_000,
-			'bob arriving',
-		);
+try {
+	// Two certificates, so this is a real exchange between two peers rather
+	// than a loopback.  `cert` is the browser's persistent identity; the
+	// other is minted for this run.
+	const alice = await Member.join('alice');
+	const bob = await Member.join('bob', { cert: await Cert.generate() });
 
-		// --- nicks ----------------------------------------------------------
-		alice.send({ op: 'nick', nick, password });
-		const claimed = await alice.until(
-			(m) => m.op == 'nick_ok' || m.op == 'nick_err',
-			20_000,
-			'an answer about the nick',
-		);
-		if (claimed.op != 'nick_ok') throw new Error(`nick refused: ${claimed.reason}`);
-		await bob.until(
-			(m) => m.op == 'nick' && m.id == alice.me && m.nick == claimed.nick,
-			10_000,
-			'the nick announcement',
-		);
+	const a = await alice.until((m) => m.op == 'welcome', 20_000, 'a welcome');
+	const b = await bob.until((m) => m.op == 'welcome', 20_000, 'a welcome');
 
-		// --- saying something -----------------------------------------------
-		const said = `hello from ${alice.me} at ${Date.now()}`;
-		alice.send({ op: 'say', text: said });
-		const heard = await bob.until(
-			(m) => m.op == 'msg' && m.text == said,
-			10_000,
-			'what alice said',
-		);
-		if (heard.from != alice.me) throw new Error(`msg came from ${heard.from}`);
-		if (heard.nick != claimed.nick) throw new Error(`msg was attributed to ${heard.nick}`);
+	// The puddle names us from the fingerprint of the certificate we
+	// handshook with, not from anything we told it.
+	if (a.you !== String(cert.id)) {
+		throw new Error(`puddle called us ${a.you}, we are ${cert.id}`);
+	}
+	if (a.you === b.you) throw new Error('both connections got the same peer id');
 
-		// --- the check that matters -----------------------------------------
+	await alice.until(
+		(m) => m.op == 'join' && m.id == bob.me,
+		20_000,
+		'bob arriving',
+	);
+
+	// --- nicks ----------------------------------------------------------
+	alice.send({ op: 'nick', nick, password });
+	const claimed = await alice.until(
+		(m) => m.op == 'nick_ok' || m.op == 'nick_err',
+		20_000,
+		'an answer about the nick',
+	);
+	if (claimed.op != 'nick_ok') {
+		throw new Error(`nick refused: ${claimed.reason}`);
+	}
+	await bob.until(
+		(m) => m.op == 'nick' && m.id == alice.me && m.nick == claimed.nick,
+		10_000,
+		'the nick announcement',
+	);
+
+	// --- saying something -----------------------------------------------
+	const said = `hello from ${alice.me} at ${Date.now()}`;
+	alice.send({ op: 'say', text: said });
+	const heard = await bob.until(
+		(m) => m.op == 'msg' && m.text == said,
+		10_000,
+		'what alice said',
+	);
+	if (heard.from != alice.me) throw new Error(`msg came from ${heard.from}`);
+	if (heard.nick != claimed.nick) {
+		throw new Error(`msg was attributed to ${heard.nick}`);
+	}
+
+	// --- the check that matters -----------------------------------------
+	//
+	// Alice claims to be Bob while talking to Bob.  The puddle knows what
+	// fingerprint it authenticated on this channel, so the message must go
+	// nowhere.
+	const forged = 'candidate:1 1 udp 42 ::1 9 typ relay';
+	alice.send({
+		op: 'signal',
+		from: bob.me,
+		to: bob.me,
+		candidate: { candidate: forged, sdpMid: 'dc' },
+	});
+	await alice.until(
+		(m) => m.op == 'error',
+		10_000,
+		'the puddle refusing the forgery',
+	);
+	if (
+		await bob.never(
+			(m) => m.op == 'signal' && m.candidate?.candidate == forged,
+			2_000,
+		)
+	) {
+		throw new Error(
+			'the puddle relayed a signal that claimed the wrong sender',
+		);
+	}
+
+	// ...and the honest version of the same message does arrive, so the
+	// absence above is the check working rather than the path being broken.
+	const honest = 'candidate:2 1 udp 42 ::1 9 typ relay';
+	alice.send({
+		op: 'signal',
+		from: alice.me,
+		to: bob.me,
+		candidate: { candidate: honest, sdpMid: 'dc' },
+	});
+	const routed = await bob.until(
+		(m) => m.op == 'signal' && m.candidate?.candidate == honest,
+		10_000,
+		'an honest signal',
+	);
+	if (routed.from != alice.me) {
+		throw new Error(`signal came from ${routed.from}`);
+	}
+
+	if (params.get('dm') == '0') {
+		pass(`puddle at ${domain}: roster, nicks, and signal filtering`);
+	} else {
+		// --- a DM built out of relayed candidates -------------------------
 		//
-		// Alice claims to be Bob while talking to Bob.  The puddle knows what
-		// fingerprint it authenticated on this channel, so the message must go
-		// nowhere.
-		const forged = 'candidate:1 1 udp 42 ::1 9 typ relay';
-		alice.send({
-			op: 'signal',
-			from: bob.me,
-			to: bob.me,
-			candidate: { candidate: forged, sdpMid: 'dc' },
+		// Neither of these connections touches the puddle: it only carried
+		// the candidates.  Relay-only, which is what Rainboots defaults to,
+		// so no address either end holds is its own.
+		const dm_a = Conn.with_candidates(bob.me, {
+			iceTransportPolicy: 'relay',
+			timeout: 40_000,
 		});
-		await alice.until((m) => m.op == 'error', 10_000, 'the puddle refusing the forgery');
-		if (await bob.never((m) => m.op == 'signal' && m.candidate?.candidate == forged, 2_000)) {
-			throw new Error('the puddle relayed a signal that claimed the wrong sender');
-		}
-
-		// ...and the honest version of the same message does arrive, so the
-		// absence above is the check working rather than the path being broken.
-		const honest = 'candidate:2 1 udp 42 ::1 9 typ relay';
-		alice.send({
-			op: 'signal',
-			from: alice.me,
-			to: bob.me,
-			candidate: { candidate: honest, sdpMid: 'dc' },
+		const dm_b = Conn.with_candidates(alice.me, {
+			cert: bob.conn.cert,
+			iceTransportPolicy: 'relay',
+			timeout: 40_000,
 		});
-		const routed = await bob.until(
-			(m) => m.op == 'signal' && m.candidate?.candidate == honest,
-			10_000,
-			'an honest signal',
-		);
-		if (routed.from != alice.me) throw new Error(`signal came from ${routed.from}`);
+		log_everything({ dm_a, dm_b });
 
-		if (params.get('dm') == '0') {
-			pass(`puddle at ${domain}: roster, nicks, and signal filtering`);
-		} else {
-			// --- a DM built out of relayed candidates -------------------------
-			//
-			// Neither of these connections touches the puddle: it only carried
-			// the candidates.  Relay-only, which is what Rainboots defaults to,
-			// so no address either end holds is its own.
-			const dm_a = Conn.with_candidates(bob.me, {
-				iceTransportPolicy: 'relay',
-				timeout: 40_000,
+		const relay = (member, peer, dm) =>
+			dm.addEventListener('candidate', ({ candidate }) =>
+				member.send({
+					op: 'signal',
+					from: member.me,
+					to: peer,
+					candidate: candidate ? candidate.toJSON() : null,
+				}));
+		relay(alice, bob.me, dm_a);
+		relay(bob, alice.me, dm_b);
+
+		const apply = (member, from, dm) =>
+			member.waiters.push((json) => {
+				if (json.op != 'signal' || json.from != from) return false;
+				dm.addIceCandidate(json.candidate);
+				return false; // keep listening
 			});
-			const dm_b = Conn.with_candidates(alice.me, {
-				cert: bob.conn.cert,
-				iceTransportPolicy: 'relay',
-				timeout: 40_000,
-			});
-			log_everything({ dm_a, dm_b });
+		apply(alice, bob.me, dm_a);
+		apply(bob, alice.me, dm_b);
 
-			const relay = (member, peer, dm) =>
-				dm.addEventListener('candidate', ({ candidate }) =>
-					member.send({
-						op: 'signal',
-						from: member.me,
-						to: peer,
-						candidate: candidate ? candidate.toJSON() : null,
-					}));
-			relay(alice, bob.me, dm_a);
-			relay(bob, alice.me, dm_b);
+		await Promise.all([
+			expect_open(dm_a.dc, 40_000),
+			expect_open(dm_b.dc, 40_000),
+		]);
 
-			const apply = (member, from, dm) =>
-				member.waiters.push((json) => {
-					if (json.op != 'signal' || json.from != from) return false;
-					dm.addIceCandidate(json.candidate);
-					return false; // keep listening
-				});
-			apply(alice, bob.me, dm_a);
-			apply(bob, alice.me, dm_b);
-
-			await Promise.all([
-				expect_open(dm_a.dc, 40_000),
-				expect_open(dm_b.dc, 40_000),
-			]);
-
-			pass(`puddle at ${domain}; dm ${selected(dm_a)}`.trim());
-		}
-	} catch (e) {
-		fail(e.message ?? e);
+		pass(`puddle at ${domain}; dm ${selected(dm_a)}`.trim());
 	}
+} catch (e) {
+	fail(e.message ?? e);
+}
 </script>

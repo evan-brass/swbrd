@@ -22,8 +22,9 @@ for (const url of urls) {
 	const test = new RTCPeerConnection({
 		iceServers: [{
 			urls: [url],
-			username: 'user', credential: 'password',
-		}]
+			username: 'user',
+			credential: 'password',
+		}],
 	});
 	test.addEventListener('icecandidate', ({ candidate: { address, type, relatedAddress } }) => {
 		if (!type || type == 'host') return;

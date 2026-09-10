@@ -52,7 +52,9 @@ export function decode(buf) {
 	const view = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
 	const length = view.getUint32(0);
 	if (length > MAX_PAYLOAD) {
-		throw new Error(`frame claims ${length} bytes, over the ${MAX_PAYLOAD} limit`);
+		throw new Error(
+			`frame claims ${length} bytes, over the ${MAX_PAYLOAD} limit`,
+		);
 	}
 	if (buf.length < HEADER_LEN + length) return null;
 	return {
@@ -125,7 +127,8 @@ export class Channel {
 			const frame = await this.#frame();
 			if (!frame) return;
 			if (frame.flags & CONTROL) continue;
-			const binary = frame.ppid === PPID_BINARY || frame.ppid === PPID_BINARY_EMPTY;
+			const binary = frame.ppid === PPID_BINARY ||
+				frame.ppid === PPID_BINARY_EMPTY;
 			yield {
 				ppid: frame.ppid,
 				flags: frame.flags,
@@ -141,9 +144,10 @@ export class Channel {
 	 */
 	async send(body, { ppid, unordered = false } = {}) {
 		const payload = typeof body === 'string' ? encoder.encode(body) : body;
-		const chosen = ppid ?? (typeof body === 'string'
-			? (payload.length ? PPID_STRING : PPID_STRING_EMPTY)
-			: (payload.length ? PPID_BINARY : PPID_BINARY_EMPTY));
+		const chosen = ppid ??
+			(typeof body === 'string'
+				? (payload.length ? PPID_STRING : PPID_STRING_EMPTY)
+				: (payload.length ? PPID_BINARY : PPID_BINARY_EMPTY));
 		let flags = EOR;
 		if (unordered) flags |= UNORDERED;
 		await writeAll(this.#conn, encode(chosen, flags, payload));
@@ -151,7 +155,9 @@ export class Channel {
 
 	/** Refuse the channel before doing anything with it. */
 	async reject(reason) {
-		const body = encoder.encode(JSON.stringify({ op: 'reject', reason: reason ?? null }));
+		const body = encoder.encode(
+			JSON.stringify({ op: 'reject', reason: reason ?? null }),
+		);
 		await writeAll(this.#conn, encode(0, CONTROL | EOR, body));
 		this.#conn.close();
 	}

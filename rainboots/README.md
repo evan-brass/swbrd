@@ -89,9 +89,9 @@ introduce you; it cannot get between you afterwards.
 - Declining also puts that peer on a one minute cooldown. The refusal reaches
   them immediately, but the candidates their ICE agent had already gathered are
   still in flight, and without the cooldown each straggler would arrive looking
-  like a stranger getting in touch and raise a fresh popup — saying no once would
-  cost you one dialog per candidate. Dialling them yourself ends the cooldown
-  early, since that is as clear a change of mind as there is.
+  like a stranger getting in touch and raise a fresh popup — saying no once
+  would cost you one dialog per candidate. Dialling them yourself ends the
+  cooldown early, since that is as clear a change of mind as there is.
 
 ### Chrome only
 
@@ -127,15 +127,33 @@ markup: every element has a descriptive name, and everything that varies is an
 attribute.
 
 ```css
-:root { --paper: #000; --ink: #0f0; --accent: #0f0; }   /* the whole look */
+:root {
+	--paper: #000;
+	--ink: #0f0;
+	--accent: #0f0;
+} /* the whole look */
 
-peer-nick[anon]                  { opacity: .6 }
-puddle-entry[state="connecting"] { font-style: italic }
-local-candidate[exposed]         { color: red }
-chat-message[mine] peer-nick     { text-decoration: none }
-dm-panel[state="connected"] dm-state::before { content: "● " }
-hover-hint                       { border-radius: 6px }  /* every tooltip */
-hover-hint[kind="exposure"]      { background: #400 }
+peer-nick[anon] {
+	opacity: .6;
+}
+puddle-entry[state="connecting"] {
+	font-style: italic;
+}
+local-candidate[exposed] {
+	color: red;
+}
+chat-message[mine] peer-nick {
+	text-decoration: none;
+}
+dm-panel[state="connected"] dm-state::before {
+	content: "● ";
+}
+hover-hint {
+	border-radius: 6px;
+} /* every tooltip */
+hover-hint[kind="exposure"] {
+	background: #400;
+}
 ```
 
 `rainboots/www/rainboots.css` is the worked example, and it is all element
@@ -168,9 +186,9 @@ the thing it is. Chrome 142 and up get the popover; anything older falls back to
 ## Unread and sound
 
 Each puddle and each DM carries its own unread count, and the sum sits in the
-page title as `(3) rainboots` — so a backgrounded tab still tells you. A
-message only counts as read if you could actually have read it: the right view,
-in front, in a window that has focus. Joins, parts and nick changes never count,
+page title as `(3) rainboots` — so a backgrounded tab still tells you. A message
+only counts as read if you could actually have read it: the right view, in
+front, in a window that has focus. Joins, parts and nick changes never count,
 because a badge you cannot clear by reading anything is just a badge. An
 unanswered DM invitation counts too: it is the most attention-worthy thing here
 and its popup is invisible from another tab.

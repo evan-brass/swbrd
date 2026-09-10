@@ -5,3 +5,4 @@ opt
 reports
 .claude/memory
 .claude/settings.local.json
+*.pcap*
