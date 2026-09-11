@@ -41,8 +41,10 @@ pub enum Method {
 	Ass = 0x19, // UseChannel Error
 }
 impl Method {
-	pub fn to_err(self) -> Option<Self> {
-		try_transmute!(self as u8 ^ 0x10).ok()
+	pub fn to_err(self) -> Self {
+		let t = self as u8;
+		assert_eq!(t & 0x10, 0, "to_err can't be called on {self:?}");
+		try_transmute!(self as u8 ^ 0x10).unwrap()
 	}
 	pub fn is_err(&self) -> bool {
 		!matches!(self, Self::Send | Self::Recv) && *self as u8 & 0x10 != 0

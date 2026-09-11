@@ -348,7 +348,7 @@ fn handle_turn(msg: &mut Stun, mapped: SocketAddrV6) -> Action {
 	match msg.method {
 		Method::Allocate if !unk.is_empty() => {
 			msg.class = Class::Response;
-			msg.method = msg.method.to_err().unwrap();
+			msg.method = msg.method.to_err();
 			msg.length.get_mut().set(0);
 			msg.append_val(known::UNKNOWN_ATTRIBUTES, unk.as_slice());
 		}
@@ -361,16 +361,14 @@ fn handle_turn(msg: &mut Stun, mapped: SocketAddrV6) -> Action {
 		}
 		// No usable credentials: 401, challenging with a fresh nonce bound to
 		// this client.  Unsigned — we have no key to sign with.
-		m if integrity.is_none()
-			|| realm != Parsed::Valid("none")
-			|| !crate::nonce::verify_nonce(&nonce, &mapped) =>
+		// Only methods that have an error variant: anything else would panic in to_err.
+		m @ (Method::Allocate | Method::Refresh | Method::AddPermission | Method::UseChannel)
+			if integrity.is_none()
+				|| realm != Parsed::Valid("none")
+				|| !crate::nonce::verify_nonce(&nonce, &mapped) =>
 		{
 			msg.class = Class::Response;
-			let Some(err_method) = m.to_err() else {
-				trace!(?msg.method, "to_err failed?");
-				return Action::Drop;
-			};
-			msg.method = err_method;
+			msg.method = m.to_err();
 			msg.length.get_mut().set(0);
 			if integrity.is_none() {
 				msg.append_val(known::ERROR_CODE, &[0u8, 0, 4, 1]);
@@ -420,7 +418,7 @@ fn handle_turn(msg: &mut Stun, mapped: SocketAddrV6) -> Action {
 		// relayed pair open for a minute (`tests/soak.html`).
 		Method::UseChannel => {
 			msg.class = Class::Response;
-			msg.method = msg.method.to_err().unwrap();
+			msg.method = msg.method.to_err();
 			msg.length.get_mut().set(0);
 			msg.append_val(known::ERROR_CODE, &[0u8, 0, 4, 38]);
 		}
