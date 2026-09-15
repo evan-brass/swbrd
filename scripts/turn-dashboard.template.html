@@ -307,6 +307,9 @@
 	.series-area {
 		stroke: none;
 	}
+	.sample {
+		pointer-events: none;
+	}
 	.crosshair {
 		stroke: var(--ink-muted);
 		stroke-width: 1;
@@ -781,8 +784,16 @@
 			var minY = Math.min.apply(null, rxVals.concat(txVals), 0);
 			if (maxY === minY) maxY = minY + 1;
 
+			// x is real time, not snapshot index -- snapshots are taken at irregular intervals
+			var times = REPORT.map(function (s) {
+				return Date.parse(s.ts);
+			});
+			var minT = Math.min.apply(null, times);
+			var maxT = Math.max.apply(null, times);
+			if (maxT === minT) maxT = minT + 1;
+
 			function x(i) {
-				return PAD_L + (REPORT.length === 1 ? 0 : (i / (REPORT.length - 1)) * plotW);
+				return PAD_L + ((times[i] - minT) / (maxT - minT)) * plotW;
 			}
 			function y(v) {
 				return PAD_T + plotH - ((v - minY) / (maxY - minY)) * plotH;
@@ -816,6 +827,30 @@
 				svg.appendChild(lbl);
 			}
 
+			// x ticks: pick the smallest "nice" step giving at most ~8 labels, aligned to local time
+			var MIN = 60000, HOUR = 60 * MIN, DAY = 24 * HOUR;
+			var steps = [MIN, 5 * MIN, 15 * MIN, 30 * MIN, HOUR, 3 * HOUR, 6 * HOUR, 12 * HOUR, DAY, 2 * DAY, 3 * DAY, 7 * DAY, 14 * DAY, 30 * DAY];
+			var span = maxT - minT;
+			var step = steps.find(function (s) {
+				return span / s <= 8;
+			}) || steps[steps.length - 1];
+			var tzOff = -new Date(minT).getTimezoneOffset() * MIN;
+			var fmtOpts = step >= DAY
+				? { month: 'short', day: 'numeric' }
+				: span >= DAY
+				? { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }
+				: { hour: '2-digit', minute: '2-digit' };
+			for (var tt = Math.ceil((minT + tzOff) / step) * step - tzOff; tt <= maxT; tt += step) {
+				var tx = PAD_L + ((tt - minT) / (maxT - minT)) * plotW;
+				var xl = document.createElementNS(svgns, 'text');
+				xl.setAttribute('x', tx);
+				xl.setAttribute('y', H - PAD_B + 16);
+				xl.setAttribute('text-anchor', 'middle');
+				xl.setAttribute('class', 'axislabel');
+				xl.textContent = new Date(tt).toLocaleString(undefined, fmtOpts);
+				svg.appendChild(xl);
+			}
+
 			function path(vals) {
 				return vals
 					.map(function (v, i) {
@@ -844,6 +879,17 @@
 				line.setAttribute('class', 'series-line');
 				line.setAttribute('stroke', s.color);
 				svg.appendChild(line);
+
+				// a small mark per snapshot, so gaps between samples are visible
+				s.vals.forEach(function (v, i) {
+					var m = document.createElementNS(svgns, 'circle');
+					m.setAttribute('cx', x(i).toFixed(1));
+					m.setAttribute('cy', y(v).toFixed(1));
+					m.setAttribute('r', '2');
+					m.setAttribute('fill', s.color);
+					m.setAttribute('class', 'sample');
+					svg.appendChild(m);
+				});
 			});
 
 			// crosshair + hover dots
@@ -882,9 +928,11 @@
 			svg.appendChild(hit);
 
 			function nearestIndex(px) {
-				var frac = (px - PAD_L) / plotW;
-				var i = Math.round(frac * (REPORT.length - 1));
-				return Math.max(0, Math.min(REPORT.length - 1, i));
+				var best = 0;
+				for (var i = 1; i < REPORT.length; i++) {
+					if (Math.abs(x(i) - px) < Math.abs(x(best) - px)) best = i;
+				}
+				return best;
 			}
 
 			function showAt(i) {
@@ -912,7 +960,7 @@
 					tooltip.appendChild(r);
 				});
 				tooltip.style.opacity = '1';
-				var pct = REPORT.length > 1 ? i / (REPORT.length - 1) : 0;
+				var pct = cx / W;
 				tooltip.style.left = 'calc(' + (pct * 100).toFixed(2) + '% - ' + (pct > 0.7 ? '180px' : '-20px') + ')';
 				tooltip.style.top = '4px';
 			}
