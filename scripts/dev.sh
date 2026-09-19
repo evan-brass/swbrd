@@ -16,15 +16,15 @@ set -eu
 VM=192.168.64.3            # Debian VM: the only place the daemons compile
 VM_DIR=share/src/swbrd     # the same tree as this repo, shared over virtiofs...
 MAC_DIR=$HOME/src/swbrd    # ...mounted here on this side
-VPS=turn                   # turn.evan-brass.net, reached as user `evan` with passwordless sudo
+VPS=turn.evan-brass.net    # turn.evan-brass.net, reached as user `evan` with passwordless sudo
 TARGET=x86_64-unknown-linux-gnu
 UNITS='dtls-proxy turnserver ice-dissolve swbrd ext-echo'
 PORT=8000
 
-VPS_ROOT=root@turn         # apt wants a real root shell; everything else goes through evan + sudo -n
+VPS_ROOT=root@turn.evan-brass.net  # apt wants a real root shell; everything else goes through evan + sudo -n
 DEB_ARCH=amd64
-VPS_POOL=/var/cache/swbrd-debs  # deployed .debs are kept here so rollback has something to install
-POOL_KEEP=10                    # .debs retained per package (2 for the 91MB swbrd-cert-rotate)
+VPS_POOL=/var/cache/swbrd-debs     # deployed .debs are kept here so rollback has something to install
+POOL_KEEP=10                       # .debs retained per package (2 for the 91MB swbrd-cert-rotate)
 
 # pkg:crate:unit -- `-` where the package has no binary or no unit of its own.
 PKG_TABLE='swbrd-common:-:-

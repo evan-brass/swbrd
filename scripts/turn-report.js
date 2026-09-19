@@ -84,7 +84,7 @@ systemctl show turnserver dtls-proxy ice-dissolve swbrd -p ActiveState,SubState,
 
 say('collecting from turn');
 const proc = new Deno.Command('ssh', {
-	args: ['turn', 'sudo -n sh -s'],
+	args: ['turn.evan-brass.net', 'sudo -n sh -s'],
 	stdin: 'piped',
 	stdout: 'piped',
 	stderr: 'piped',
